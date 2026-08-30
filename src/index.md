@@ -5,35 +5,47 @@ toc: false
 
 ```js
 import {
-  analyzePayload,
-  formatDatumLabel,
-  metricCards,
+  analyzeLogText,
+  diagnosticRows,
+  groupRows,
   narrativeSummary,
-  parsePayload,
-  samplePayloadText,
-  tableRows
+  profileCards,
+  provenanceRows
 } from "./components/oracle.js";
 ```
 
 <section class="oracle-hero">
   <div>
-    <p class="eyebrow">Tapoo extension</p>
+    <p class="eyebrow">Tapoo analytics extension</p>
     <h1>Tapoo Oracle</h1>
-    <p class="lede">Paste raw Agent behavior profiler JSON from Tapoo and turn it into an operational readout: detected events, dominant behaviors, warning signals, backtracking references, and a compact audit trail.</p>
+    <p class="lede">Load a downloaded Tapoo <code>agent-api</code> log and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
   </div>
-  <div class="signal-panel" aria-label="Oracle analysis loop">
-    <span>raw json</span>
-    <span>normalize</span>
-    <span>profile</span>
-    <span>illustrate</span>
+  <div class="signal-panel" aria-label="Oracle analysis pipeline">
+    <span>agent-api log</span>
+    <span>validate contract</span>
+    <span>answer rubric</span>
+    <span>report profile</span>
   </div>
 </section>
 
 ```js
-const rawPayload = view(Inputs.textarea({
-  label: "Raw Tapoo profiler JSON",
-  value: samplePayloadText,
-  rows: 16,
+const sampleText = await FileAttachment("./vendor/tapoo-analysis/fixtures/sample-agent-api-log.json").text();
+const vendor = await FileAttachment("./vendor/tapoo-analysis/VENDOR.json").json();
+```
+
+```js
+const upload = view(Inputs.file({
+  label: "Downloaded log",
+  accept: ".json",
+  description: "The JSON file Tapoo's browser Logs panel downloads after an agent-api round."
+}));
+```
+
+```js
+const pasted = view(Inputs.textarea({
+  label: "…or paste JSON",
+  placeholder: "Paste a Tapoo agent-api log export here to override the file above.",
+  rows: 6,
   resize: "vertical",
   spellcheck: false,
   monospace: true
@@ -41,100 +53,108 @@ const rawPayload = view(Inputs.textarea({
 ```
 
 ```js
-const parsed = parsePayload(rawPayload);
-const analysis = parsed.ok ? analyzePayload(parsed.value) : null;
+// Precedence is pasted text, then an uploaded file, then the bundled sample, so the page always has
+// something real to render and never shows an empty analysis as if it were a result.
+const source = pasted?.trim()
+  ? {text: pasted, label: "pasted log"}
+  : upload
+    ? {text: await upload.text(), label: upload.name}
+    : {text: sampleText, label: "sample-agent-api-log.json (bundled reference export)"};
+
+const result = analyzeLogText(source.text, {label: source.label});
 ```
-
-${parsed.ok ? html`
-  <section class="analysis-strip">
-    ${metricCards(analysis).map((card) => html`
-      <article class=${`metric metric-${card.tone}`}>
-        <span>${card.label}</span>
-        <strong>${card.value}</strong>
-      </article>
-    `)}
-  </section>
-` : html`
-  <section class="parse-error">
-    <strong>JSON parse failed</strong>
-    <span>${parsed.error}</span>
-  </section>
-`}
-
-${parsed.ok ? html`
-  <section class="oracle-summary">
-    <h2>Behavior Summary</h2>
-    <p>${narrativeSummary(analysis)}</p>
-    <dl>
-      <div><dt>Payload shape</dt><dd>${analysis.shape}</dd></div>
-      <div><dt>Root keys</dt><dd>${analysis.rootKeys.length ? analysis.rootKeys.join(", ") : "none"}</dd></div>
-    </dl>
-  </section>
-` : ""}
 
 ```js
-function barChart(data, title, color, {width} = {}) {
-  if (!data.length) return html`<div class="empty-chart">No values detected.</div>`;
-  return Plot.plot({
-    title,
-    width,
-    height: Math.max(220, data.length * 34 + 48),
-    marginLeft: 118,
-    marginRight: 24,
-    x: {grid: true, label: "Events"},
-    y: {label: null},
-    marks: [
-      Plot.ruleX([0]),
-      Plot.barX(data, {x: "value", y: "key", fill: color, sort: {y: "-x"}, tip: {format: {y: false, x: true}}}),
-      Plot.text(data, {x: "value", y: "key", text: formatDatumLabel, dx: 6, textAnchor: "start", fill: "var(--oracle-ink)"})
-    ]
+// Every conditional section is built here rather than in a markdown ${...} wrapper. Observable
+// evaluates a block-level expression only when it is a single line: a multi-line ternary around an
+// html`` template leaks its source onto the page as literal text while still rendering the HTML
+// inside it, which looks close enough to correct to survive review.
+const groupTable = (rows, count) =>
+  Inputs.table(rows, {
+    columns: ["id", "group", "verdict", "evidence", "questions"],
+    header: {id: "ID", group: "Group", verdict: "Verdict", evidence: "Answered", questions: "Questions"},
+    width: {group: 260, questions: 220},
+    sort: false,
+    rows: count
   });
-}
 
-function timelinePlot(data, {width} = {}) {
-  if (!data.length) return html`<div class="empty-chart">No timestamped events detected.</div>`;
-  return Plot.plot({
-    title: "Timestamped behavior trail",
-    width,
-    height: 260,
-    marginLeft: 56,
-    x: {type: "time", grid: true, label: null},
-    y: {grid: true, label: "Event", reverse: true},
-    color: {legend: true},
-    marks: [
-      Plot.ruleY(data, {y: "index", stroke: "#e2e8f0"}),
-      Plot.dot(data, {x: "timestamp", y: "index", fill: "status", r: 6, tip: true}),
-      Plot.text(data, {x: "timestamp", y: "index", text: "action", dy: -12, fontSize: 11, lineWidth: 10})
-    ]
-  });
-}
+const notices = !result.ok
+  ? html`<section class="notice notice-error">
+      <strong>Cannot analyze this input</strong>
+      <span>${result.error}</span>
+    </section>`
+  : result.warnings.length > 0
+    ? html`<section class="notice notice-warn">
+        <strong>Read with care</strong>
+        <ul>${result.warnings.map((warning) => html`<li>${warning}</li>`)}</ul>
+      </section>`
+    : "";
+
+const profile = !result.ok
+  ? ""
+  : html`<div>
+      <p class="source-line">Analyzing <strong>${source.label}</strong></p>
+      <section class="analysis-strip">
+        ${profileCards(result.report).map(
+          (card) => html`<article class=${`metric metric-${card.tone}`}>
+            <span>${card.label}</span>
+            <strong>${card.value}</strong>
+          </article>`
+        )}
+      </section>
+      <section class="oracle-summary">
+        <h2>Behavior Profile</h2>
+        <p>${narrativeSummary(result.report)}</p>
+      </section>
+    </div>`;
+
+const detail = !result.ok
+  ? ""
+  : html`<div>
+      <section class="events-section">
+        <h2>Capabilities</h2>
+        <p class="section-note">AND semantics: every question in a group must answer YES for the group to be demonstrated.</p>
+        ${groupTable(groupRows(result.report.capabilities), 9)}
+      </section>
+      <section class="events-section">
+        <h2>Violations</h2>
+        <p class="section-note">OR semantics: any question answering YES confirms the violation.</p>
+        ${groupTable(groupRows(result.report.violations), 6)}
+      </section>
+      <section class="events-section">
+        <h2>Operational Diagnostics</h2>
+        <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
+        ${Inputs.table(diagnosticRows(result.report), {
+          columns: ["signal", "count", "scored"],
+          header: {signal: "Signal", count: "Count", scored: "Scored as"},
+          sort: false,
+          rows: 4
+        })}
+      </section>
+      <section class="events-section">
+        <h2>Provenance</h2>
+        <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
+        ${Inputs.table(provenanceRows(result.source, result.report), {
+          columns: ["field", "value"],
+          header: {field: "Field", value: "Value"},
+          sort: false,
+          rows: 6
+        })}
+        <p class="vendor-line">
+          Rubric engine vendored from <code>${vendor.repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")}</code>
+          @ <code>${vendor.commit.slice(0, 8)}</code> (<code>${vendor.ref}</code>)${vendor.dirtySource
+            ? html` — <span class="dirty">taken from an uncommitted working tree</span>`
+            : ""}.
+        </p>
+      </section>
+    </div>`;
 ```
 
-${parsed.ok ? html`
-  <section class="chart-grid">
-    <div class="chart-surface">${resize((width) => barChart(analysis.actionTypes, "Detected behavior types", "#167c80", {width}))}</div>
-    <div class="chart-surface">${resize((width) => barChart(analysis.statuses, "Outcome and status signals", "#b66a00", {width}))}</div>
-  </section>
-  <section class="chart-surface wide">${resize((width) => timelinePlot(analysis.timeline, {width}))}</section>
-` : ""}
+${notices}
 
-${parsed.ok ? html`
-  <section class="events-section">
-    <h2>Profiler Event Rows</h2>
-    ${Inputs.table(tableRows(analysis), {
-      columns: ["#", "action", "status", "agent", "timestamp", "detail"],
-      width: {detail: 520},
-      header: {
-        "#": "#",
-        action: "Action",
-        status: "Status",
-        agent: "Agent",
-        timestamp: "Timestamp",
-        detail: "Detail"
-      }
-    })}
-  </section>
-` : ""}
+${profile}
+
+${detail}
 
 <style>
 :root {
@@ -145,7 +165,6 @@ ${parsed.ok ? html`
   --oracle-teal: #167c80;
   --oracle-amber: #b66a00;
   --oracle-rose: #b8403c;
-  --oracle-green: #3e6f47;
 }
 
 body {
@@ -170,7 +189,6 @@ body {
   margin: 0 0 0.75rem;
   color: var(--oracle-teal);
   font: 700 0.78rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -179,7 +197,6 @@ body {
   margin: 0;
   font-size: clamp(3.2rem, 12vw, 8rem);
   line-height: 0.9;
-  letter-spacing: 0;
 }
 
 .lede {
@@ -192,7 +209,6 @@ body {
 
 .signal-panel {
   display: grid;
-  grid-template-columns: 1fr;
   gap: 0.5rem;
   padding: 1rem;
   border: 1px solid var(--oracle-line);
@@ -207,8 +223,7 @@ body {
   text-transform: uppercase;
 }
 
-.analysis-strip,
-.chart-grid {
+.analysis-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
@@ -217,9 +232,8 @@ body {
 
 .metric,
 .oracle-summary,
-.chart-surface,
 .events-section,
-.parse-error {
+.notice {
   border: 1px solid var(--oracle-line);
   background: rgba(255, 255, 255, 0.7);
 }
@@ -243,12 +257,11 @@ body {
 
 .metric-ink { border-top: 4px solid var(--oracle-ink); }
 .metric-teal { border-top: 4px solid var(--oracle-teal); }
-.metric-amber { border-top: 4px solid var(--oracle-amber); }
 .metric-rose { border-top: 4px solid var(--oracle-rose); }
 
 .oracle-summary,
 .events-section,
-.parse-error {
+.notice {
   padding: 1.2rem;
   margin: 1.5rem 0;
 }
@@ -264,49 +277,45 @@ body {
   line-height: 1.65;
 }
 
-.oracle-summary dl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin: 1rem 0 0;
-}
-
-.oracle-summary dt {
+.section-note {
+  max-width: 68rem;
+  margin: -0.4rem 0 1rem;
   color: var(--oracle-muted);
-  font-size: 0.82rem;
+  font-size: 0.9rem;
 }
 
-.oracle-summary dd {
-  margin: 0.25rem 0 0;
-  font-weight: 700;
-}
-
-.chart-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.chart-surface {
-  min-height: 260px;
-  padding: 0.8rem;
-  overflow: hidden;
-}
-
-.chart-surface.wide {
-  margin: 1rem 0;
-}
-
-.empty-chart {
-  display: grid;
-  min-height: 220px;
-  place-items: center;
+.source-line,
+.vendor-line {
   color: var(--oracle-muted);
+  font-size: 0.9rem;
 }
 
-.parse-error {
-  display: flex;
-  gap: 0.75rem;
+.vendor-line {
+  margin-bottom: 0;
+}
+
+.dirty {
+  color: var(--oracle-amber);
+}
+
+.notice {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.notice ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.notice-error {
   border-color: var(--oracle-rose);
   color: var(--oracle-rose);
+}
+
+.notice-warn {
+  border-color: var(--oracle-amber);
+  color: var(--oracle-amber);
 }
 
 textarea {
@@ -315,9 +324,7 @@ textarea {
 
 @media (max-width: 860px) {
   .oracle-hero,
-  .analysis-strip,
-  .chart-grid,
-  .oracle-summary dl {
+  .analysis-strip {
     grid-template-columns: 1fr;
   }
 

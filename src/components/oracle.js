@@ -1,239 +1,137 @@
-const EVENT_KEYS = new Set([
-  "event",
-  "events",
-  "action",
-  "actions",
-  "step",
-  "steps",
-  "trace",
-  "traces",
-  "turn",
-  "turns",
-  "move",
-  "moves",
-  "observation",
-  "observations",
-  "prediction",
-  "predictions",
-  "decision",
-  "decisions"
-]);
+// Adapter between Tapoo's vendored rubric engine and this app's views.
+//
+// The analysis itself is not implemented here. It lives in src/vendor/tapoo-analysis, copied
+// verbatim from Tapoo, so that this app and `make agentic-analysis` cannot answer the same question
+// about the same log differently. Everything below is presentation: turning one engine result into
+// rows, cards, and sentences.
+//
+// The rule this file follows is that nothing it displays may be invented. Every number traces to a
+// rubric answer or to an explicitly logged event - no substring sniffing, no guessed field names, no
+// signal that the contract does not define. A plausible-looking number with no basis in the log is
+// worse than an absent one, because it still reads as evidence.
 
-const STATUS_KEYS = ["status", "outcome", "result", "state", "verdict"];
-const ACTION_KEYS = ["action", "type", "event", "name", "tool", "operation", "kind"];
-const AGENT_KEYS = ["agent", "agentId", "agent_id", "actor", "profile", "profileId", "profile_id", "model"];
-const TIMESTAMP_KEYS = ["timestamp", "time", "createdAt", "created_at", "epochMs", "epoch_ms", "date"];
+import { parseTapooLogExport } from "../vendor/tapoo-analysis/log-contract.js";
+import { answerRubric } from "../vendor/tapoo-analysis/rubric-engine.js";
 
-const SAMPLE_PAYLOAD = {
-  runId: "tapoo-run-2026-08-30T14:12:00Z",
-  source: "tapoo-agent-behavior-profiler",
-  agent: "tapoo-agent",
-  summary: {
-    objective: "Evaluate navigation behavior under a constrained decision path"
-  },
-  turns: [
-    {
-      turn: 1,
-      timestamp: "2026-08-30T14:12:01Z",
-      action: "observe",
-      status: "applied",
-      visitedCells: ["A1"]
-    },
-    {
-      turn: 2,
-      timestamp: "2026-08-30T14:12:09Z",
-      action: "move",
-      status: "applied",
-      visitedCells: ["A1", "B1"]
-    },
-    {
-      turn: 3,
-      timestamp: "2026-08-30T14:12:22Z",
-      action: "backtracking",
-      status: "applied",
-      visitedCells: ["A1", "B1"]
-    },
-    {
-      turn: 4,
-      timestamp: "2026-08-30T14:12:34Z",
-      action: "prediction",
-      status: "warning",
-      message: "Warning: partial path repeated without new evidence"
-    }
-  ]
-};
-
-export const samplePayloadText = JSON.stringify(SAMPLE_PAYLOAD, null, 2);
-
-export function parsePayload(raw) {
-  const trimmed = String(raw ?? "").trim();
-  if (!trimmed) return {ok: false, error: "Paste a Tapoo profiler JSON payload to begin."};
-
-  try {
-    return {ok: true, value: JSON.parse(trimmed)};
-  } catch (error) {
-    return {ok: false, error: error.message};
+// analyzeLogText is the single entry point from raw text to a rendered result. It returns a
+// discriminated result instead of throwing, because every failure here is a person's input mistake
+// that the page has to explain, not an exceptional condition.
+export function analyzeLogText(text, {label = "pasted log"} = {}) {
+  const trimmed = String(text ?? "").trim();
+  if (!trimmed) {
+    return {ok: false, error: "Load or paste a Tapoo agent-api log to begin."};
   }
-}
 
-export function analyzePayload(payload) {
-  const events = collectEvents(payload);
-  const statuses = countBy(events, (event) => normalizeValue(readFirst(event, STATUS_KEYS), "unknown"));
-  const actionTypes = countBy(events, (event) => normalizeValue(readFirst(event, ACTION_KEYS), "event"));
-  const agents = countBy(events, (event) => normalizeValue(readFirst(event, AGENT_KEYS), "unknown"));
-  const timeline = events
-    .map((event, index) => ({
-      index: index + 1,
-      timestamp: readTimestamp(event),
-      action: normalizeValue(readFirst(event, ACTION_KEYS), "event"),
-      status: normalizeValue(readFirst(event, STATUS_KEYS), "unknown"),
-      summary: summarizeEvent(event)
-    }))
-    .filter((event) => event.timestamp instanceof Date && Number.isFinite(+event.timestamp));
-  const warnings = events.filter((event) => hasWarning(event));
-  const backtracking = events.filter((event) => JSON.stringify(event).toLowerCase().includes("backtracking"));
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    return {ok: false, error: `Not valid JSON: ${error.message}`};
+  }
+
+  const result = parseTapooLogExport(parsed);
+  if (!result.ok) {
+    return {ok: false, error: result.error};
+  }
 
   return {
-    payload,
-    events,
-    statuses,
-    actionTypes,
-    agents,
-    timeline,
-    warnings,
-    backtracking,
-    rootKeys: isRecord(payload) ? Object.keys(payload) : [],
-    shape: Array.isArray(payload) ? "array" : typeof payload
+    ok: true,
+    source: result.value,
+    warnings: result.warnings,
+    report: answerRubric(result.value.entries, {label})
   };
 }
 
-export function metricCards(analysis) {
+// profileCards summarizes a report as headline counts.
+//
+// Capabilities and violations are reported as separate fractions and never combined. The rubric is
+// explicit that they must not collapse into one score interval: a model with six capabilities and
+// two violations is not "four", and any arithmetic that produces a single number here would be
+// inventing a scale the contract deliberately refuses to define.
+export function profileCards(report) {
+  const met = (groups) => groups.filter((group) => group.met).length;
+
   return [
-    {label: "Profiler events", value: analysis.events.length.toLocaleString("en-US"), tone: "ink"},
-    {label: "Action types", value: analysis.actionTypes.length.toLocaleString("en-US"), tone: "teal"},
-    {label: "Warnings", value: analysis.warnings.length.toLocaleString("en-US"), tone: "amber"},
-    {label: "Backtracking signals", value: analysis.backtracking.length.toLocaleString("en-US"), tone: "rose"}
+    {
+      label: "Capabilities demonstrated",
+      value: `${met(report.capabilities)}/${report.capabilities.length}`,
+      tone: "teal"
+    },
+    {
+      label: "Violations confirmed",
+      value: `${met(report.violations)}/${report.violations.length}`,
+      tone: "rose"
+    },
+    {label: "Predictions", value: formatCount(report.predictions), tone: "ink"},
+    {label: "Rounds", value: formatCount(report.rounds), tone: "ink"}
   ];
 }
 
-export function narrativeSummary(analysis) {
-  const topAction = analysis.actionTypes[0];
-  const topStatus = analysis.statuses[0];
-  const agent = analysis.agents[0]?.key;
-  const warnings = analysis.warnings.length;
-  const backtracking = analysis.backtracking.length;
-  const fragments = [
-    `Detected ${analysis.events.length.toLocaleString("en-US")} profiler event${analysis.events.length === 1 ? "" : "s"}`,
-    agent && agent !== "unknown" ? `for ${agent}` : "from the submitted Tapoo payload",
-    topAction ? `with "${topAction.key}" as the most common behavior` : "with no dominant behavior detected",
-    topStatus ? `and "${topStatus.key}" as the most common status` : "and no status field detected"
-  ];
-
-  return `${fragments.join(" ")}. Warning signals: ${warnings.toLocaleString("en-US")}. Backtracking references: ${backtracking.toLocaleString("en-US")}.`;
-}
-
-export function tableRows(analysis, limit = 20) {
-  return analysis.events.slice(0, limit).map((event, index) => ({
-    "#": index + 1,
-    action: normalizeValue(readFirst(event, ACTION_KEYS), "event"),
-    status: normalizeValue(readFirst(event, STATUS_KEYS), "unknown"),
-    agent: normalizeValue(readFirst(event, AGENT_KEYS), "unknown"),
-    timestamp: formatTimestamp(readTimestamp(event)),
-    detail: summarizeEvent(event)
+// groupRows renders one rubric group per row, keeping every per-question answer visible beside the
+// verdict. The fraction is carried because partial evidence is not the same as none: C7 at 1/2 and
+// C7 at 0/2 are both a `no`, and showing only the verdict would hide exactly the difference the
+// rubric asks to preserve.
+export function groupRows(groups) {
+  return groups.map((group) => ({
+    id: group.id,
+    group: group.label,
+    verdict: group.met ? "YES" : "no",
+    evidence: `${group.passed}/${group.total}`,
+    questions: Object.entries(group.answers)
+      .map(([question, answer]) => `${question}:${answer ? "Y" : "n"}`)
+      .join("  ")
   }));
 }
 
-export function formatDatumLabel(d) {
-  return `${d.key}: ${d.value}`;
+// diagnosticRows reports operational signals that are deliberately excluded from the violation
+// profile. Endpoint failures in particular can be caused by infrastructure outside the model's
+// reasoning, so the rubric notes require them to be preserved as evidence but never scored.
+export function diagnosticRows(report) {
+  return [
+    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scored: "no"},
+    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scored: "V2.Q2"},
+    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scored: "V2.Q1"},
+    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scored: "V5.Q3"}
+  ];
 }
 
-function collectEvents(payload) {
-  const events = [];
-  const seen = new WeakSet();
-
-  visit(payload, "", 0);
-  return events.length ? events : (isRecord(payload) ? [payload] : []);
-
-  function visit(value, key, depth) {
-    if (depth > 8 || value == null) return;
-
-    if (Array.isArray(value)) {
-      if (looksLikeEventCollection(key, value)) {
-        for (const item of value) if (isRecord(item)) events.push(item);
-      }
-      for (const item of value) visit(item, key, depth + 1);
-      return;
-    }
-
-    if (!isRecord(value) || seen.has(value)) return;
-    seen.add(value);
-
-    if (looksLikeEvent(value)) events.push(value);
-    for (const [childKey, childValue] of Object.entries(value)) visit(childValue, childKey, depth + 1);
-  }
+// provenanceRows describe which build and which round produced the log, so a profile is never read
+// detached from what it was measured against.
+export function provenanceRows(source, report) {
+  return [
+    {field: "Tapoo version", value: source.version ?? "not recorded"},
+    {field: "Control mode", value: source.mode ?? "not recorded"},
+    {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
+    {field: "Log entries", value: formatCount(source.entries.length)},
+    {field: "Model", value: report.model ?? "not recorded"},
+    {field: "Player", value: report.player ?? "not recorded"}
+  ];
 }
 
-function looksLikeEventCollection(key, value) {
-  return EVENT_KEYS.has(String(key).toLowerCase()) || value.some((item) => isRecord(item) && looksLikeEvent(item));
+// narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
+// reliably over-read a negative rubric answer as a claim about the model's ability, which it never
+// is - it says the behavior was not observed in this one sample.
+export function narrativeSummary(report) {
+  const capabilities = report.capabilities.filter((group) => group.met).map((group) => group.id);
+  const violations = report.violations.filter((group) => group.met).map((group) => group.id);
+  const speed = report.traversalSpeedClass
+    ? `Winning traversal speed ${report.traversalSpeed.toFixed(4)} (${report.traversalSpeedClass}).`
+    : "No winning round in this sample.";
+
+  return [
+    `${report.model ?? "This agent"} demonstrated ${capabilities.length} of ${report.capabilities.length} capabilities`,
+    capabilities.length ? `(${capabilities.join(", ")})` : "",
+    `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
+    violations.length
+      ? `Confirmed violations: ${violations.join(", ")}.`
+      : "No violations confirmed.",
+    speed,
+    "A negative answer means the behavior was not observed in this sample, not that the model is incapable of it."
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
-function looksLikeEvent(value) {
-  const keys = Object.keys(value);
-  return keys.some((key) => EVENT_KEYS.has(key.toLowerCase())) || keys.some((key) => STATUS_KEYS.includes(key) || ACTION_KEYS.includes(key));
-}
-
-function countBy(values, accessor) {
-  const counts = new Map();
-  for (const value of values) {
-    const key = accessor(value);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Array.from(counts, ([key, value]) => ({key, value})).sort((a, b) => b.value - a.value || a.key.localeCompare(b.key));
-}
-
-function readFirst(value, keys) {
-  if (!isRecord(value)) return undefined;
-  for (const key of keys) {
-    if (value[key] != null && value[key] !== "") return value[key];
-  }
-  return undefined;
-}
-
-function readTimestamp(value) {
-  const raw = readFirst(value, TIMESTAMP_KEYS);
-  if (typeof raw === "number") return new Date(raw > 10_000_000_000 ? raw : raw * 1000);
-  if (typeof raw === "string" && raw.trim()) return new Date(raw);
-  return undefined;
-}
-
-function formatTimestamp(value) {
-  return value instanceof Date && Number.isFinite(+value) ? value.toISOString() : "";
-}
-
-function normalizeValue(value, fallback) {
-  if (value == null || value === "") return fallback;
-  if (typeof value === "object") return fallback;
-  return String(value);
-}
-
-function summarizeEvent(event) {
-  const text = readFirst(event, ["summary", "message", "reason", "description", "error", "warning", "prompt"]);
-  if (typeof text === "string" && text.trim()) return text.trim().slice(0, 180);
-
-  const keys = Object.keys(event).filter((key) => !["visitedCells", "visited_cells", "path"].includes(key));
-  return keys.slice(0, 6).map((key) => `${key}: ${formatPreview(event[key])}`).join(", ");
-}
-
-function formatPreview(value) {
-  if (value == null) return "";
-  if (typeof value === "object") return Array.isArray(value) ? `[${value.length}]` : "{...}";
-  return String(value).slice(0, 48);
-}
-
-function hasWarning(value) {
-  return JSON.stringify(value).toLowerCase().includes("warning");
-}
-
-function isRecord(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function formatCount(value) {
+  return Number(value).toLocaleString("en-US");
 }
