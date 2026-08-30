@@ -1,0 +1,9 @@
+blockExoticSubdeps: true
+minimumReleaseAge: 1440
+strictDepBuilds: true
+
+overrides:
+  esbuild: 0.28.2
+
+allowBuilds:
+  esbuild: true

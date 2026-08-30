@@ -1,0 +1,25 @@
+{
+  "name": "tapoo-oracle",
+  "description": "Observable Framework app for analyzing raw Tapoo Agent behavior profiler payloads.",
+  "packageManager": "pnpm@11.10.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "clean": "rimraf src/.observablehq/cache",
+    "build": "observable build",
+    "dev": "observable preview",
+    "deploy": "observable deploy",
+    "observable": "observable"
+  },
+  "dependencies": {
+    "@observablehq/framework": "^1.13.4",
+    "d3-dsv": "^3.0.1",
+    "d3-time-format": "^4.1.0"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.10"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
