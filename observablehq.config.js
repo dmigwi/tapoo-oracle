@@ -14,7 +14,7 @@ export default {
   // all pages will be listed in alphabetical order. Listing pages explicitly
   // lets you organize them into sections and have unlisted pages.
   pages: [
-    {name: "Analyzer", path: "/"}
+    // {name: "Analyzer", path: "/"}
   ],
 
   // Content to add to the head of the page, e.g. for a favicon:
@@ -28,7 +28,7 @@ export default {
   // sidebar: true, // whether to show the sidebar
   // toc: true, // whether to show the table of contents
   // pager: true, // whether to show previous & next links in the footer
-  // output: "dist", // path to the output root for build
+  output: "public", // path to the output root for build
   // search: true, // activate search
   // linkify: true, // convert URLs in Markdown to links
   // typographer: false, // smart quotes and other typographic improvements

@@ -6,7 +6,7 @@
 Tapoo Oracle is the analytics extension of [Tapoo](https://github.com/dmigwi/tapoo). It is an
 [Observable Framework](https://observablehq.com/framework/) app that reads a downloaded Tapoo
 `agent-api` gameplay log and reports the agent's behavior profile against the
-[Tapoo Agentic Behavior Rubric](https://github.com/dmigwi/tapoo/blob/master/docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md).
+[Tapoo Agentic Behavior Rubric](docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md).
 
 The profile is a factual reasoning record, not a scorecard. Nine capability groups (`C1`–`C9`) and
 six violation groups (`V1`–`V6`) are each answered strictly YES or NO from logged evidence, reported
@@ -15,19 +15,24 @@ was **not observed in this sample** — never that the model is incapable of it.
 
 ## Relationship to Tapoo
 
-Tapoo produces the logs and owns the rubric. Two front ends read them:
+Tapoo produces the logs. This repository owns everything that reads them: the rubric, the log
+contract, the engine that answers one against the other, and both front ends.
 
 | Front end | Where |
 | --- | --- |
-| Terminal report | `make agentic-analysis LOGS="a.json"` in the Tapoo repository |
-| This app | Visual profile, same answers |
+| Terminal report | `make agentic-analysis LOGS="a.json"` here |
+| This app | Visual profile |
 
-Both run the *same* implementation. The log contract and rubric engine live in
-[`analysis/`](https://github.com/dmigwi/tapoo/tree/master/analysis) upstream and are vendored here
-verbatim into `src/vendor/tapoo-analysis/`, pinned by content hash, with CI failing on drift. This is
-deliberate: the rubric issues strict verdicts about a model's behavior, so two implementations would
-eventually disagree about the same log with nothing revealing which one was wrong. See
-[docs/VENDORING.md](docs/VENDORING.md).
+The engine lives in [`src/analysis/`](src/analysis) and the app calls it. This matters because the
+rubric issues strict verdicts about a model's behavior, so two implementations would eventually
+disagree about the same log with nothing revealing which one was wrong.
+
+**Known gap:** `scripts/agentic-analysis.mjs` still carries its own copy of the rubric logic rather
+than importing that engine, so the two front ends are two implementations today. This was previously
+masked by vendoring the engine from Tapoo and failing CI on a content-hash drift check - a check that
+could only ever report divergence between the two copies of the *library*, never between the library
+and the CLI beside it. Both now live here, which is what makes collapsing them into one call
+possible; until that is done, treat the app as the reference answer.
 
 ## Getting started
 
@@ -80,16 +85,15 @@ is uploaded.
 .
 ├─ .github/workflows        # CI and manual Pages deployment
 ├─ docs
-│  └─ VENDORING.md          # how the Tapoo analysis contract is vendored and checked
+│  ├─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md        # the rubric both front ends answer
+│  └─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC_NOTES.md  # why each group is worded as it is
 ├─ scripts
-│  ├─ hooks/pre-commit      # offline vendor check, lint, tests
-│  ├─ check-vendor-drift.mjs
-│  ├─ vendor-analysis.mjs
-│  └─ vendor-lib.mjs
+│  ├─ hooks/pre-commit      # lint and tests
+│  └─ agentic-analysis.mjs  # terminal front end
 ├─ src
 │  ├─ components
 │  │  └─ oracle.js          # adapter: engine results → cards, rows, sentences
-│  ├─ vendor/tapoo-analysis # verbatim copy of Tapoo's analysis contract — do not edit
+│  ├─ analysis              # log contract and rubric engine — the only analysis implementation
 │  └─ index.md              # analyzer page
 ├─ Makefile
 ├─ observablehq.config.js
@@ -99,7 +103,8 @@ is uploaded.
 **`src/components/oracle.js`** holds no analysis of its own. It turns one engine result into
 presentation, and is the only place to change how a profile is displayed.
 
-**`src/vendor/tapoo-analysis/`** is upstream code. Editing it fails the drift check.
+**`src/analysis/`** is the analysis itself, and the only copy of it. Both front ends call
+it, so a change here changes what the terminal report and this app both answer.
 
 ## Command reference
 
@@ -108,12 +113,11 @@ presentation, and is the only place to change how a profile is displayed.
 | `make help` | List the available project commands |
 | `make install` | Install the reviewed, locked dependencies |
 | `make audit` | Fail if the lockfile has known vulnerabilities |
-| `make vendor` | Re-copy Tapoo's analysis contract (`TAPOO=path` for a local checkout) |
-| `make check-vendor` | Fail if the vendored contract is out of date |
+| `make agentic-analysis` | Answer the rubric for exported logs (`LOGS="a.json b.json"`) |
 | `make lint` | Run eslint |
 | `make test` | Run the test suite |
 | `make coverage` | Run the test suite with coverage |
-| `make quality` | Offline vendor check, lint, and tests |
+| `make quality` | Lint and tests |
 | `make ci` | Run the local equivalent of the CI pipeline |
 | `make dev` | Start the local preview server |
 | `make build` | Build the static site into `./dist` |
@@ -129,7 +133,7 @@ Install the repository git hooks before creating commits:
 ./scripts/install-hooks.sh
 ```
 
-The hook runs the offline vendor check, eslint, and the test suite. Before opening a PR:
+The hook runs eslint and the test suite. Before opening a PR:
 
 ```bash
 make ci

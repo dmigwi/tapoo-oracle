@@ -40,12 +40,6 @@ jobs:
       - name: Audit the dependency graph
         run: pnpm audit --audit-level=low
 
-      # Runs before lint and tests on purpose: if the vendored rubric engine no longer matches
-      # Tapoo, then everything below is testing the wrong analysis, and a green suite would be
-      # actively misleading rather than merely incomplete.
-      - name: Check the vendored Tapoo analysis contract
-        run: node ./scripts/check-vendor-drift.mjs
-
       - name: Lint
         run: pnpm run lint
 

@@ -14,9 +14,7 @@
     "lint:fix": "eslint src/components scripts --fix",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "vendor:analysis": "node scripts/vendor-analysis.mjs",
-    "check:vendor": "node scripts/check-vendor-drift.mjs",
-    "quality": "pnpm run check:vendor -- --offline && pnpm run lint && pnpm run test"
+    "quality": "pnpm run lint && pnpm run test"
   },
   "dependencies": {
     "@observablehq/framework": "^1.13.4",

@@ -29,8 +29,7 @@ import {
 </section>
 
 ```js
-const sampleText = await FileAttachment("./vendor/tapoo-analysis/fixtures/sample-agent-api-log.json").text();
-const vendor = await FileAttachment("./vendor/tapoo-analysis/VENDOR.json").json();
+const sampleText = await FileAttachment("./analysis/fixtures/sample-agent-api-log.json").text();
 ```
 
 ```js
@@ -140,11 +139,9 @@ const detail = !result.ok
           sort: false,
           rows: 6
         })}
-        <p class="vendor-line">
-          Rubric engine vendored from <code>${vendor.repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")}</code>
-          @ <code>${vendor.commit.slice(0, 8)}</code> (<code>${vendor.ref}</code>)${vendor.dirtySource
-            ? html` — <span class="dirty">taken from an uncommitted working tree</span>`
-            : ""}.
+        <p class="source-line">
+          Answers come from the rubric engine in this repository, against the
+          <a href="https://github.com/dmigwi/tapoo-oracle/blob/main/docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md">Tapoo Agentic Behavior Rubric</a>.
         </p>
       </section>
     </div>`;
@@ -285,18 +282,15 @@ body {
 }
 
 .source-line,
-.vendor-line {
+.source-line {
   color: var(--oracle-muted);
   font-size: 0.9rem;
 }
 
-.vendor-line {
+.source-line {
   margin-bottom: 0;
 }
 
-.dirty {
-  color: var(--oracle-amber);
-}
 
 .notice {
   display: grid;

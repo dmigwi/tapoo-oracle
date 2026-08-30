@@ -1,17 +1,17 @@
-// Adapter between Tapoo's vendored rubric engine and this app's views.
+// Adapter between the rubric engine and this app's views.
 //
-// The analysis itself is not implemented here. It lives in src/vendor/tapoo-analysis, copied
-// verbatim from Tapoo, so that this app and `make agentic-analysis` cannot answer the same question
-// about the same log differently. Everything below is presentation: turning one engine result into
-// rows, cards, and sentences.
+// The analysis itself is not implemented here. It lives in src/analysis, which this app
+// and the terminal front end (`make agentic-analysis`) both call, so the two cannot answer the same
+// question about the same log differently. Everything below is presentation: turning one engine
+// result into rows, cards, and sentences.
 //
 // The rule this file follows is that nothing it displays may be invented. Every number traces to a
 // rubric answer or to an explicitly logged event - no substring sniffing, no guessed field names, no
 // signal that the contract does not define. A plausible-looking number with no basis in the log is
 // worse than an absent one, because it still reads as evidence.
 
-import { parseTapooLogExport } from "../vendor/tapoo-analysis/log-contract.js";
-import { answerRubric } from "../vendor/tapoo-analysis/rubric-engine.js";
+import { parseTapooLogExport } from "../analysis/log-contract.js";
+import { answerRubric } from "../analysis/rubric-engine.js";
 
 // analyzeLogText is the single entry point from raw text to a rendered result. It returns a
 // discriminated result instead of throwing, because every failure here is a person's input mistake

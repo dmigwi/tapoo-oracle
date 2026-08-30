@@ -35,11 +35,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # A deployed Oracle that disagrees with Tapoo is worse than no deployed Oracle, so the drift
-      # check gates publishing as well as merging.
-      - name: Check the vendored Tapoo analysis contract
-        run: node ./scripts/check-vendor-drift.mjs
-
       - name: Build the site
         run: pnpm run build
 
@@ -49,7 +44,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: ./dist
+          path: ./public
 
   deploy:
     name: Deploy Pages
