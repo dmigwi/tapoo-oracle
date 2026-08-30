@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import fixture from "../vendor/tapoo-analysis/fixtures/sample-agent-api-log.json"
+import fixture from "../analysis/fixtures/sample-agent-api-log.json"
 import {
   analyzeLogText,
   diagnosticRows,

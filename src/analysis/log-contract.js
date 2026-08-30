@@ -1,8 +1,8 @@
 // Tapoo agent-api log contract.
 //
 // This module is the single definition of what a downloaded Tapoo log looks like, shared by every
-// consumer that reads one: the CLI in scripts/agentic-analysis.mjs, and the Tapoo Oracle analytics
-// app, which vendors this directory verbatim.
+// consumer that reads one: the CLI in scripts/agentic-analysis.mjs, and the Oracle analytics app in
+// src/. There is exactly one copy, so the two front ends cannot answer the same log differently.
 //
 // It is deliberately IO-free and dependency-free so it runs unchanged in Node and in a browser
 // bundle. Nothing here may import node: builtins - a single such import is what would stop the
