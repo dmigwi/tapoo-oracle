@@ -1,0 +1,37 @@
+#!/bin/sh
+# Pre-commit hook for tapoo-oracle.
+#
+# Runs the checks that are cheap locally and expensive to discover in CI: the offline vendor check,
+# lint, and the test suite. The vendor check runs with --offline so committing never depends on
+# reaching GitHub; CI runs the networked form that also catches upstream moving on.
+
+set -e
+
+echo "Checking the vendored Tapoo analysis contract..."
+if ! node ./scripts/check-vendor-drift.mjs --offline; then
+    echo ""
+    echo "Commit rejected: the vendored Tapoo analysis contract does not match VENDOR.json."
+    echo "See docs/VENDORING.md."
+    echo ""
+    exit 1
+fi
+
+echo "Running eslint..."
+if ! pnpm run lint; then
+    echo ""
+    echo "Commit rejected: eslint found issues."
+    echo "Tip: 'pnpm run lint:fix' auto-fixes some of them."
+    echo ""
+    exit 1
+fi
+
+echo "Running tests..."
+if ! pnpm run test; then
+    echo ""
+    echo "Commit rejected: tests failed."
+    echo ""
+    exit 1
+fi
+
+echo "Pre-commit checks passed - proceeding with commit"
+exit 0

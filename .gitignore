@@ -1,0 +1,17 @@
+# Observable build output and caches
+/dist/
+/src/.observablehq/cache/
+.tmp/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+package-lock.json
+yarn-error.log
+*.log
+
+# Editor and OS
+.DS_Store
+_DS*
+.vscode
+.claude

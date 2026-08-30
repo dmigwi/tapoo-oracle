@@ -1,0 +1,37 @@
+{
+  "name": "tapoo-oracle",
+  "description": "Tapoo's analytics extension: an Observable Framework app that profiles agent-api behavior logs against the Tapoo Agentic Behavior Rubric.",
+  "packageManager": "pnpm@11.10.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "clean": "rimraf src/.observablehq/cache",
+    "build": "observable build",
+    "dev": "observable preview",
+    "deploy": "observable deploy",
+    "observable": "observable",
+    "lint": "eslint src/components scripts --max-warnings=0",
+    "lint:fix": "eslint src/components scripts --fix",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "vendor:analysis": "node scripts/vendor-analysis.mjs",
+    "check:vendor": "node scripts/check-vendor-drift.mjs",
+    "quality": "pnpm run check:vendor -- --offline && pnpm run lint && pnpm run test"
+  },
+  "dependencies": {
+    "@observablehq/framework": "^1.13.4",
+    "d3-dsv": "^3.0.1",
+    "d3-time-format": "^4.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.1",
+    "globals": "^17.11.0",
+    "rimraf": "^5.0.10",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "repository": "https://github.com/dmigwi/tapoo.git",
+  "directory": "analysis",
+  "ref": "oracle-shared-analysis-contract",
+  "commit": "b33e53138a971e8081f5ae558094132c755bad78",
+  "dirtySource": true,
+  "vendoredAt": "2026-08-30T19:43:06.529Z",
+  "files": {
+    "log-contract.mjs": {
+      "vendoredAs": "log-contract.js",
+      "upstream": "sha256:15f2d941fab0c1a6e6a6035b00132fcfbeb276b999b4dc5f03d28bea8089111b",
+      "vendored": "sha256:15f2d941fab0c1a6e6a6035b00132fcfbeb276b999b4dc5f03d28bea8089111b"
+    },
+    "rubric-engine.mjs": {
+      "vendoredAs": "rubric-engine.js",
+      "upstream": "sha256:518df189b2414b854f18e46d1b70ed586fd82d8403e0ad999a76fa54bdd10d0d",
+      "vendored": "sha256:5a0a4e376d8b1f97bfff2689e60ea1d66189a7e5d62e4eca2b5882bb3f161536"
+    },
+    "fixtures/sample-agent-api-log.json": {
+      "vendoredAs": "fixtures/sample-agent-api-log.json",
+      "upstream": "sha256:066a0825ce5b3b271fc01a775ad6e469a0879e8f5cea0daad128d343fc1d0210",
+      "vendored": "sha256:066a0825ce5b3b271fc01a775ad6e469a0879e8f5cea0daad128d343fc1d0210"
+    }
+  }
+}

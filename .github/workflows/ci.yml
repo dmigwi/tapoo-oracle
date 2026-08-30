@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  code-quality: write
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit the dependency graph
+        run: pnpm audit --audit-level=low
+
+      # Runs before lint and tests on purpose: if the vendored rubric engine no longer matches
+      # Tapoo, then everything below is testing the wrong analysis, and a green suite would be
+      # actively misleading rather than merely incomplete.
+      - name: Check the vendored Tapoo analysis contract
+        run: node ./scripts/check-vendor-drift.mjs
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Run tests with coverage
+        env:
+          VITEST_COVERAGE_DIR: .tmp/coverage
+        run: pnpm run coverage
+
+      - name: Build the site
+        run: pnpm run build
+
+      - name: Upload coverage report to GitHub
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: .tmp/coverage/cobertura-coverage.xml
+          language: JavaScript
+          label: code-coverage/oracle
+          fail-on-error: false
