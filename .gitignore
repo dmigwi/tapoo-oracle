@@ -1,5 +1,6 @@
 # Observable build output and caches
 /dist/
+/public/
 /src/.observablehq/cache/
 .tmp/
 
