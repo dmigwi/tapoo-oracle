@@ -1,5 +1,6 @@
 {
   "name": "tapoo-oracle",
+  "version": "0.1.0",
   "description": "Tapoo's analytics extension: an Observable Framework app that profiles agent-api behavior logs against the Tapoo Agentic Behavior Rubric.",
   "packageManager": "pnpm@11.25.0",
   "devEngines": {

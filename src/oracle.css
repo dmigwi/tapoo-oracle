@@ -1,0 +1,503 @@
+@import url("observablehq:default.css");
+@import url("observablehq:theme-air.css");
+
+:root {
+  color-scheme: light;
+  --oracle-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --oracle-body: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --oracle-mono: "SFMono-Regular", Menlo, Consolas, monospace;
+  --oracle-ink: #171717;
+  --oracle-muted: #675448;
+  --oracle-paper: #fbf4e8;
+  --oracle-surface: #fffaf2;
+  --oracle-footer: #eee2d2;
+  --oracle-selected: #e3eadf;
+  --oracle-line: #cfbdab;
+  --oracle-sage: #42664f;
+  --oracle-terracotta: #a3472d;
+  --oracle-amber: #855711;
+  --oracle-rose: #963c37;
+  --theme-background: var(--oracle-paper);
+  --theme-background-alt: var(--oracle-surface);
+  --theme-foreground: var(--oracle-ink);
+  --theme-foreground-alt: var(--oracle-ink);
+  --theme-foreground-muted: var(--oracle-muted);
+  --theme-foreground-focus: #8e3d28;
+  --sans-serif: var(--oracle-body);
+  --serif: var(--oracle-display);
+  --monospace: var(--oracle-mono);
+}
+
+body {
+  background: var(--oracle-paper);
+  color: var(--oracle-ink);
+  font-family: var(--oracle-body);
+}
+
+#observablehq-main {
+  padding-bottom: 5rem;
+}
+
+#observablehq-header {
+  right: auto;
+  left: 0;
+  justify-content: center;
+  width: 100vw;
+  height: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 0;
+  border-bottom: 1px solid var(--oracle-line);
+  background: var(--oracle-footer);
+  color: var(--oracle-muted);
+  text-align: center;
+}
+
+#observablehq-footer {
+  position: fixed;
+  right: auto;
+  bottom: 0;
+  left: 50%;
+  z-index: 10;
+  width: 100vw;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  transform: translateX(-50%);
+  border: 0;
+  border-top: 1px solid var(--oracle-line);
+  background: var(--oracle-footer);
+  color: var(--oracle-muted);
+  text-align: center;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--oracle-ink);
+  font-family: var(--oracle-display);
+}
+
+a[href] {
+  color: var(--oracle-terracotta);
+  text-decoration-color: rgba(163, 71, 45, 0.45);
+  text-underline-offset: 0.16em;
+}
+
+.oracle-header-label {
+  font: 700 0.8rem/1.2 var(--oracle-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.oracle-hero {
+  margin: 1.5rem 0 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--oracle-line);
+}
+
+.oracle-hero h1 {
+  max-width: 10ch;
+  margin: 0;
+  color: var(--oracle-ink);
+  font-size: clamp(2.8rem, 7vw, 5.25rem);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 0.9;
+}
+
+.lede {
+  max-width: none;
+  margin: 1.25rem 0 0;
+  color: var(--oracle-muted);
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
+.analysis-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.report-workspace {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0 0 1.5rem;
+}
+
+.report-navigator {
+  display: flex;
+  gap: 0.55rem;
+  align-items: stretch;
+  overflow-x: auto;
+  padding: 0.7rem;
+  border: 1px solid var(--oracle-line);
+  background: var(--oracle-footer);
+}
+
+.report-add {
+  flex: 0 0 auto;
+  min-height: 2.35rem;
+  font-weight: 700;
+  text-align: left;
+}
+
+.report-list {
+  display: flex;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.report-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.2rem;
+  flex: 0 0 auto;
+  width: min(18rem, 58vw);
+  overflow: hidden;
+  border: 1px solid var(--oracle-line);
+  background: var(--oracle-surface);
+}
+
+.report-list-item-active {
+  border-color: var(--oracle-sage);
+  background: var(--oracle-selected);
+}
+
+.report-list-item button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.report-list-button {
+  overflow: hidden;
+  direction: rtl;
+  min-width: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-delete {
+  border-left: 1px solid var(--oracle-line) !important;
+  color: var(--oracle-muted);
+}
+
+.report-active-panel {
+  min-width: 0;
+}
+
+.report-source-url {
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--oracle-line);
+  background: var(--oracle-surface);
+  color: var(--oracle-muted);
+  font: 0.9rem/1.45 var(--oracle-mono);
+}
+
+.report-url-form {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1fr) minmax(18rem, 4fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 1rem;
+  border: 1px solid var(--oracle-line);
+  background: var(--oracle-surface);
+}
+
+.report-url-form label {
+  color: var(--oracle-muted);
+  font-weight: 700;
+}
+
+.report-url-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.report-url-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--oracle-rose);
+}
+
+#observablehq-main > p:has(> .report-region),
+#observablehq-main > p:has(> .report-workspace),
+#observablehq-main > p:has(> .notice),
+.report-workspace,
+.report-region {
+  width: 100%;
+  max-width: none;
+}
+
+#observablehq-main > p:has(> .report-region),
+#observablehq-main > p:has(> .report-workspace),
+#observablehq-main > p:has(> .notice) {
+  margin-right: 0;
+}
+
+.metric,
+.oracle-summary,
+.events-section,
+.notice {
+  border: 1px solid var(--oracle-line);
+  background: var(--oracle-surface);
+}
+
+.metric {
+  padding: 1rem;
+}
+
+.metric span {
+  display: block;
+  color: var(--oracle-muted);
+  font-size: 0.86rem;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.metric-ink { border-top: 4px solid var(--oracle-ink); }
+.metric-teal { border-top: 4px solid var(--oracle-sage); }
+.metric-rose { border-top: 4px solid var(--oracle-rose); }
+
+.oracle-summary,
+.events-section,
+.notice {
+  padding: 1.2rem;
+  margin: 1.5rem 0;
+}
+
+.oracle-summary h2,
+.events-section h2 {
+  margin-top: 0;
+}
+
+.oracle-summary p {
+  max-width: none;
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
+.methodology-intro {
+  max-width: none;
+  line-height: 1.65;
+}
+
+.methodology-section summary {
+  cursor: pointer;
+}
+
+.methodology-section summary::marker {
+  color: var(--oracle-sage);
+}
+
+.methodology-preview {
+  display: block;
+}
+
+.methodology-title {
+  margin-bottom: 0.35rem;
+  font: 700 1.5rem/1.15 var(--oracle-display);
+}
+
+.methodology-preview {
+  color: var(--oracle-muted);
+  font-size: 0.9rem;
+}
+
+.methodology-content {
+  margin-top: 1.2rem;
+}
+
+.analysis-pipeline {
+  max-width: none;
+  margin: 1.5rem 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: analysis-step;
+}
+
+.analysis-pipeline li {
+  position: relative;
+  padding: 1rem 0 1rem 3.5rem;
+  border-top: 1px solid var(--oracle-line);
+  counter-increment: analysis-step;
+}
+
+.analysis-pipeline li:last-child {
+  border-bottom: 1px solid var(--oracle-line);
+}
+
+.analysis-pipeline li::before {
+  position: absolute;
+  top: 1rem;
+  left: 0;
+  color: var(--oracle-sage);
+  content: counter(analysis-step, decimal-leading-zero);
+  font: 700 0.8rem/1.4 var(--oracle-body);
+}
+
+.analysis-pipeline h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.1rem;
+}
+
+.analysis-pipeline p {
+  max-width: none;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.section-note {
+  margin: -0.4rem 0 1rem;
+  color: var(--oracle-muted);
+  font-size: 0.9rem;
+}
+
+.source-line {
+  color: var(--oracle-muted);
+  font-size: 0.9rem;
+}
+
+.source-line {
+  margin-bottom: 0;
+}
+
+
+.notice {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.empty-report-state {
+  color: var(--oracle-ink);
+}
+
+.gist-help {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--oracle-line);
+}
+
+.gist-help ol {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.gist-help li {
+  margin: 0.25rem 0;
+}
+
+.notice ul,
+.notice ol {
+  max-width: none;
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.notice blockquote,
+.events-section blockquote,
+.events-section ol,
+.events-section ul {
+  max-width: none;
+}
+
+.notice-error {
+  border-color: var(--oracle-rose);
+  color: var(--oracle-rose);
+}
+
+.notice-warn {
+  border-color: var(--oracle-amber);
+  color: var(--oracle-amber);
+}
+
+input[type="url"],
+textarea {
+  min-height: 8rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.25rem;
+  background: var(--oracle-surface);
+  color: var(--oracle-ink);
+  font-family: var(--oracle-mono) !important;
+}
+
+input[type="url"] {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.6rem;
+}
+
+input,
+button,
+select,
+textarea {
+  accent-color: var(--oracle-terracotta);
+}
+
+button {
+  border: 1px solid #aa8c76;
+  border-radius: 0.25rem;
+  background: #f3e4d2;
+  color: var(--oracle-ink);
+  font-family: var(--oracle-body);
+}
+
+table {
+  max-width: none;
+  font-family: var(--oracle-body);
+}
+
+.events-section form:has(> table) {
+  max-height: none !important;
+  overflow: visible;
+}
+
+th {
+  color: var(--oracle-ink);
+}
+
+td {
+  color: var(--oracle-ink);
+}
+
+.events-section tbody tr:has(input[type="checkbox"]:checked) {
+  background: var(--oracle-selected);
+}
+
+@media (max-width: 860px) {
+  #observablehq-main {
+    padding-bottom: 8rem;
+  }
+
+  #observablehq-footer {
+    padding: 0.65rem 0.75rem;
+  }
+
+  .events-section form:has(> table) {
+    overflow-x: auto;
+  }
+
+  .analysis-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .report-url-form {
+    grid-template-columns: 1fr;
+  }
+
+  .oracle-hero h1 {
+    font-size: clamp(2.6rem, 13vw, 4rem);
+  }
+}

@@ -1,4 +1,6 @@
 // See https://observablehq.com/framework/config for documentation.
+import packageMetadata from "./package.json" with {type: "json"};
+
 export default {
   // The app’s title; used in the sidebar and webpage titles.
   title: "Tapoo Oracle",
@@ -7,6 +9,7 @@ export default {
   // meaningful as a reading of Tapoo's own agent-api logs.
   header: '<span class="oracle-header-label">Tapoo analytics extension</span>',
   footer:
+    `<strong>Tapoo Oracle v${packageMetadata.version}</strong> · ` +
     'Analysis contract vendored from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>. ' +
     'Logs are analyzed in your browser and never uploaded.',
 
@@ -25,7 +28,7 @@ export default {
   root: "src",
 
   // Some additional configuration options and their defaults:
-  theme: "light",
+  style: "oracle.css",
   // sidebar: true, // whether to show the sidebar
   // toc: true, // whether to show the table of contents
   // pager: true, // whether to show previous & next links in the footer

@@ -16,10 +16,10 @@ import { answerRubric } from "../analysis/rubric-engine.js";
 // analyzeLogText is the single entry point from raw text to a rendered result. It returns a
 // discriminated result instead of throwing, because every failure here is a person's input mistake
 // that the page has to explain, not an exceptional condition.
-export function analyzeLogText(text, {label = "pasted log"} = {}) {
+export function analyzeLogText(text, {label = "online log", sourceUrl} = {}) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) {
-    return {ok: false, error: "Load or paste a Tapoo agent-api log to begin."};
+    return {ok: false, error: "Load a Tapoo agent-api log from an online JSON URL to begin."};
   }
 
   let parsed;
@@ -36,10 +36,315 @@ export function analyzeLogText(text, {label = "pasted log"} = {}) {
 
   return {
     ok: true,
-    source: result.value,
+    source: sourceUrl ? {...result.value, sourceUrl} : result.value,
     warnings: result.warnings,
     report: answerRubric(result.value.entries, {label})
   };
+}
+
+export function createEmptyReportTab(id = reportTabId()) {
+  return {
+    id,
+    url: "",
+    label: "New report",
+    status: "empty",
+  };
+}
+
+export function createInitialReportTabs() {
+  return {
+    tabs: [],
+    activeTabId: null,
+    isAdding: true,
+    draftUrl: "",
+    draftStatus: "empty",
+  };
+}
+
+export function validateOnlineJsonUrl(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return {ok: false, error: "Enter an online JSON file URL."};
+  }
+
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return {ok: false, error: "Enter a valid URL."};
+  }
+
+  if (!["http:", "https:"].includes(url.protocol)) {
+    return {ok: false, error: "Use an online http:// or https:// JSON URL."};
+  }
+
+  return {ok: true, url: url.href};
+}
+
+export function reportTabLabelFromUrl(value, index = 0) {
+  const fallback = `Report ${index + 1}`;
+  try {
+    const url = new URL(value);
+    const name = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "");
+    return trimReportTabLabel(name || url.hostname || fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+export function trimReportTabLabel(value, maxLength = 34) {
+  const label = String(value ?? "").trim();
+  if (label.length <= maxLength) return label;
+  return `...${label.slice(-(maxLength - 3))}`;
+}
+
+export function addReportTab(state, id = reportTabId()) {
+  return {
+    ...state,
+    pendingTabId: id,
+    isAdding: true,
+    draftUrl: "",
+    draftStatus: "empty",
+    draftError: undefined,
+  };
+}
+
+export function updateReportTab(state, tabId, patch) {
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) => (tab.id === tabId ? {...tab, ...patch} : tab)),
+  };
+}
+
+export function deleteReportTab(state, tabId, createId = reportTabId) {
+  const deletedIndex = state.tabs.findIndex((tab) => tab.id === tabId);
+  const tabs = state.tabs.filter((tab) => tab.id !== tabId);
+  if (tabs.length === 0) {
+    return {
+      ...createInitialReportTabs(),
+      pendingTabId: createId(),
+    };
+  }
+
+  if (state.activeTabId !== tabId) {
+    return {...state, tabs};
+  }
+
+  const nextIndex = Math.min(Math.max(deletedIndex, 0), tabs.length - 1);
+  return {tabs, activeTabId: tabs[nextIndex].id};
+}
+
+export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText) {
+  const tabId = state.pendingTabId ?? reportTabId();
+  const validation = validateOnlineJsonUrl(state.draftUrl);
+  if (!validation.ok) {
+    return {
+      ...state,
+      isAdding: true,
+      draftStatus: "error",
+      draftError: validation.error,
+    };
+  }
+
+  const label = reportTabLabelFromUrl(validation.url, state.tabs.length);
+  const baseTab = {
+    id: tabId,
+    url: validation.url,
+    label,
+    loadedUrl: validation.url,
+  };
+
+  try {
+    const text = await fetchText(validation.url);
+    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
+    const tab = result.ok
+      ? {...baseTab, status: "loaded", result, error: undefined}
+      : {...baseTab, status: "error", result, error: result.error};
+    return {
+      ...state,
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      isAdding: false,
+      draftUrl: "",
+      draftStatus: "empty",
+      draftError: undefined,
+      pendingTabId: undefined,
+    };
+  } catch (error) {
+    const tab = {
+      ...baseTab,
+      status: "error",
+      error: `Could not load URL: ${error.message}`,
+      result: undefined,
+    };
+    return {
+      ...state,
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      isAdding: false,
+      draftUrl: "",
+      draftStatus: "empty",
+      draftError: undefined,
+      pendingTabId: undefined,
+    };
+  }
+}
+
+export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReportText) {
+  const tab = state.tabs.find((candidate) => candidate.id === tabId);
+  const validation = validateOnlineJsonUrl(tab?.url);
+  if (!validation.ok) {
+    return updateReportTab(state, tabId, {
+      status: "error",
+      error: validation.error,
+      result: undefined,
+      loadedUrl: undefined,
+    });
+  }
+
+  const label = reportTabLabelFromUrl(validation.url, state.tabs.findIndex((candidate) => candidate.id === tabId));
+  try {
+    const text = await fetchText(validation.url);
+    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
+    return updateReportTab(state, tabId, result.ok
+      ? {status: "loaded", label, result, loadedUrl: validation.url, error: undefined}
+      : {status: "error", label, result, loadedUrl: validation.url, error: result.error});
+  } catch (error) {
+    return updateReportTab(state, tabId, {
+      status: "error",
+      label,
+      error: `Could not load URL: ${error.message}`,
+      result: undefined,
+      loadedUrl: validation.url,
+    });
+  }
+}
+
+export function createReportTabsInput({fetchText = fetchReportText} = {}) {
+  let state = createInitialReportTabs();
+  const root = document.createElement("section");
+  root.className = "report-workspace";
+  Object.defineProperty(root, "value", {
+    get: () => state,
+  });
+
+  const emit = () => {
+    root.dispatchEvent(new Event("input", {bubbles: true}));
+    render();
+  };
+
+  const setState = (nextState) => {
+    state = nextState;
+    emit();
+  };
+
+  const loadNewTab = async () => {
+    const requestedUrl = state.draftUrl;
+    setState({...state, draftStatus: "loading", draftError: undefined});
+    const loadedState = await loadNewReportTabFromUrl(state, fetchText);
+    if (state.draftUrl !== requestedUrl) return;
+    setState(loadedState);
+  };
+
+  const render = () => {
+    root.replaceChildren();
+    const navigator = document.createElement("section");
+    navigator.className = "report-navigator";
+    navigator.setAttribute("aria-label", "Loaded reports");
+
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "report-add";
+    add.textContent = "+ Add Report";
+    add.addEventListener("click", () => setState(addReportTab(state)));
+    navigator.append(add);
+
+    const nav = document.createElement("div");
+    nav.className = "report-list";
+    nav.setAttribute("role", "tablist");
+
+    for (const tab of state.tabs) {
+      const item = document.createElement("div");
+      item.className = `report-list-item${tab.id === state.activeTabId ? " report-list-item-active" : ""}`;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "report-list-button";
+      button.textContent = tab.label;
+      button.title = tab.loadedUrl ?? tab.url ?? tab.label;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
+      button.addEventListener("click", () => setState({...state, activeTabId: tab.id, isAdding: false}));
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "report-delete";
+      remove.setAttribute("aria-label", `Delete ${tab.label}`);
+      remove.textContent = "x";
+      remove.addEventListener("click", () => setState(deleteReportTab(state, tab.id)));
+
+      item.append(button, remove);
+      nav.append(item);
+    }
+
+    navigator.append(nav);
+
+    const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
+    const content = document.createElement("section");
+    content.className = "report-active-panel";
+    if (!state.isAdding && activeTab) {
+      const source = document.createElement("p");
+      source.className = "report-source-url";
+      source.textContent = activeTab.loadedUrl ?? activeTab.url;
+      content.append(source);
+      root.append(navigator, content);
+      return;
+    }
+
+    if (!state.isAdding) {
+      root.append(navigator, content);
+      return;
+    }
+
+    const form = document.createElement("form");
+    form.className = "report-url-form";
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void loadNewTab();
+    });
+
+    const label = document.createElement("label");
+    label.textContent = "Online JSON file URL";
+    label.htmlFor = `${state.pendingTabId ?? "new-report"}-url`;
+
+    const input = document.createElement("input");
+    input.id = `${state.pendingTabId ?? "new-report"}-url`;
+    input.type = "url";
+    input.placeholder = "https://example.com/tapoo-agent-api-log.json";
+    input.value = state.draftUrl;
+    input.addEventListener("input", () => {
+      state = {...state, draftUrl: input.value, draftStatus: "empty", draftError: undefined};
+      root.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = state.draftStatus === "loading" ? "Loading..." : "Load report";
+    submit.disabled = state.draftStatus === "loading";
+
+    form.append(label, input, submit);
+    if (state.draftStatus === "error") {
+      const error = document.createElement("p");
+      error.className = "report-url-error";
+      error.textContent = state.draftError;
+      form.append(error);
+    }
+    content.append(form);
+    root.append(navigator, content);
+  };
+
+  render();
+  return root;
 }
 
 // profileCards summarizes a report as headline counts.
@@ -93,10 +398,26 @@ export function diagnosticRows(report) {
   ];
 }
 
+// diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
+// two measures as rows avoids packing count and scoring semantics into an ambiguous combined value.
+export function diagnosticTableData(report) {
+  const diagnostics = diagnosticRows(report)
+  const columns = ["measure", ...diagnostics.map((row) => row.signal)]
+
+  return {
+    columns,
+    rows: [
+      Object.fromEntries([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count])]),
+      Object.fromEntries([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored])]),
+    ],
+  }
+}
+
 // provenanceRows describe which build and which round produced the log, so a profile is never read
 // detached from what it was measured against.
 export function provenanceRows(source, report) {
   return [
+    {field: "Source URL", value: source.sourceUrl ?? "not recorded"},
     {field: "Tapoo version", value: source.version ?? "not recorded"},
     {field: "Control mode", value: source.mode ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
@@ -104,6 +425,16 @@ export function provenanceRows(source, report) {
     {field: "Model", value: report.model ?? "not recorded"},
     {field: "Player", value: report.player ?? "not recorded"}
   ];
+}
+
+// provenanceTableData renders the small provenance record as one horizontal row so a wide report
+// does not spend six rows on six short values.
+export function provenanceTableData(source, report) {
+  const provenance = provenanceRows(source, report)
+  return {
+    columns: provenance.map((row) => row.field),
+    rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
+  }
 }
 
 // narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
@@ -132,4 +463,19 @@ export function narrativeSummary(report) {
 
 function formatCount(value) {
   return Number(value).toLocaleString("en-US");
+}
+
+async function fetchReportText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
+  }
+  return response.text();
+}
+
+function reportTabId() {
+  if (globalThis.crypto?.randomUUID) {
+    return `report-${globalThis.crypto.randomUUID()}`;
+  }
+  return `report-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
