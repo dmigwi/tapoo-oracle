@@ -10,7 +10,7 @@ import {
   diagnosticTableData,
   enableRowSelection,
   groupResultTone,
-  groupRubricRows,
+  prepareRubricTable,
   rubricQuestionRows,
   narrativeSummary,
   profileCards,
@@ -55,7 +55,7 @@ const result = activeReportTab?.result;
 // not observed in this sample, never that the model cannot do it, and painting that red would state
 // the one thing this report exists to avoid saying.
 const rubricTable = (rows, kind) =>
-  groupRubricRows(enableRowSelection(Inputs.table(rows, {
+  prepareRubricTable(enableRowSelection(Inputs.table(rows, {
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
     format: {
@@ -99,7 +99,16 @@ const emptyState = activeReportTab?.status === "loaded" || activeReportTab?.stat
       <div class="gist-help">
         <strong>Host a local JSON payload with GitHub Gist</strong>
         <ol>
-          <li>Open <a href="https://gist.github.com">gist.github.com</a> while signed in to GitHub.</li>
+          <li>Open <a href="https://gist.github.com">gist.github.com</a> while signed in to GitHub.
+            <ul>
+              <li>Or skip the browser upload with the <a href="https://cli.github.com">GitHub CLI</a>, which
+                creates the gist and opens it ready for step 4:
+                <pre><code>gh gist create --desc "Tapoo v2.5.1 output payloads from level 54" --web sample-agent-api-log.json</code></pre>
+                <code>--desc</code> takes the description as its own argument, so it has to come before
+                <code>--web</code>. <code>gh</code> creates secret gists by default, which is the safer of the two
+                choices in step 3; add <code>--public</code> only when the payload is safe to publish.</li>
+            </ul>
+          </li>
           <li>Create a new gist, name the file with a <code>.json</code> extension, and paste or drag in the Tapoo log JSON.</li>
           <li>Create a secret gist for a share-by-link report, or a public gist only when the payload is safe to publish.</li>
           <li>Open the created gist file's <strong>Raw</strong> view and copy that <code>gist.githubusercontent.com</code> URL.</li>

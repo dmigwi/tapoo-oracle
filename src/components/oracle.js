@@ -256,31 +256,6 @@ export function reportTabLabelFromUrl(value, index = 0) {
   }
 }
 
-// trimUrlMiddle drops the middle of a URL rather than either end.
-//
-// A source URL is provenance, and both ends of it carry that: the host and owner say where the log
-// came from, the filename says which log it is. Clipping the tail - what text-overflow does - keeps
-// the half a reader already knows and throws away the half identifying the report in front of them.
-// What sits between is usually a commit hash or a gist id, which is exactly the part nobody reads.
-//
-// The head keeps the larger share because a truncated host is unrecoverable, while a filename is
-// usually still recognisable from its last characters.
-//
-// One constant length, deliberately not a function of the viewport. A width-dependent trim shows a
-// different URL to every reader and makes the one thing this line exists to establish - which log
-// was analyzed - depend on the window it is read in. Narrow displays wrap the trimmed string instead
-// of losing characters from it.
-export function trimUrlMiddle(value, maxLength = 96) {
-  const url = String(value ?? "").trim()
-  if (url.length <= maxLength || maxLength < 3) {
-    return url
-  }
-
-  const budget = maxLength - 1
-  const head = Math.ceil(budget * 0.55)
-  return `${url.slice(0, head)}\u2026${url.slice(-(budget - head))}`
-}
-
 export function trimReportTabLabel(value, maxLength = 34) {
   const label = String(value ?? "").trim();
   if (label.length <= maxLength) return label;
@@ -409,21 +384,49 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
   }
 }
 
-// shareLinkFor composes the link that reproduces one report. The token rides in the fragment, never
-// the query string: a fragment is not sent to the host, and this app tells its readers the log is
-// "analyzed in your browser, never uploaded" - a ?payload= would put the (recoverable) log address
-// into GitHub Pages request logs on every visit and quietly make that untrue.
+const REPORT_PAYLOAD_PARAM = "payload"
+
+// The route a shared report lives at. Namespaced under /r/ rather than sitting at the root so it
+// reads as a route, and so a future host with real routing can serve it without having to guess
+// whether a path segment is a token or a page.
+const REPORT_ROUTE = "r"
+const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`)
+
+// appBasePath finds where the app is served from, given any page within it.
+//
+// It has to strip a report route back off, because the address bar of a shared report already
+// carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
+// drops a trailing file name so /index.html and / produce the same base.
+export function appBasePath(pathname = "/") {
+  const withoutRoute = String(pathname).replace(REPORT_ROUTE_PATTERN, "/")
+  const withoutFile = withoutRoute.replace(/[^/]*\.html?$/, "")
+  return withoutFile.endsWith("/") ? withoutFile : `${withoutFile}/`
+}
+
+// shareLinkFor composes the link that reproduces one report.
+//
+// The token is a path segment, which means it is sent to the host: GitHub Pages will have the
+// (recoverable) log address in its request logs, and every shared link is served with a 404 status
+// through the shim in 404.md. That trade was made deliberately for a link that reads as a link.
 export function shareLinkFor(url, location = globalThis.location) {
   const encoded = encodeReportPayload(url)
   if (!encoded.ok) {
     return null
   }
 
-  return `${location.origin}${location.pathname}#${REPORT_PAYLOAD_PARAM}=${encoded.payload}`
+  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${encoded.payload}`
 }
 
-// reportPayloadFromHash reads a share token out of a location fragment, ignoring anything else that
-// may be in there.
+// reportPayloadFromPath reads the token out of a /r/<token> route.
+export function reportPayloadFromPath(pathname) {
+  return REPORT_ROUTE_PATTERN.exec(String(pathname ?? ""))?.[1] ?? null
+}
+
+// reportPayloadFromHash reads a token out of a location fragment.
+//
+// Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
+// cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
+// so the public form and the internal hop can change independently.
 export function reportPayloadFromHash(hash) {
   const fragment = String(hash ?? "").replace(/^#/, "")
   if (!fragment) {
@@ -433,14 +436,30 @@ export function reportPayloadFromHash(hash) {
   return new URLSearchParams(fragment).get(REPORT_PAYLOAD_PARAM)
 }
 
-const REPORT_PAYLOAD_PARAM = "payload"
+// A chain, inline rather than a font or an image request: the page loads no third-party asset, and
+// an icon that fails to load beside its label would look like a broken control. A chain says "link"
+// where a paperclip says "attachment" - what this button hands over is a link, not a file.
+const CHAIN_ICON =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>' +
+  '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
 
-// createShareControl builds the copy button that sits beside the trimmed URL.
+// Names what the button produces rather than the mechanics of producing it: what a reader wants is
+// a link to their report, and "copy" describes the clipboard, not the outcome.
+const SHARE_LABEL = "Share Report Link"
+
+// createShareControl builds the share button that sits to the right of the link.
 function createShareControl(url) {
   const button = document.createElement("button")
   button.type = "button"
   button.className = "report-share"
-  button.textContent = "Copy link";
+  const label = document.createElement("span")
+  // Icon first: innerHTML replaces everything already inside, so appending the label before it would
+  // silently drop the label.
+  button.innerHTML = CHAIN_ICON
+  label.textContent = SHARE_LABEL
+  button.append(label)
   button.title = "Copy a link that reopens this report"
 
   button.addEventListener("click", async () => {
@@ -451,14 +470,14 @@ function createShareControl(url) {
 
     try {
       await navigator.clipboard.writeText(link)
-      button.textContent = "Copied"
+      label.textContent = "Copied"
     } catch {
       // Older browsers, and any context where the clipboard permission is refused. Selecting the
       // link is still better than telling the reader nothing happened.
-      button.textContent = "Copy failed"
+      label.textContent = "Copy failed"
     }
 
-    window.setTimeout(() => { button.textContent = "Copy link" }, 1500)
+    window.setTimeout(() => { label.textContent = SHARE_LABEL }, 1500)
   })
 
   return button
@@ -495,13 +514,20 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
   // screen. replaceState rather than assigning location.hash: assigning pushes an entry, and loading
   // three reports would otherwise mean three presses of Back to leave the page.
   const rememberActiveReport = (nextState) => {
-    const active = nextState.tabs.find((tab) => tab.id === nextState.activeTabId);
-    if (active?.status !== "loaded") {
+    const location = globalThis.location;
+    if (!location || !globalThis.history?.replaceState) {
       return;
     }
 
-    const link = shareLinkFor(active.loadedUrl ?? active.url);
-    if (link && globalThis.history?.replaceState) {
+    const active = nextState.tabs.find((tab) => tab.id === nextState.activeTabId);
+    // Falls back to the app root rather than leaving the route in place. A deleted report whose
+    // token stayed in the address bar would be a link to something no longer on screen - and a
+    // reload of it would bring the deleted report straight back.
+    const link = active?.status === "loaded"
+      ? shareLinkFor(active.loadedUrl ?? active.url)
+      : `${location.origin}${appBasePath(location.pathname)}`;
+
+    if (link) {
       globalThis.history.replaceState(null, "", link);
     }
   };
@@ -512,7 +538,10 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
   // validation, the warnings and every error path are the ones already covered - a second loader for
   // shared links would be a second place for them to diverge.
   const restoreSharedReport = async () => {
-    const token = reportPayloadFromHash(globalThis.location?.hash);
+    const location = globalThis.location;
+    // Path first - that is the form people are handed. The fragment is only the hop 404.md uses to
+    // get the token into an app the host could not serve at that path directly.
+    const token = reportPayloadFromPath(location?.pathname) ?? reportPayloadFromHash(location?.hash);
     if (!token) {
       return;
     }
@@ -525,9 +554,16 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
       return;
     }
 
-    setState({...state, draftUrl: decoded.url, isAdding: true, draftStatus: "loading"});
+    // The decoded URL is handed straight to the loader and never put into rendered state. Setting
+    // draftUrl here would show the add-report form while the fetch runs, with the full address
+    // sitting in an input for as long as the load takes - the one place it must not appear.
+    setState({...state, isAdding: false, sharedLinkLoading: true, sharedLinkError: undefined});
     const loadedState = await loadNewReportTabFromUrl({...state, draftUrl: decoded.url}, fetchText);
-    setState(loadedState);
+    setState({...loadedState, draftUrl: "", sharedLinkLoading: false});
+    // Puts /r/<token> back in the address bar. The fragment is an implementation detail of the hop
+    // through 404.md, and leaving it on screen would mean the link someone opened is not the link
+    // they could copy back out - or bookmark, or send on.
+    rememberActiveReport(loadedState);
   };
 
   const render = () => {
@@ -560,14 +596,24 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
       button.title = tab.label;
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
-      button.addEventListener("click", () => setState({...state, activeTabId: tab.id, isAdding: false}));
+      button.addEventListener("click", () => {
+        const nextState = {...state, activeTabId: tab.id, isAdding: false};
+        setState(nextState);
+        // The address bar names the active report, so switching which one is active has to move it
+        // too - otherwise the link on screen belongs to a tab the reader has left.
+        rememberActiveReport(nextState);
+      });
 
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "report-delete";
       remove.setAttribute("aria-label", `Delete ${tab.label}`);
       remove.textContent = "x";
-      remove.addEventListener("click", () => setState(deleteReportTab(state, tab.id)));
+      remove.addEventListener("click", () => {
+        const nextState = deleteReportTab(state, tab.id);
+        setState(nextState);
+        rememberActiveReport(nextState);
+      });
 
       item.append(button, remove);
       nav.append(item);
@@ -582,6 +628,13 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     // A damaged token never becomes a tab, so the report-level error notice never sees it. Told
     // apart from a log that could not be retrieved on purpose: the remedies differ, and the reader
     // of a broken link can only ask for another one.
+    if (state.sharedLinkLoading) {
+      const pending = document.createElement("p");
+      pending.className = "source-line";
+      pending.textContent = "Opening the shared report...";
+      content.append(pending);
+    }
+
     if (state.sharedLinkError) {
       const notice = document.createElement("p");
       notice.className = "report-share-error";
@@ -589,16 +642,27 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
       content.append(notice);
     }
     if (!state.isAdding && activeTab) {
-      const source = document.createElement("p");
-      source.className = "report-source-url";
       const sourceUrl = activeTab.loadedUrl ?? activeTab.url;
-      source.textContent = trimUrlMiddle(sourceUrl);
-      content.append(source);
+      // The share link, not the log address. Showing both was showing the same thing twice - the
+      // link encodes the address, and a reader who needs the address can get it from the link - so
+      // the only thing the second copy added was the address itself, in readable form, on a panel
+      // people screenshot. The report is identified by its label in the tab strip and in the
+      // "Analyzing" line, so nothing is lost by dropping it.
+      const shareLink = activeTab.status === "loaded" ? shareLinkFor(sourceUrl) : null;
+      if (shareLink) {
+        // Shown whole, not trimmed. A trimmed log address was a courtesy - host and filename told a
+        // reader which report they had. A trimmed *link* is just broken: its whole value is being
+        // copied, and an ellipsis in the middle of it means anyone selecting it by hand gets
+        // something that does not work. It wraps instead.
+        const panel = document.createElement("div");
+        panel.className = "report-share-panel";
 
-      // Offered only for a report that actually loaded: a link to a tab that failed would hand
-      // someone a token for a log this browser could not read either.
-      if (activeTab.status === "loaded") {
-        content.append(createShareControl(sourceUrl));
+        const source = document.createElement("p");
+        source.className = "report-source-url";
+        source.textContent = shareLink;
+
+        panel.append(source, createShareControl(sourceUrl));
+        content.append(panel);
       }
 
       root.append(navigator, content);
@@ -658,7 +722,19 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
 // explicit that they must not collapse into one score interval: a model with six capabilities and
 // two violations is not "four", and any arithmetic that produces a single number here would be
 // inventing a scale the contract deliberately refuses to define.
-// groupRubricRows merges each rubric group's repeated cells into one cell spanning its questions.
+// Column classes, keyed by header text. Positional selectors cannot address these columns: rows
+// after a group's first lose two cells to the merge below, so nth-last-child(4) is the group name on
+// one row and the leading spacer on the next. A class travels with the cell.
+const RUBRIC_COLUMN_CLASSES = {
+  "ID": "rubric-id",
+  "Group": "rubric-group",
+  "Fact question": "rubric-question",
+  "Answer": "rubric-answer",
+  "Group result": "rubric-result",
+}
+
+// prepareRubricTable labels each column and merges each group's repeated cells into one cell
+// spanning its questions.
 //
 // A group answers one verdict from several fact questions, and Inputs.table can only render flat
 // rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
@@ -668,7 +744,7 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
 //
 // Safe as a one-time pass because these tables are built with sort disabled and every row
 // materialized, so the body is never re-ordered or extended underneath it.
-export function groupRubricRows(node) {
+export function prepareRubricTable(node) {
   const table = node.querySelector("table")
   const body = table?.querySelector("tbody")
   if (!body) {
@@ -678,6 +754,20 @@ export function groupRubricRows(node) {
   // Located by header text rather than by a fixed index: Inputs.table emits a leading spacer cell,
   // and a hard-coded position silently points one column off the moment that changes.
   const headers = [...(table.querySelector("thead tr")?.cells ?? [])]
+
+  // Labelled before anything is merged, while every row still has every cell in the same position.
+  headers.forEach((header, index) => {
+    const columnClass = RUBRIC_COLUMN_CLASSES[header.textContent.trim()]
+    if (!columnClass) {
+      return
+    }
+
+    header.classList.add(columnClass)
+    for (const row of body.rows) {
+      row.cells[index]?.classList.add(columnClass)
+    }
+  })
+
   const columns = ["Group", "Group result"]
     .map((label) => headers.findIndex((cell) => cell.textContent.trim() === label))
     .filter((index) => index >= 0)
@@ -848,9 +938,10 @@ export function diagnosticTableData(report) {
 // detached from what it was measured against.
 export function provenanceRows(source, report) {
   return [
-    // Trimmed to match the panel. The full address in a table cell is the same leak by another
-    // route, and this one is copied out of screenshots more often than the panel is.
-    {field: "Source URL", value: source.sourceUrl ? trimUrlMiddle(source.sourceUrl) : "not recorded"},
+    // No source URL row. It is the one field here that is not read out of the log itself, the panel
+    // above already carries the share link that identifies the same log, and a table cell is the
+    // most screenshotted place on the page to put an address that the rest of this change exists to
+    // keep out of it. What remains is provenance the log vouches for.
     {field: "Tapoo version", value: source.version ?? "not recorded"},
     {field: "Control mode", value: source.mode ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},

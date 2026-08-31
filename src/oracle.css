@@ -211,17 +211,45 @@ a[href] {
   color: var(--oracle-muted);
 }
 
+/* No justify-items: start here. It was added so the share button would not stretch, but it sizes
+   every child to its content - which squeezed the add-report form to the width of its own label
+   rather than the width available. The share panel keeps its button from stretching through its own
+   column definition instead, which is where that concern belongs. */
 .report-active-panel {
   display: grid;
   gap: 0.6rem;
-  justify-items: start;
   min-width: 0;
 }
 
-/* Sits under the trimmed URL rather than beside it: the URL is allowed to wrap on a narrow display
-   (see .report-source-url), and a button sharing that line would be pushed around by it. */
+/* The link and its control are one object: the link fills the row, the control holds the right edge
+   and never shrinks, so the button stays put no matter how many lines the link runs to. */
+.report-share-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  /* No width: 100%. As a grid item it already stretches to its column, and 100% is measured against
+     the content box - so the padding was added on top and the panel sat wider than the form and the
+     notices beside it, breaking out of the panel that contains it. border-box so the padding is
+     counted in, whatever sets the width later. */
+  box-sizing: border-box;
+  max-width: 800px;
+  padding: 1rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+}
+
 .report-share {
-  padding: 0.35rem 0.75rem;
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  white-space: nowrap;
+}
+
+.report-share svg {
+  flex: 0 0 auto;
 }
 
 .report-share-error {
@@ -235,22 +263,19 @@ a[href] {
   line-height: 1.5;
 }
 
-/* What is displayed is decided once, in trimUrlMiddle, and never again by the viewport: the same
-   characters appear on a phone and on a desktop. Wrapping is allowed rather than clipped, because
-   clipping is width-dependent by definition and it eats the filename - the end of a source URL is
-   half of what identifies which report this is. A trimmed URL running to two lines on a narrow
-   display costs nothing; a trimmed URL cut off at the edge costs its identity. break-word rather
-   than anywhere, so a break happens only where a segment genuinely cannot fit. */
+/* The theme caps every p at 640px for comfortable prose measure (global.css). This one is not prose,
+   it is a link meant to be read and selected whole, and the frame around it belongs to
+   .report-share-panel.
+   
+   anywhere, not break-word: a share link is one unbroken base64 token with no spaces and no hyphens
+   to break at, and break-word does not affect an element's min-content width - so the token stayed
+   one long line, set the panel's minimum size, and pushed the whole page wider than the screen.
+   anywhere is the one value that lets an unbreakable string shrink its container. */
 .report-source-url {
-  /* The theme caps every p at 640px for comfortable prose measure (global.css). This one is not
-     prose - it is a single mechanical string that reads better whole, and 640px forced a URL already
-     trimmed to a constant length onto a second line on displays with room to spare. */
-  max-width: 800px;
-  overflow-wrap: break-word;
+  max-width: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
-  padding: 1rem;
-  border: 1px solid var(--oracle-line);
-  background: var(--oracle-surface);
   color: var(--oracle-muted);
   font: var(--fs-small)/1.45 var(--oracle-mono);
 }
@@ -449,6 +474,13 @@ a[href] {
   gap: 0.4rem;
 }
 
+/* Grid items floor at min-content unless told otherwise, and the gist instructions contain a command
+   that must not wrap - so that one unbreakable line became the minimum width of the whole notice and
+   pushed it past the screen. This is what lets the pre below scroll inside its own box instead. */
+.notice > * {
+  min-width: 0;
+}
+
 .empty-report-state {
   color: var(--oracle-ink);
 }
@@ -456,14 +488,45 @@ a[href] {
 .gist-help {
   display: grid;
   gap: 0.5rem;
+  min-width: 0;
   margin-top: 0.7rem;
   padding-top: 0.9rem;
   border-top: 1px solid var(--oracle-line);
 }
 
+/* Every box between the grid item and the pre has to be able to shrink too, or the widest one of
+   them re-establishes the floor that was just removed. */
+.gist-help > *,
+.gist-help li {
+  min-width: 0;
+}
+
 .gist-help ol {
   margin: 0;
   padding-left: 1.4rem;
+}
+
+.gist-help ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+/* Scrolls rather than wraps: a command broken across lines is a command that fails when it is copied
+   out, and this one is meant to be pasted whole. overflow-x on the block keeps a long command from
+   widening the page the way the share link did. */
+.gist-help pre {
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.25rem;
+  background: var(--oracle-footer);
+}
+
+.gist-help pre code {
+  white-space: pre;
+  font-size: var(--fs-small);
 }
 
 .gist-help li {
@@ -592,46 +655,36 @@ pre code {
 
 /* The fact question is the row's content - the other columns hold an id, a short label, one word,
    and a fraction. Left to auto layout the browser hands width to whatever is widest rather than to
-   whatever matters, so the sentence ends up squeezed into a narrow ribbon while "AVAILABLE-CONTEXT
-   DISREGARD" sits in a column six times the width it needs.
+   whatever matters, so the sentence ends up squeezed while "AVAILABLE-CONTEXT DISREGARD" sits in a
+   column six times the width it needs.
    
-   Counted from the end, not the start. Inputs.table emits a leading empty <th>/<td> even with
-   select:false, so a mapping counted from column 1 silently lands one column off - which is exactly
-   what happened here first, handing the question's share to the group name. The last five columns
-   are the five declared ones whether or not that spacer is ever dropped. */
-/* Widths are declared on the header row alone. table-layout: fixed takes every column width from
-   the table's first row, and body rows lose cells to rowSpan (groupRubricRows), so counting columns
-   within them would land on the wrong one for every row after a group's first. */
+   Addressed by class rather than by position: rows after a group's first lose two cells to the merge
+   (prepareRubricTable), so counting columns within them lands on the wrong one. Widths still have to
+   be declared on the header row, because table-layout: fixed reads them from the table's first row
+   and the body rows no longer have a cell in every column. */
 .rubric-table table {
   width: 100%;
   table-layout: fixed;
 }
 
-.rubric-table th:nth-last-child(5) {
+.rubric-table th.rubric-id {
   width: 7%;
 }
 
-.rubric-table th:nth-last-child(4) {
+.rubric-table th.rubric-group {
   width: 16%;
 }
 
-.rubric-table th:nth-last-child(3) {
+.rubric-table th.rubric-question {
   width: 55%;
 }
 
-.rubric-table th:nth-last-child(2) {
+.rubric-table th.rubric-answer {
   width: 9%;
 }
 
-.rubric-table th:last-child {
+.rubric-table th.rubric-result {
   width: 13%;
-}
-
-/* A spanned group cell sits beside several questions, so it reads from the top of its run rather
-   than floating in the middle of it, and carries the rule that closes the group. */
-.rubric-table td[rowspan] {
-  vertical-align: top;
-  border-bottom: 1px solid var(--oracle-line);
 }
 
 .events-section form:has(> table) {
@@ -696,19 +749,59 @@ td {
     overflow-x: auto;
   }
 
-  /* On a phone the whole table is ~310px wide, so the proportions that read well on a laptop leave
-     the question about 130px - a sentence a word at a time. The short columns give up most of what
-     they can; the id and the answer are the two nothing can be taken from. */
-  .rubric-table th:nth-last-child(4) {
-    width: 11%;
+  /* On a phone the whole table is about 310px. Proportional widths there starve every column at
+     once: the id read "C...", the group "I...", and the answer - the finding itself - read "Y...".
+     Six columns do not fit, so the short ones are given the characters they actually need and the
+     question takes what is left, truncated.
+
+     The group name is dropped rather than shrunk. It is the only column repeating something already
+     on the row: the id names the group (C1.Q2 is a question of C1), and that group's verdict is
+     still in the last column. Nothing else here can be derived from anything else. */
+  .rubric-table th.rubric-group,
+  .rubric-table td.rubric-group {
+    display: none;
   }
 
-  .rubric-table th:nth-last-child(3) {
-    width: 63%;
+  /* Table cells are content-box, so the theme's 6.5px of side padding is added on top of any width
+     set here - six columns of it is 78px of a 311px table. Trimmed to 4px, which is still a visible
+     gutter and hands about 30px back to the question. */
+  .rubric-table th,
+  .rubric-table td {
+    padding-right: 4px;
+    padding-left: 4px;
   }
 
-  .rubric-table th:last-child {
-    width: 10%;
+  /* Content widths, sized to their longest value and no wider - every pixel taken here is one the
+     question does not get. "C1.Q1", "YES", "YES (3/3)". */
+  .rubric-table th.rubric-id {
+    width: 2.6rem;
+  }
+
+  /* Wider than "YES" strictly needs. Sized to the text exactly, the column sat on the pixel where
+     the ellipsis triggers, and rows whose answer cell happened to be last in the row rendered "Y..."
+     while identical rows beside them rendered "YES". A few pixels of slack costs the question
+     nothing it can use and stops the finding from being the thing that gets truncated. */
+  .rubric-table th.rubric-answer {
+    width: 2.3rem;
+  }
+
+  .rubric-table th.rubric-result {
+    width: 4rem;
+  }
+
+  /* Whatever is left, which is the point: the question is the one column that degrades gracefully.
+     A truncated sentence still hints at what was asked, while a truncated "YES" or "C1.Q1" tells a
+     reader nothing at all. */
+  .rubric-table th.rubric-question {
+    width: auto;
+  }
+
+  /* The header labels are longer than any of the values beneath them, so they are what would force
+     these columns wider. Truncating a header is safe: the column is identifiable from its contents,
+     and the full table is a rotation away. */
+  .rubric-table th {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .analysis-strip {
@@ -717,6 +810,17 @@ td {
 
   .report-url-form {
     grid-template-columns: 1fr;
+  }
+
+  /* Below this the link has no room to share a row with a button; stacking keeps the link readable
+     rather than squeezing it into a column narrower than the control beside it.
+     
+     minmax(0, 1fr) and not 1fr: a bare 1fr is minmax(auto, 1fr), whose floor is the content's
+     min-content width - which for an unbreakable token is the whole token. That floor is what blew
+     the panel past the screen edge. */
+  .report-share-panel {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
   }
 
   .oracle-hero h1 {

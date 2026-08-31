@@ -5,10 +5,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  appBasePath,
   createReportTabsInput,
   describeFetchFailure,
   encodeReportPayload,
   reportPayloadFromHash,
+  reportPayloadFromPath,
   shareLinkFor,
 } from "./oracle.js"
 
@@ -29,17 +31,48 @@ const settle = () => new Promise((resolve) => { setTimeout(resolve, 0) })
 
 const panelText = (node) => node.querySelector(".report-active-panel")?.textContent ?? ""
 
+describe("appBasePath", () => {
+  it.each([
+    ["a site root", "/", "/"],
+    ["a project page", "/tapoo-oracle/", "/tapoo-oracle/"],
+    ["an explicit index", "/tapoo-oracle/index.html", "/tapoo-oracle/"],
+  ])("keeps %s as the base", (unused, pathname, expected) => {
+    expect(appBasePath(pathname)).toBe(expected)
+  })
+
+  it("strips a report route back off", () => {
+    // The address bar of an open report already carries /r/<token>. Composing the next link from it
+    // without stripping would nest one route inside another.
+    expect(appBasePath("/tapoo-oracle/r/AbC-123_x")).toBe("/tapoo-oracle/")
+    expect(appBasePath("/r/AbC-123_x")).toBe("/")
+  })
+})
+
 describe("shareLinkFor", () => {
   const location = {origin: "https://example.github.io", pathname: "/tapoo-oracle/"}
 
-  it("puts the token in the fragment, never the query string", () => {
+  it("puts the token in the path, under the report route", () => {
+    const {payload} = encodeReportPayload(gistUrl)
+
+    expect(shareLinkFor(gistUrl, location)).toBe(
+      `https://example.github.io/tapoo-oracle/r/${payload}`,
+    )
+  })
+
+  it("reads as a plain link, with no fragment or query", () => {
     const link = shareLinkFor(gistUrl, location)
 
-    // A query string is sent to the host on every visit, so GitHub Pages would log the (recoverable)
-    // address of every log anyone shared - while the footer of this app says logs are analyzed in
-    // the browser and never uploaded. A fragment never leaves the browser.
-    expect(link.startsWith("https://example.github.io/tapoo-oracle/#payload=")).toBe(true)
+    expect(link).not.toContain("#")
     expect(link).not.toContain("?")
+  })
+
+  it("does not nest a route when composed from a page already showing one", () => {
+    const {payload} = encodeReportPayload(gistUrl)
+    const onReport = {origin: "https://example.github.io", pathname: `/tapoo-oracle/r/${payload}`}
+
+    expect(shareLinkFor(gistUrl, onReport)).toBe(
+      `https://example.github.io/tapoo-oracle/r/${payload}`,
+    )
   })
 
   it("carries no readable trace of the log address", () => {
@@ -51,8 +84,23 @@ describe("shareLinkFor", () => {
   })
 })
 
+describe("reportPayloadFromPath", () => {
+  it("reads the token out of a report route", () => {
+    expect(reportPayloadFromPath("/tapoo-oracle/r/AbC-123_x")).toBe("AbC-123_x")
+    expect(reportPayloadFromPath("/r/AbC-123_x/")).toBe("AbC-123_x")
+  })
+
+  it("ignores a path that names no report", () => {
+    expect(reportPayloadFromPath("/tapoo-oracle/")).toBeNull()
+    expect(reportPayloadFromPath("/r/")).toBeNull()
+    expect(reportPayloadFromPath(undefined)).toBeNull()
+  })
+})
+
 describe("reportPayloadFromHash", () => {
-  it("reads the token out of a fragment", () => {
+  // Not a shape anyone is handed: it is how 404.md hands the token to an app the host cannot serve
+  // at an arbitrary path.
+  it("reads the token out of the redirect hop", () => {
     expect(reportPayloadFromHash("#payload=abc123")).toBe("abc123")
   })
 
@@ -76,6 +124,9 @@ describe("describeFetchFailure", () => {
 
 describe("createReportTabsInput sharing", () => {
   beforeEach(() => {
+    // Both, because a test that loads a report leaves /r/<token> in the path via replaceState, and
+    // the next test would then find a token it never set.
+    window.history.replaceState(null, "", "/")
     window.location.hash = ""
     vi.restoreAllMocks()
   })
@@ -86,12 +137,13 @@ describe("createReportTabsInput sharing", () => {
     document.body.append(node)
     await settle()
 
-    // The trimmed URL stays on display deliberately - host and filename are what tell a reader which
-    // report they are looking at. What must not survive is anything that reconstitutes a fetchable
-    // address: the whole URL, the gist id, or the revision sha.
+    // Strict now that the panel shows the share link instead of the log address: no part of the
+    // address survives anywhere, not even the host. The report is named by its label instead.
     expect(node.innerHTML).not.toContain(gistUrl)
+    expect(node.innerHTML).not.toContain("gist.githubusercontent.com")
     expect(node.innerHTML).not.toContain("908ef03ef653fe39581f0756122ffe4c")
     expect(node.innerHTML).not.toContain("9495b1c9b5c69f0c4276dd0d9ea1ae638be8db58")
+    expect(node.textContent).toContain("sample-agent-api-log.json")
 
     // And nothing may carry it in an attribute, where it is invisible on screen but plain in the
     // source - the two title attributes this change removed did exactly that.
@@ -104,8 +156,96 @@ describe("createReportTabsInput sharing", () => {
     node.remove()
   })
 
+  it("never renders the decoded address, not even while the report is loading", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    let release
+    const node = createReportTabsInput({
+      fetchText: () => new Promise((resolve) => { release = () => resolve(logExport) }),
+    })
+    document.body.append(node)
+    await settle()
+
+    // Mid-load is the window that matters: routing the restore through the add-report form would put
+    // the full address in an input for as long as the fetch takes.
+    expect(node.innerHTML).not.toContain("908ef03ef653fe39581f0756122ffe4c")
+    expect(node.textContent).toMatch(/Opening the shared report/)
+
+    release()
+    await settle()
+
+    expect(node.innerHTML).not.toContain("908ef03ef653fe39581f0756122ffe4c")
+    node.remove()
+  })
+
+  it("shows the share link on the panel, not the log address", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    // Showing both was showing the same thing twice: the link encodes the address, so the second
+    // copy added only the address itself, in readable form, on the panel people screenshot.
+    const shown = node.querySelector(".report-source-url").textContent
+    expect(shown).toContain("/r/")
+    expect(shown).not.toContain("gist")
+
+    // Whole, not trimmed. Someone selecting the link by hand must get one that works, and an
+    // ellipsis in the middle of a link is the one place trimming produces something broken.
+    expect(shown).toBe(shareLinkFor(gistUrl))
+    expect(shown).not.toContain("\u2026")
+    node.remove()
+  })
+
+  it("puts the share control beside the link, with the chain icon on the button", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    const panel = node.querySelector(".report-share-panel")
+    expect(panel.querySelector(".report-source-url")).not.toBeNull()
+
+    const button = panel.querySelector(".report-share")
+    // Inline, so an icon cannot fail to load and leave a bare word looking like a broken control.
+    expect(button.querySelector("svg")).not.toBeNull()
+    // Named for what it produces. "Copy" describes the clipboard; the reader wants a link.
+    expect(button.textContent).toContain("Share Report Link")
+    node.remove()
+  })
+
+  it("keeps the icon when the button reports what it did", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal("navigator", {clipboard: {writeText}})
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    node.querySelector(".report-share").click()
+    await settle()
+
+    // Writing the state with textContent would replace the icon along with the label.
+    expect(writeText).toHaveBeenCalledWith(shareLinkFor(gistUrl))
+    expect(node.querySelector(".report-share svg")).not.toBeNull()
+    expect(node.querySelector(".report-share").textContent).toContain("Copied")
+    node.remove()
+  })
+
+  it("offers no link for a report that failed to load", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    const node = createReportTabsInput({fetchText: async () => { throw new Error("404 Not Found") }})
+    document.body.append(node)
+    await settle()
+
+    // A link to a report this browser could not read is not worth handing to anyone.
+    expect(node.querySelector(".report-share")).toBeNull()
+    expect(node.querySelector(".report-source-url")).toBeNull()
+    node.remove()
+  })
+
   it("rebuilds the report a shared link names, with no input", async () => {
-    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    // The public form: the token as a path segment, which is what someone is actually handed.
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
     const fetchText = vi.fn(async () => logExport)
     const node = createReportTabsInput({fetchText})
     await settle()
@@ -150,14 +290,14 @@ describe("createReportTabsInput sharing", () => {
     node.querySelector("form").dispatchEvent(new window.Event("submit", {bubbles: true, cancelable: true}))
     await settle()
 
-    expect(replaceState).toHaveBeenCalledWith(null, "", expect.stringContaining("#payload="))
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.stringContaining("/r/"))
     // Assigning location.hash would push an entry, so loading three reports would take three presses
     // of Back to leave the page.
     expect(pushState).not.toHaveBeenCalled()
     node.remove()
   })
 
-  it("leaves the address bar alone when a report fails to load", async () => {
+  it("puts no report route in the address bar when a report fails to load", async () => {
     const replaceState = vi.spyOn(window.history, "replaceState")
     const node = createReportTabsInput({fetchText: async () => { throw new Error("404 Not Found") }})
     document.body.append(node)
@@ -169,11 +309,79 @@ describe("createReportTabsInput sharing", () => {
     await settle()
 
     // A link to a report this browser could not read is not worth handing to anyone.
-    expect(replaceState).not.toHaveBeenCalled()
+    expect(replaceState).not.toHaveBeenCalledWith(null, "", expect.stringContaining("/r/"))
     node.remove()
   })
 
-  it("loads nothing when the fragment holds no token", async () => {
+  it("moves the address bar to whichever report is active", async () => {
+    const secondUrl = "https://example.com/second-agent-api-log.json"
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+
+    const load = async (url) => {
+      const input = node.querySelector("input[type=url]")
+      input.value = url
+      input.dispatchEvent(new window.Event("input", {bubbles: true}))
+      node.querySelector("form").dispatchEvent(new window.Event("submit", {bubbles: true, cancelable: true}))
+      await settle()
+    }
+
+    await load(gistUrl)
+    node.querySelector(".report-add").click()
+    await load(secondUrl)
+    expect(window.location.pathname).toContain(encodeReportPayload(secondUrl).payload)
+
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    node.querySelectorAll(".report-list-button")[0].click()
+    await settle()
+
+    // The address bar names the active report. Leaving it on the second while the first is on screen
+    // would hand someone a link to a report they are not looking at.
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.stringContaining(encodeReportPayload(gistUrl).payload))
+    node.remove()
+  })
+
+  it("clears the report route from the address bar when the report is deleted", async () => {
+    window.history.replaceState(null, "", `/r/${encodeReportPayload(gistUrl).payload}`)
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    node.querySelector(".report-delete").click()
+    await settle()
+
+    // A token left behind after its report is gone is a link to something no longer on screen, and
+    // reloading it would bring the deleted report straight back.
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.not.stringContaining("/r/"))
+    expect(node.querySelector(".report-share-panel")).toBeNull()
+    node.remove()
+  })
+
+  it("restores the route to the address bar after opening a shared link", async () => {
+    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    createReportTabsInput({fetchText: async () => logExport})
+    await settle()
+
+    // The fragment is an implementation detail of the hop through 404.md. What a reader sees after
+    // it lands has to be the link they can copy back out, bookmark, or send on.
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.stringContaining("/r/"))
+    expect(replaceState).not.toHaveBeenCalledWith(null, "", expect.stringContaining("#payload="))
+  })
+
+  it("also accepts the fragment the 404 shim redirects through", async () => {
+    // A static host cannot serve the app at /r/<token>, so 404.md hands the token over this way.
+    // Both readers have to work or a shared link dies at the hop.
+    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    const fetchText = vi.fn(async () => logExport)
+    createReportTabsInput({fetchText})
+    await settle()
+
+    expect(fetchText).toHaveBeenCalledWith(gistUrl)
+  })
+
+  it("loads nothing when neither the path nor the fragment names a report", async () => {
     const fetchText = vi.fn(async () => logExport)
     createReportTabsInput({fetchText})
     await settle()

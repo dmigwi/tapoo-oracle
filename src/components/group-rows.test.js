@@ -5,13 +5,13 @@
 import { describe, expect, it } from "vitest"
 import * as Inputs from "@observablehq/inputs"
 
-import { enableRowSelection, groupRubricRows } from "./oracle.js"
+import { enableRowSelection, prepareRubricTable } from "./oracle.js"
 
 // Built the way index.md builds it, against the real Inputs.table: the merge reads the header row to
 // find its columns and edits the body Inputs.table produced, so a stub table would be testing the
 // stub's shape rather than the one that ships.
 function rubricTable(rows) {
-  return groupRubricRows(Inputs.table(rows, {
+  return prepareRubricTable(Inputs.table(rows, {
     columns: ["id", "group", "question", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", groupResult: "Group result"},
     sort: false,
@@ -30,7 +30,7 @@ const rubricRows = [
 const bodyRows = (node) => [...node.querySelectorAll("tbody tr")]
 const textOf = (row) => [...row.cells].map((cell) => cell.textContent.trim())
 
-describe("groupRubricRows", () => {
+describe("prepareRubricTable", () => {
   it("states a group's verdict once, spanning its questions", () => {
     const node = rubricTable(rubricRows)
     const [first] = bodyRows(node)
@@ -83,7 +83,7 @@ describe("groupRubricRows", () => {
   })
 
   it("still selects the whole row after the merge", () => {
-    const node = groupRubricRows(enableRowSelection(Inputs.table(rubricRows, {
+    const node = prepareRubricTable(enableRowSelection(Inputs.table(rubricRows, {
       columns: ["id", "group", "question", "groupResult"],
       header: {id: "ID", group: "Group", question: "Fact question", groupResult: "Group result"},
       sort: false,
@@ -103,6 +103,6 @@ describe("groupRubricRows", () => {
   it("returns the node untouched when it holds no table", () => {
     const node = window.document.createElement("form")
 
-    expect(groupRubricRows(node)).toBe(node)
+    expect(prepareRubricTable(node)).toBe(node)
   })
 })
