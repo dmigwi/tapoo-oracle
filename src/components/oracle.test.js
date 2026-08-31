@@ -7,6 +7,7 @@ import {
   deleteReportTab,
   diagnosticRows,
   diagnosticTableData,
+  groupResultTone,
   loadNewReportTabFromUrl,
   loadReportTabFromUrl,
   rubricQuestionRows,
@@ -293,5 +294,33 @@ describe("presentation", () => {
     expect(summary).toMatch(/7 of 9 capabilities/)
     expect(summary).toMatch(/Trailblazer/)
     expect(summary).toMatch(/not that the model is incapable/)
+  })
+})
+
+// YES means opposite things in the two rubric tables, so the colour cannot be chosen from the value
+// alone. These pin that, and pin the rows that must stay uncoloured.
+describe("groupResultTone", () => {
+  it("colours a demonstrated capability with the capability tone", () => {
+    expect(groupResultTone("capability", "YES (3/3)")).toBe("result-demonstrated")
+  })
+
+  it("colours a confirmed violation with the violation tone", () => {
+    expect(groupResultTone("violation", "YES (1/3)")).toBe("result-confirmed")
+  })
+
+  it("leaves an unconfirmed violation uncoloured, because NO is its good outcome", () => {
+    expect(groupResultTone("violation", "NO (0/3)")).toBeNull()
+  })
+
+  it("leaves an undemonstrated capability uncoloured", () => {
+    // A capability answering NO means the behavior was not observed in this sample, never that the
+    // model is incapable of it. Red here would state exactly what the report refuses to state.
+    expect(groupResultTone("capability", "NO (1/2)")).toBeNull()
+  })
+
+  it("reads the verdict from the start of the value, not from anywhere in it", () => {
+    // "NO (0/1)" contains no YES, but a fraction or label that happened to could otherwise flip the
+    // colour of a row that was never confirmed.
+    expect(groupResultTone("capability", "NO (0/1) YES")).toBeNull()
   })
 })

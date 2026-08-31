@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tapoo Oracle favicon">
+  <!--
+    Same maze as Tapoo's favicon, drawn in this site's palette: the two marks are recognisably one
+    family, and the colour is what tells the tabs apart. Roles are preserved rather than colours -
+    frame, screen, walls, player - so a change to either mark can be mirrored in the other.
+
+    Tapoo   frame #000000  screen #071107  walls #48c63e  player #58a6ff
+    Oracle  frame ink      screen paper    walls sage     player terracotta
+  -->
+  <rect width="64" height="64" rx="10" fill="#fbf4e8" />
+  <rect x="6" y="6" width="52" height="52" rx="8" fill="#fbf4e8" stroke="#2a201a" stroke-width="4" />
+  <path
+    d="M16 16h32M16 16v32M24 24h10M24 24v16M24 40h16M40 24v16M32 32h8"
+    fill="none"
+    stroke="#2a201a"
+    stroke-linecap="square"
+    stroke-width="4"
+  />
+  <circle cx="32" cy="32" r="3.5" fill="#58a6ff" />
+</svg>

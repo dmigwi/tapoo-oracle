@@ -8,10 +8,13 @@ export default {
   // Named so the analytics app is never read as a standalone tool: the profile it reports is only
   // meaningful as a reading of Tapoo's own agent-api logs.
   header: '<span class="oracle-header-label">Tapoo analytics extension</span>',
+  // Says only what a reader needs to trust the page: which build answered, where the logs come
+  // from, and that nothing leaves the browser. The rubric and its engine live in this repository, so
+  // there is no upstream contract to credit here.
   footer:
     `<strong>Tapoo Oracle v${packageMetadata.version}</strong> · ` +
-    'Analysis contract vendored from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>. ' +
-    'Logs are analyzed in your browser and never uploaded.',
+    'Reads gameplay logs from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>. ' +
+    'Analyzed in your browser, never uploaded.',
 
   // The pages and sections in the sidebar. If you don’t specify this option,
   // all pages will be listed in alphabetical order. Listing pages explicitly
@@ -20,8 +23,10 @@ export default {
     // {name: "Analyzer", path: "/"}
   ],
 
-  // Content to add to the head of the page, e.g. for a favicon:
-  head: "",
+  // Tapoo's maze redrawn in this site's palette. Same artwork so the two tabs read as one family;
+  // different colour so they are told apart at 16px, where the shapes alone are indistinguishable.
+  // src/images/favicon.svg records which Tapoo colour each role maps from.
+  head: '<link rel="icon" type="image/svg+xml" href="./images/favicon.svg">',
   globalStylesheets: [],
 
   // The path to the source root.

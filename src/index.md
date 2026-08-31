@@ -8,6 +8,8 @@ import {
   createInitialReportTabs,
   createReportTabsInput,
   diagnosticTableData,
+  enableRowSelection,
+  groupResultTone,
   rubricQuestionRows,
   narrativeSummary,
   profileCards,
@@ -39,32 +41,49 @@ const result = activeReportTab?.result;
 // evaluates a block-level expression only when it is a single line: a multi-line ternary around an
 // html`` template leaks its source onto the page as literal text while still rendering the HTML
 // inside it, which looks close enough to correct to survive review.
-const rubricTable = (rows) =>
-  Inputs.table(rows, {
+// No fixed pixel widths: they added to 1060px, so the report's own content scrolled sideways on any
+// laptop narrower than that. Proportions live in oracle.css instead, which lets the question column
+// take the space it needs at any width.
+//
+// Selection stays on. Nothing downstream reads it, but that is not what it is for: these are 15 and
+// 9 row tables of near-identical sentences, and the checkbox is how a reader keeps their place or
+// marks the rows they are comparing. oracle.css tints the checked row.
+// kind is what makes the colour readable: YES means opposite things in the two tables. A capability
+// group answering YES was demonstrated, which is sage; a violation group answering YES was confirmed,
+// which is rose. Only the YES rows are coloured - a capability answering NO means the behavior was
+// not observed in this sample, never that the model cannot do it, and painting that red would state
+// the one thing this report exists to avoid saying.
+const rubricTable = (rows, kind) =>
+  enableRowSelection(Inputs.table(rows, {
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
-    width: {group: 220, question: 620, answer: 90, groupResult: 130},
+    format: {
+      groupResult: (value) => {
+        const tone = groupResultTone(kind, value)
+        return tone ? html`<span class=${tone}>${value}</span>` : value
+      }
+    },
     sort: false,
     rows: rows.length
-  });
+  }));
 
 const diagnosticsTable = (report) => {
   const data = diagnosticTableData(report);
-  return Inputs.table(data.rows, {
+  return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
     header: {measure: "Measure"},
     sort: false,
     rows: data.rows.length
-  });
+  }));
 };
 
 const provenanceTable = (source, report) => {
   const data = provenanceTableData(source, report);
-  return Inputs.table(data.rows, {
+  return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
     sort: false,
     rows: data.rows.length
-  });
+  }));
 };
 
 const emptyState = activeReportTab?.status === "loaded" || activeReportTab?.status === "error"
@@ -182,12 +201,12 @@ const detail = !result?.ok
       <section class="events-section">
         <h2>Capabilities</h2>
         <p class="section-note">AND semantics: every fact question must answer YES for its group to be demonstrated.</p>
-        ${rubricTable(rubricQuestionRows(result.report.capabilities))}
+        <div class="rubric-table">${rubricTable(rubricQuestionRows(result.report.capabilities), "capability")}</div>
       </section>
       <section class="events-section">
         <h2>Violations</h2>
         <p class="section-note">OR semantics: any fact question answering YES confirms its violation group.</p>
-        ${rubricTable(rubricQuestionRows(result.report.violations))}
+        <div class="rubric-table">${rubricTable(rubricQuestionRows(result.report.violations), "violation")}</div>
       </section>
       <section class="events-section">
         <h2>Operational Diagnostics</h2>

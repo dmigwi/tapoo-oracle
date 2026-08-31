@@ -3,16 +3,35 @@
 
 :root {
   color-scheme: light;
-  --oracle-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --oracle-body: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  /* Charter first: a warm, low-contrast book serif that reads as friendly at heading sizes, where
+     the Palatino/Georgia fallbacks turn formal. Every family here ships with an OS - the page loads
+     no webfont, so nothing about reading a private log reaches a third party. */
+  --oracle-display: Charter, "Bitstream Charter", "Iowan Old Style", "Sitka Text", Cambria, Georgia, serif;
+  /* Humanist rather than geometric: Avenir's circular bowls are precise and cool, and this page is
+     asking someone to sit and read paragraphs of findings. */
+  --oracle-body: "Seravek", "Segoe UI", -apple-system, "Helvetica Neue", sans-serif;
   --oracle-mono: "SFMono-Regular", Menlo, Consolas, monospace;
-  --oracle-ink: #171717;
+  /* One type scale, seven steps. The page had drifted to thirteen distinct rendered sizes - 13px,
+     13.33px, 13.6px, 14px, 14.4px, 15.2px, 16px, 17px, 17.28px within a 4px band - which is not a
+     hierarchy, just noise: differences too small to signal anything, yet enough to make the page
+     feel assembled from parts. Every size below is chosen; nothing inherits a browser or library
+     default. Anything needing a size uses one of these. */
+  --fs-hero: 2.4rem;
+  --fs-figure: 2.1rem;
+  --fs-h2: 1.4rem;
+  --fs-h3: 1.1rem;
+  --fs-body: 1.0625rem;
+  --fs-small: 0.95rem;
+  --fs-micro: 0.85rem;
+  /* Warm near-black. A neutral #171717 against cream paper reads as printed-on-screen rather than
+     printed-on-paper, and it is the single colour covering most of the page. */
+  --oracle-ink: #2a201a;
   --oracle-muted: #675448;
   --oracle-paper: #fbf4e8;
   --oracle-surface: #fffaf2;
   --oracle-footer: #eee2d2;
   --oracle-selected: #e3eadf;
-  --oracle-line: #cfbdab;
+  --oracle-line: #ddcdb9;
   --oracle-sage: #42664f;
   --oracle-terracotta: #a3472d;
   --oracle-amber: #855711;
@@ -32,10 +51,13 @@ body {
   background: var(--oracle-paper);
   color: var(--oracle-ink);
   font-family: var(--oracle-body);
+  /* Declared rather than inherited from the theme, so the base of the page is a step on this scale
+     and every relative size below measures off it. */
+  font-size: var(--fs-body);
 }
 
 #observablehq-main {
-  padding-bottom: 5rem;
+  padding-bottom: 2.5rem;
 }
 
 #observablehq-header {
@@ -51,24 +73,25 @@ body {
   border-bottom: 1px solid var(--oracle-line);
   background: var(--oracle-footer);
   color: var(--oracle-muted);
+  font-size: var(--fs-small);
   text-align: center;
 }
 
+/* Sits at the end of the document rather than pinned to the bottom. A fixed bar cost every reader
+   ~40px of every screen for a version string and a promise they read once, on a page whose whole
+   job is long tables of findings. */
 #observablehq-footer {
-  position: fixed;
+  position: static;
   right: auto;
-  bottom: 0;
-  left: 50%;
-  z-index: 10;
   width: 100vw;
   box-sizing: border-box;
-  margin: 0;
-  padding: 0.75rem 1rem;
-  transform: translateX(-50%);
+  margin: 3rem 0 0 calc(50% - 50vw);
+  padding: 0.9rem 1rem;
   border: 0;
   border-top: 1px solid var(--oracle-line);
   background: var(--oracle-footer);
   color: var(--oracle-muted);
+  font-size: var(--fs-small);
   text-align: center;
 }
 
@@ -86,32 +109,34 @@ a[href] {
 }
 
 .oracle-header-label {
-  font: 700 0.8rem/1.2 var(--oracle-body);
+  font: 700 var(--fs-micro)/1.2 var(--oracle-body);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .oracle-hero {
-  margin: 1.5rem 0 2rem;
-  padding-bottom: 1.5rem;
+  margin: 1.25rem 0 1.75rem;
+  padding-bottom: 1.25rem;
   border-bottom: 1px solid var(--oracle-line);
 }
 
+/* The name already appears in the header bar and the browser tab. At 5rem it was a third of the
+   first screen and outranked the report it introduces, so it is sized as a title rather than a
+   billboard - and the 10ch clamp that forced it onto two lines is gone with it. */
 .oracle-hero h1 {
-  max-width: 10ch;
   margin: 0;
   color: var(--oracle-ink);
-  font-size: clamp(2.8rem, 7vw, 5.25rem);
+  font-size: clamp(1.9rem, 3.4vw, var(--fs-hero));
   font-weight: 700;
-  letter-spacing: -0.045em;
-  line-height: 0.9;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .lede {
   max-width: none;
   margin: 1.25rem 0 0;
   color: var(--oracle-muted);
-  font-size: 1.08rem;
+  font-size: var(--fs-body);
   line-height: 1.65;
 }
 
@@ -197,7 +222,7 @@ a[href] {
   border: 1px solid var(--oracle-line);
   background: var(--oracle-surface);
   color: var(--oracle-muted);
-  font: 0.9rem/1.45 var(--oracle-mono);
+  font: var(--fs-small)/1.45 var(--oracle-mono);
 }
 
 .report-url-form {
@@ -241,12 +266,16 @@ a[href] {
   margin-right: 0;
 }
 
+/* Boxes are reserved for things that are genuinely separate from the document: a strip of figures,
+   an interruption, an input surface. The report's own sections are not - drawing a border and a
+   second background around each one made a continuous argument look like four unrelated panels
+   pasted onto a page. They are separated by space and a hairline instead, the way sections of a
+   document are. */
 .metric,
-.oracle-summary,
-.events-section,
 .notice {
   border: 1px solid var(--oracle-line);
   background: var(--oracle-surface);
+  border-radius: 0.3rem;
 }
 
 .metric {
@@ -256,13 +285,13 @@ a[href] {
 .metric span {
   display: block;
   color: var(--oracle-muted);
-  font-size: 0.86rem;
+  font-size: var(--fs-small);
 }
 
 .metric strong {
   display: block;
   margin-top: 0.25rem;
-  font-size: 2.4rem;
+  font-size: var(--fs-figure);
   line-height: 1;
 }
 
@@ -270,21 +299,36 @@ a[href] {
 .metric-teal { border-top: 4px solid var(--oracle-sage); }
 .metric-rose { border-top: 4px solid var(--oracle-rose); }
 
-.oracle-summary,
-.events-section,
 .notice {
   padding: 1.2rem;
   margin: 1.5rem 0;
 }
 
+.oracle-summary,
+.events-section {
+  margin: 2.5rem 0 0;
+  padding: 1.75rem 0 0;
+  border-top: 1px solid var(--oracle-line);
+}
+
+/* The summary opens the document, so it carries no rule above it. */
+.oracle-summary {
+  margin-top: 1.75rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .oracle-summary h2,
-.events-section h2 {
-  margin-top: 0;
+.events-section h2,
+.methodology-title {
+  margin: 0 0 0.35rem;
+  font: 700 var(--fs-h2)/1.2 var(--oracle-display);
+  letter-spacing: -0.01em;
 }
 
 .oracle-summary p {
   max-width: none;
-  font-size: 1.08rem;
+  font-size: var(--fs-body);
   line-height: 1.65;
 }
 
@@ -303,16 +347,6 @@ a[href] {
 
 .methodology-preview {
   display: block;
-}
-
-.methodology-title {
-  margin-bottom: 0.35rem;
-  font: 700 1.5rem/1.15 var(--oracle-display);
-}
-
-.methodology-preview {
-  color: var(--oracle-muted);
-  font-size: 0.9rem;
 }
 
 .methodology-content {
@@ -344,12 +378,12 @@ a[href] {
   left: 0;
   color: var(--oracle-sage);
   content: counter(analysis-step, decimal-leading-zero);
-  font: 700 0.8rem/1.4 var(--oracle-body);
+  font: 700 var(--fs-micro)/1.4 var(--oracle-body);
 }
 
 .analysis-pipeline h3 {
   margin: 0 0 0.35rem;
-  font-size: 1.1rem;
+  font-size: var(--fs-h3);
 }
 
 .analysis-pipeline p {
@@ -358,15 +392,21 @@ a[href] {
   line-height: 1.6;
 }
 
-.section-note {
-  margin: -0.4rem 0 1rem;
+/* Every piece of secondary prose - section notes, source lines, the methodology preview - is one
+   size and one colour. They were drifting between 0.86rem and 0.9rem across the page, which reads as
+   carelessness rather than hierarchy, and 0.86rem is below comfortable reading size for a paragraph
+   someone is expected to actually take in. 0.95rem on --oracle-muted measures 6.5:1 against the
+   paper, well past the 4.5:1 AA threshold. */
+.section-note,
+.source-line,
+.methodology-preview {
   color: var(--oracle-muted);
-  font-size: 0.9rem;
+  font-size: var(--fs-small);
+  line-height: 1.5;
 }
 
-.source-line {
-  color: var(--oracle-muted);
-  font-size: 0.9rem;
+.section-note {
+  margin: 0 0 1.1rem;
 }
 
 .source-line {
@@ -459,6 +499,106 @@ table {
   font-family: var(--oracle-body);
 }
 
+/* Inputs.table sets nowrap on cells, which is right for numbers and wrong for the rubric's fact
+   questions - they are full sentences, and the point of the page is that they can be read. */
+.events-section td,
+.events-section th {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.events-section td {
+  line-height: 1.45;
+}
+
+/* Inputs.table ships at 13px, which is right for a dense data browser and wrong here: these cells
+   are the report. The size has to be set on the wrapping form - that is where the library puts it,
+   and the table, rows and cells all inherit from there, so styling `table` alone changes nothing. */
+.events-section form,
+.events-section table,
+.events-section td {
+  font-size: var(--fs-small);
+}
+
+.events-section th {
+  color: var(--oracle-muted);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Buttons and inline code otherwise fall back to a browser default (13.33px) and the theme's 14px,
+   neither of which is a step on this scale. */
+button {
+  font-size: var(--fs-small);
+}
+
+/* Inline literals - agent-api, entries, http:// - read as a font change mid-sentence when the only
+   difference is the typeface. A quiet chip says "this is a value, quoted exactly" without competing
+   with the prose: the tint is the header/footer band, so it belongs to the palette rather than
+   introducing a colour, and the ink stays body ink so a literal is never mistaken for a link.
+   --oracle-footer rather than --oracle-surface, because code also sits inside notices, which are
+   already painted with surface and would swallow it. */
+code {
+  padding: 0.08em 0.36em;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.25rem;
+  background: var(--oracle-footer);
+  color: var(--oracle-ink);
+  /* Mono runs optically larger than the humanist sans beside it, so the small step is what makes a
+     literal look the same size as the words around it rather than a size below them. */
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-small);
+  overflow-wrap: break-word;
+}
+
+/* A block of code is already set apart by its own container; chipping every line inside it would
+   draw a border around each one. */
+pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* The fact question is the row's content - the other columns hold an id, a short label, one word,
+   and a fraction. Left to auto layout the browser hands width to whatever is widest rather than to
+   whatever matters, so the sentence ends up squeezed into a narrow ribbon while "AVAILABLE-CONTEXT
+   DISREGARD" sits in a column six times the width it needs.
+   
+   Counted from the end, not the start. Inputs.table emits a leading empty <th>/<td> even with
+   select:false, so a mapping counted from column 1 silently lands one column off - which is exactly
+   what happened here first, handing the question's share to the group name. The last five columns
+   are the five declared ones whether or not that spacer is ever dropped. */
+.rubric-table table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.rubric-table th:nth-last-child(5),
+.rubric-table td:nth-last-child(5) {
+  width: 7%;
+}
+
+.rubric-table th:nth-last-child(4),
+.rubric-table td:nth-last-child(4) {
+  width: 16%;
+}
+
+.rubric-table th:nth-last-child(3),
+.rubric-table td:nth-last-child(3) {
+  width: 55%;
+}
+
+.rubric-table th:nth-last-child(2),
+.rubric-table td:nth-last-child(2) {
+  width: 9%;
+}
+
+.rubric-table th:last-child,
+.rubric-table td:last-child {
+  width: 13%;
+}
+
 .events-section form:has(> table) {
   max-height: none !important;
   overflow: visible;
@@ -472,8 +612,40 @@ td {
   color: var(--oracle-ink);
 }
 
-.events-section tbody tr:has(input[type="checkbox"]:checked) {
+/* A confirmed group result, coloured by what confirmation means in its own table: sage for a
+   capability that was demonstrated, rose for a violation that was found. Both already read the word
+   YES beside the fraction, so the colour reinforces the verdict rather than carrying it alone -
+   nothing here is lost to a reader who cannot separate the two hues. Measured on the paper: sage
+   5.9:1, rose 6.4:1, both past AA. */
+.rubric-table .result-demonstrated {
+  color: var(--oracle-sage);
+  font-weight: 700;
+}
+
+.rubric-table .result-confirmed {
+  color: var(--oracle-rose);
+  font-weight: 700;
+}
+
+/* The whole row is a click target (enableRowSelection in components/oracle.js), so it has to look
+   like one. The hover lift is the affordance; without it the only hint that a row responds is
+   finding out that it does. */
+.events-section tbody tr {
+  cursor: pointer;
+}
+
+.events-section tbody tr:hover {
+  background: var(--oracle-surface);
+}
+
+/* A checked row is marked by an edge, not only by a fill. The tint alone measures 1.12:1 against the
+   paper - a colour shift rather than a lightness one, which is easy to lose while scanning a long
+   table, and invisible to a reader who cannot separate cream from pale sage. The accent carries the
+   same sage as the rest of the page, so the row is unmistakable without the table getting louder. */
+.events-section tbody tr:has(input[type="checkbox"]:checked),
+.events-section tbody tr:has(input[type="checkbox"]:checked):hover {
   background: var(--oracle-selected);
+  box-shadow: inset 3px 0 0 var(--oracle-sage);
 }
 
 @media (max-width: 860px) {
@@ -489,6 +661,24 @@ td {
     overflow-x: auto;
   }
 
+  /* On a phone the whole table is ~310px wide, so the proportions that read well on a laptop leave
+     the question about 130px - a sentence a word at a time. The short columns give up most of what
+     they can; the id and the answer are the two nothing can be taken from. */
+  .rubric-table th:nth-last-child(4),
+  .rubric-table td:nth-last-child(4) {
+    width: 11%;
+  }
+
+  .rubric-table th:nth-last-child(3),
+  .rubric-table td:nth-last-child(3) {
+    width: 63%;
+  }
+
+  .rubric-table th:last-child,
+  .rubric-table td:last-child {
+    width: 10%;
+  }
+
   .analysis-strip {
     grid-template-columns: 1fr;
   }
@@ -498,6 +688,6 @@ td {
   }
 
   .oracle-hero h1 {
-    font-size: clamp(2.6rem, 13vw, 4rem);
+    font-size: clamp(1.75rem, 6vw, var(--fs-hero));
   }
 }

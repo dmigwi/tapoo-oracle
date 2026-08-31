@@ -353,6 +353,74 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
 // explicit that they must not collapse into one score interval: a model with six capabilities and
 // two violations is not "four", and any arithmetic that produces a single number here would be
 // inventing a scale the contract deliberately refuses to define.
+// groupResultTone names the class a group result should carry, or null for no colour at all.
+//
+// Split out from the table's format callback because this is the part that can be wrong: YES means
+// opposite things in the two tables, and the rule for what stays uncoloured is a statement about
+// what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
+// the decision stays here where the suite can reach it.
+export function groupResultTone(kind, groupResult) {
+  // NO is never coloured. For a violation it is the good outcome, and for a capability it means the
+  // behavior was not observed in this sample - never that the model is incapable of it, which is the
+  // one thing this report exists not to say. Red on that line would say it.
+  if (!String(groupResult).startsWith("YES")) {
+    return null
+  }
+
+  return kind === "violation" ? "result-confirmed" : "result-demonstrated"
+}
+
+// enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
+// 13px square at the far left of a row whose content runs the width of the page, so hitting it means
+// aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
+// recommended target size outright.
+//
+// Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
+// body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
+// the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
+// without moving the input's value.
+export function enableRowSelection(node) {
+  const table = node.querySelector("table")
+  if (!table) {
+    return node
+  }
+
+  table.addEventListener("click", (event) => {
+    // The control itself already toggles; handling it here as well would toggle twice and land back
+    // where it started. Links and buttons inside a cell keep their own behavior.
+    if (event.target.closest("input, a, button, label")) {
+      return
+    }
+
+    // A click that ends a text selection is someone copying a fact question, not choosing a row.
+    if (window.getSelection()?.toString()) {
+      return
+    }
+
+    const checkbox = event.target.closest("tbody tr")?.querySelector("input[type=checkbox]")
+    if (!checkbox) {
+      return
+    }
+
+    // Forward the click to the checkbox rather than setting .checked and announcing it. Inputs.table
+    // wires every row checkbox with `input.onclick = reselect`, and that handler owns the selection
+    // set, the header checkbox's checked/indeterminate state, and the table's own value. Assigning
+    // .checked moves the tick and the :checked tint while none of that bookkeeping runs - the row
+    // looks selected, the header stays blank, and the value the table reports omits the row. A click
+    // dispatched on a checkbox performs its activation behavior, so the toggle is still native.
+    //
+    // shiftKey and detail are carried over so a shift-click on a row extends the range exactly as a
+    // shift-click on the checkbox does, and so reselect's blur-on-real-click still fires.
+    checkbox.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      shiftKey: event.shiftKey,
+      detail: event.detail,
+    }))
+  })
+
+  return node
+}
+
 export function profileCards(report) {
   const met = (groups) => groups.filter((group) => group.met).length;
 
