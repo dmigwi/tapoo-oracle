@@ -141,12 +141,11 @@ make ci
 
 ### Toolchain
 
-- Node.js `22`
-- `pnpm` as pinned by `packageManager` in `package.json`
+- Node.js `24` LTS
+- pnpm `11.25.0`, as pinned by `packageManager` in `package.json`
 
-The pnpm patch version is allowed to differ from Tapoo's; each repository pins whatever generated its
-own lockfile. What is standardized across both is the discipline — frozen-lockfile installs, an audit
-gate, Node 22, and the same CI shape.
+Tapoo and Tapoo Oracle intentionally share the same Node.js and pnpm versions, frozen-lockfile
+installs, dependency audit gate, and CI runtime setup.
 
 ## Dependency security
 
