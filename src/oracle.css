@@ -212,11 +212,41 @@ a[href] {
 }
 
 .report-active-panel {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
   min-width: 0;
 }
 
+/* Sits under the trimmed URL rather than beside it: the URL is allowed to wrap on a narrow display
+   (see .report-source-url), and a button sharing that line would be pushed around by it. */
+.report-share {
+  padding: 0.35rem 0.75rem;
+}
+
+.report-share-error {
+  max-width: 800px;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--oracle-rose);
+  border-radius: 0.3rem;
+  color: var(--oracle-rose);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+/* What is displayed is decided once, in trimUrlMiddle, and never again by the viewport: the same
+   characters appear on a phone and on a desktop. Wrapping is allowed rather than clipped, because
+   clipping is width-dependent by definition and it eats the filename - the end of a source URL is
+   half of what identifies which report this is. A trimmed URL running to two lines on a narrow
+   display costs nothing; a trimmed URL cut off at the edge costs its identity. break-word rather
+   than anywhere, so a break happens only where a segment genuinely cannot fit. */
 .report-source-url {
-  overflow-wrap: anywhere;
+  /* The theme caps every p at 640px for comfortable prose measure (global.css). This one is not
+     prose - it is a single mechanical string that reads better whole, and 640px forced a URL already
+     trimmed to a constant length onto a second line on displays with room to spare. */
+  max-width: 800px;
+  overflow-wrap: break-word;
   margin: 0;
   padding: 1rem;
   border: 1px solid var(--oracle-line);

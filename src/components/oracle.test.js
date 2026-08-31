@@ -8,6 +8,7 @@ import {
   diagnosticRows,
   diagnosticTableData,
   groupResultTone,
+  trimUrlMiddle,
   loadNewReportTabFromUrl,
   loadReportTabFromUrl,
   rubricQuestionRows,
@@ -322,5 +323,49 @@ describe("groupResultTone", () => {
     // "NO (0/1)" contains no YES, but a fraction or label that happened to could otherwise flip the
     // colour of a row that was never confirmed.
     expect(groupResultTone("capability", "NO (0/1) YES")).toBeNull()
+  })
+})
+
+// The source URL is the report's provenance and it must never wrap the panel into a growing block of
+// monospace. Both ends carry meaning, so the middle is what goes.
+describe("trimUrlMiddle", () => {
+  const gistUrl =
+    "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c" +
+    "/raw/9495b1c9b5c69f0c4276dd0d9ea1ae638be8db58/sample-agent-api-log.json"
+
+  it("returns a URL that already fits untouched", () => {
+    expect(trimUrlMiddle("https://example.com/log.json")).toBe("https://example.com/log.json")
+  })
+
+  it("never exceeds the length it was given", () => {
+    expect(trimUrlMiddle(gistUrl).length).toBe(96)
+    expect(trimUrlMiddle(gistUrl, 40).length).toBe(40)
+  })
+
+  it("keeps the host and the filename, dropping what lies between", () => {
+    const trimmed = trimUrlMiddle(gistUrl)
+
+    // Clipping the tail instead - which is all text-overflow can do - would keep the half a reader
+    // already knows and throw away the half naming the report in front of them.
+    expect(trimmed.startsWith("https://gist.githubusercontent.com/dmigwi/")).toBe(true)
+    expect(trimmed.endsWith("sample-agent-api-log.json")).toBe(true)
+    expect(trimmed).toContain("…")
+    expect(trimmed).not.toContain("908ef03ef653fe39581f0756122ffe4c")
+  })
+
+  it("gives the head the larger share", () => {
+    const [head, tail] = trimUrlMiddle(gistUrl).split("…")
+
+    // A truncated host is unrecoverable; a filename is usually still recognisable from its end.
+    expect(head.length).toBeGreaterThan(tail.length)
+  })
+
+  it("leaves a value alone when the limit is too small to trim meaningfully", () => {
+    expect(trimUrlMiddle(gistUrl, 2)).toBe(gistUrl)
+  })
+
+  it("handles an absent value", () => {
+    expect(trimUrlMiddle(undefined)).toBe("")
+    expect(trimUrlMiddle(null)).toBe("")
   })
 })

@@ -81,6 +81,170 @@ export function validateOnlineJsonUrl(value) {
   return {ok: true, url: url.href};
 }
 
+// --- Shareable report payloads ---
+
+// Prefixes worth dropping, longest match first. This is a compression table and never an allowlist:
+// validateOnlineJsonUrl remains the only gate on what may be loaded, so a URL on any other host
+// encodes and decodes exactly the same way - it just has less in common with the table and so
+// compresses less. The two generic entries mean every http(s) URL matches something.
+const REPORT_PAYLOAD_PREFIXES = [
+  "https://gist.githubusercontent.com/",
+  "https://raw.githubusercontent.com/",
+  "https://",
+  "http://",
+]
+
+// Marks a packed hex run inside the byte stream. 0x01 cannot occur in the text of a URL - control
+// characters are percent-encoded by URL normalization long before they reach here - so no escaping
+// is needed to tell a marker apart from content.
+const REPORT_PAYLOAD_HEX_MARKER = 0x01
+
+// Below this a run costs more in framing than it saves. 16 hex characters pack to 8 bytes plus 2 of
+// framing; shorter runs are left as text.
+const REPORT_PAYLOAD_HEX_MIN = 16
+
+const DAMAGED_PAYLOAD = "This shared link is damaged. Ask for a fresh link."
+
+// Two trailing bytes over the rest of the token, so a link damaged in transit is reported as damaged.
+//
+// Without it, truncation is only caught when it lands inside a packed hex run: a cut that lands in
+// the filename leaves a perfectly valid URL pointing at something that was never shared, and the
+// reader is told the log could not be retrieved - the wrong remedy for a broken link. Two bytes are
+// free here in practice, since base64 rounds to groups of three.
+function payloadChecksum(bytes) {
+  let hash = 0x811c9dc5
+  for (const byte of bytes) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+
+  const folded = ((hash >>> 16) ^ (hash & 0xffff)) & 0xffff
+  return [folded >>> 8, folded & 0xff]
+}
+
+function base64UrlFromBytes(bytes) {
+  let binary = ""
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")
+}
+
+function bytesFromBase64Url(token) {
+  const padded = token.replaceAll("-", "+").replaceAll("_", "/")
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4))
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+// Packable only when the whole segment is lowercase hex of even length: an odd length cannot be
+// halved into bytes, and uppercase would not survive the round trip byte-for-byte.
+function isPackableHexSegment(segment) {
+  return (
+    segment.length >= REPORT_PAYLOAD_HEX_MIN &&
+    segment.length % 2 === 0 &&
+    /^[0-9a-f]+$/.test(segment)
+  )
+}
+
+// encodeReportPayload turns a log URL into the token a shared link carries.
+//
+// Recoverable by design - this compacts and obscures, it does not conceal, and nothing shown to a
+// reader should suggest otherwise. What it buys is that the log address is no longer sitting in the
+// page as a URL to be read, copied or crawled out of a screenshot.
+//
+// Two savings, in order: the prefix, and any long hex run. A content-addressed URL spends most of
+// its length on hex that is really half as many bytes - the sample gist URL carries a 32-character
+// id and a 40-character revision - and base64 costs 33%, so dropping the prefix alone would produce
+// a token longer than the URL it replaced.
+export function encodeReportPayload(value) {
+  const validation = validateOnlineJsonUrl(value)
+  if (!validation.ok) {
+    return validation
+  }
+
+  const index = REPORT_PAYLOAD_PREFIXES.findIndex((prefix) => validation.url.startsWith(prefix))
+  const encoder = new TextEncoder()
+  const bytes = [index]
+
+  validation.url.slice(REPORT_PAYLOAD_PREFIXES[index].length).split("/").forEach((segment, position) => {
+    if (position > 0) {
+      bytes.push(...encoder.encode("/"))
+    }
+
+    if (!isPackableHexSegment(segment)) {
+      bytes.push(...encoder.encode(segment))
+      return
+    }
+
+    bytes.push(REPORT_PAYLOAD_HEX_MARKER, segment.length / 2)
+    for (let at = 0; at < segment.length; at += 2) {
+      bytes.push(Number.parseInt(segment.slice(at, at + 2), 16))
+    }
+  })
+
+  return {ok: true, payload: base64UrlFromBytes(Uint8Array.from([...bytes, ...payloadChecksum(bytes)]))}
+}
+
+// decodeReportPayload reverses it, answering in the same shape validateOnlineJsonUrl uses so callers
+// handle one result type.
+//
+// The rebuilt URL is passed back through validateOnlineJsonUrl rather than trusted: a token arrives
+// from whatever pasted the link, and a hand-edited one must not be able to produce something the
+// loader would have refused had it been typed into the form.
+export function decodeReportPayload(value) {
+  const token = String(value ?? "").trim()
+  if (!token) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  let framed
+  try {
+    framed = bytesFromBase64Url(token)
+  } catch {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  if (framed.length < 4) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const bytes = framed.subarray(0, framed.length - 2)
+  const [high, low] = payloadChecksum(bytes)
+  if (framed[framed.length - 2] !== high || framed[framed.length - 1] !== low) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const prefix = REPORT_PAYLOAD_PREFIXES[bytes[0]]
+  if (prefix === undefined) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const decoder = new TextDecoder()
+  let rest = ""
+  let literalFrom = 1
+
+  for (let at = 1; at < bytes.length; at += 1) {
+    if (bytes[at] !== REPORT_PAYLOAD_HEX_MARKER) {
+      continue
+    }
+
+    const count = bytes[at + 1]
+    // A run claiming more bytes than the token holds is a truncated link, not a shorter URL.
+    if (count === undefined || at + 2 + count > bytes.length) {
+      return {ok: false, error: DAMAGED_PAYLOAD}
+    }
+
+    rest += decoder.decode(bytes.subarray(literalFrom, at))
+    rest += [...bytes.subarray(at + 2, at + 2 + count)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+    at += 1 + count
+    literalFrom = at + 1
+  }
+
+  return validateOnlineJsonUrl(prefix + rest + decoder.decode(bytes.subarray(literalFrom)))
+}
+
 export function reportTabLabelFromUrl(value, index = 0) {
   const fallback = `Report ${index + 1}`;
   try {
@@ -90,6 +254,31 @@ export function reportTabLabelFromUrl(value, index = 0) {
   } catch {
     return fallback;
   }
+}
+
+// trimUrlMiddle drops the middle of a URL rather than either end.
+//
+// A source URL is provenance, and both ends of it carry that: the host and owner say where the log
+// came from, the filename says which log it is. Clipping the tail - what text-overflow does - keeps
+// the half a reader already knows and throws away the half identifying the report in front of them.
+// What sits between is usually a commit hash or a gist id, which is exactly the part nobody reads.
+//
+// The head keeps the larger share because a truncated host is unrecoverable, while a filename is
+// usually still recognisable from its last characters.
+//
+// One constant length, deliberately not a function of the viewport. A width-dependent trim shows a
+// different URL to every reader and makes the one thing this line exists to establish - which log
+// was analyzed - depend on the window it is read in. Narrow displays wrap the trimmed string instead
+// of losing characters from it.
+export function trimUrlMiddle(value, maxLength = 96) {
+  const url = String(value ?? "").trim()
+  if (url.length <= maxLength || maxLength < 3) {
+    return url
+  }
+
+  const budget = maxLength - 1
+  const head = Math.ceil(budget * 0.55)
+  return `${url.slice(0, head)}\u2026${url.slice(-(budget - head))}`
 }
 
 export function trimReportTabLabel(value, maxLength = 34) {
@@ -174,7 +363,7 @@ export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText
     const tab = {
       ...baseTab,
       status: "error",
-      error: `Could not load URL: ${error.message}`,
+      error: describeFetchFailure(error),
       result: undefined,
     };
     return {
@@ -213,11 +402,66 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
     return updateReportTab(state, tabId, {
       status: "error",
       label,
-      error: `Could not load URL: ${error.message}`,
+      error: describeFetchFailure(error),
       result: undefined,
       loadedUrl: validation.url,
     });
   }
+}
+
+// shareLinkFor composes the link that reproduces one report. The token rides in the fragment, never
+// the query string: a fragment is not sent to the host, and this app tells its readers the log is
+// "analyzed in your browser, never uploaded" - a ?payload= would put the (recoverable) log address
+// into GitHub Pages request logs on every visit and quietly make that untrue.
+export function shareLinkFor(url, location = globalThis.location) {
+  const encoded = encodeReportPayload(url)
+  if (!encoded.ok) {
+    return null
+  }
+
+  return `${location.origin}${location.pathname}#${REPORT_PAYLOAD_PARAM}=${encoded.payload}`
+}
+
+// reportPayloadFromHash reads a share token out of a location fragment, ignoring anything else that
+// may be in there.
+export function reportPayloadFromHash(hash) {
+  const fragment = String(hash ?? "").replace(/^#/, "")
+  if (!fragment) {
+    return null
+  }
+
+  return new URLSearchParams(fragment).get(REPORT_PAYLOAD_PARAM)
+}
+
+const REPORT_PAYLOAD_PARAM = "payload"
+
+// createShareControl builds the copy button that sits beside the trimmed URL.
+function createShareControl(url) {
+  const button = document.createElement("button")
+  button.type = "button"
+  button.className = "report-share"
+  button.textContent = "Copy link";
+  button.title = "Copy a link that reopens this report"
+
+  button.addEventListener("click", async () => {
+    const link = shareLinkFor(url)
+    if (!link) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(link)
+      button.textContent = "Copied"
+    } catch {
+      // Older browsers, and any context where the clipboard permission is refused. Selecting the
+      // link is still better than telling the reader nothing happened.
+      button.textContent = "Copy failed"
+    }
+
+    window.setTimeout(() => { button.textContent = "Copy link" }, 1500)
+  })
+
+  return button
 }
 
 export function createReportTabsInput({fetchText = fetchReportText} = {}) {
@@ -243,6 +487,46 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     setState({...state, draftStatus: "loading", draftError: undefined});
     const loadedState = await loadNewReportTabFromUrl(state, fetchText);
     if (state.draftUrl !== requestedUrl) return;
+    setState(loadedState);
+    rememberActiveReport(loadedState);
+  };
+
+  // Keeps the address bar carrying the active report, so a reload or a bookmark reopens what is on
+  // screen. replaceState rather than assigning location.hash: assigning pushes an entry, and loading
+  // three reports would otherwise mean three presses of Back to leave the page.
+  const rememberActiveReport = (nextState) => {
+    const active = nextState.tabs.find((tab) => tab.id === nextState.activeTabId);
+    if (active?.status !== "loaded") {
+      return;
+    }
+
+    const link = shareLinkFor(active.loadedUrl ?? active.url);
+    if (link && globalThis.history?.replaceState) {
+      globalThis.history.replaceState(null, "", link);
+    }
+  };
+
+  // Opens the report a shared link names, with no input from the reader.
+  //
+  // Routed through the same loadNewReportTabFromUrl the form uses, so the fetch, the log-contract
+  // validation, the warnings and every error path are the ones already covered - a second loader for
+  // shared links would be a second place for them to diverge.
+  const restoreSharedReport = async () => {
+    const token = reportPayloadFromHash(globalThis.location?.hash);
+    if (!token) {
+      return;
+    }
+
+    const decoded = decodeReportPayload(token);
+    if (!decoded.ok) {
+      // The link is damaged, which is a different problem from the log being unreachable, and the
+      // reader can do nothing about it themselves - they never chose this URL.
+      setState({...state, isAdding: false, sharedLinkError: decoded.error});
+      return;
+    }
+
+    setState({...state, draftUrl: decoded.url, isAdding: true, draftStatus: "loading"});
+    const loadedState = await loadNewReportTabFromUrl({...state, draftUrl: decoded.url}, fetchText);
     setState(loadedState);
   };
 
@@ -271,7 +555,9 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
       button.type = "button";
       button.className = "report-list-button";
       button.textContent = tab.label;
-      button.title = tab.loadedUrl ?? tab.url ?? tab.label;
+      // The label, not the URL. A title carrying the address puts it back in the DOM for any reader,
+      // screenshot or copy-paste - the thing the share token exists to avoid.
+      button.title = tab.label;
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
       button.addEventListener("click", () => setState({...state, activeTabId: tab.id, isAdding: false}));
@@ -292,11 +578,29 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
     const content = document.createElement("section");
     content.className = "report-active-panel";
+
+    // A damaged token never becomes a tab, so the report-level error notice never sees it. Told
+    // apart from a log that could not be retrieved on purpose: the remedies differ, and the reader
+    // of a broken link can only ask for another one.
+    if (state.sharedLinkError) {
+      const notice = document.createElement("p");
+      notice.className = "report-share-error";
+      notice.textContent = state.sharedLinkError;
+      content.append(notice);
+    }
     if (!state.isAdding && activeTab) {
       const source = document.createElement("p");
       source.className = "report-source-url";
-      source.textContent = activeTab.loadedUrl ?? activeTab.url;
+      const sourceUrl = activeTab.loadedUrl ?? activeTab.url;
+      source.textContent = trimUrlMiddle(sourceUrl);
       content.append(source);
+
+      // Offered only for a report that actually loaded: a link to a tab that failed would hand
+      // someone a token for a log this browser could not read either.
+      if (activeTab.status === "loaded") {
+        content.append(createShareControl(sourceUrl));
+      }
+
       root.append(navigator, content);
       return;
     }
@@ -344,6 +648,7 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
   };
 
   render();
+  void restoreSharedReport();
   return root;
 }
 
@@ -543,7 +848,9 @@ export function diagnosticTableData(report) {
 // detached from what it was measured against.
 export function provenanceRows(source, report) {
   return [
-    {field: "Source URL", value: source.sourceUrl ?? "not recorded"},
+    // Trimmed to match the panel. The full address in a table cell is the same leak by another
+    // route, and this one is copied out of screenshots more often than the panel is.
+    {field: "Source URL", value: source.sourceUrl ? trimUrlMiddle(source.sourceUrl) : "not recorded"},
     {field: "Tapoo version", value: source.version ?? "not recorded"},
     {field: "Control mode", value: source.mode ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
@@ -589,6 +896,20 @@ export function narrativeSummary(report) {
 
 function formatCount(value) {
   return Number(value).toLocaleString("en-US");
+}
+
+// describeFetchFailure turns what fetch throws into something a reader can act on.
+//
+// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
+// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
+// is the one failure where a link that works for whoever shared it can fail for whoever opens it.
+export function describeFetchFailure(error) {
+  const message = error?.message ?? String(error)
+  if (error instanceof TypeError) {
+    return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
+  }
+
+  return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`
 }
 
 async function fetchReportText(url) {
