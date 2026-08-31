@@ -16,10 +16,10 @@ import { answerRubric } from "../analysis/rubric-engine.js";
 // analyzeLogText is the single entry point from raw text to a rendered result. It returns a
 // discriminated result instead of throwing, because every failure here is a person's input mistake
 // that the page has to explain, not an exceptional condition.
-export function analyzeLogText(text, {label = "pasted log"} = {}) {
+export function analyzeLogText(text, {label = "online log", sourceUrl} = {}) {
   const trimmed = String(text ?? "").trim();
   if (!trimmed) {
-    return {ok: false, error: "Load or paste a Tapoo agent-api log to begin."};
+    return {ok: false, error: "Load a Tapoo agent-api log from an online JSON URL to begin."};
   }
 
   let parsed;
@@ -36,10 +36,684 @@ export function analyzeLogText(text, {label = "pasted log"} = {}) {
 
   return {
     ok: true,
-    source: result.value,
+    source: sourceUrl ? {...result.value, sourceUrl} : result.value,
     warnings: result.warnings,
     report: answerRubric(result.value.entries, {label})
   };
+}
+
+export function createEmptyReportTab(id = reportTabId()) {
+  return {
+    id,
+    url: "",
+    label: "New report",
+    status: "empty",
+  };
+}
+
+export function createInitialReportTabs() {
+  return {
+    tabs: [],
+    activeTabId: null,
+    isAdding: true,
+    draftUrl: "",
+    draftStatus: "empty",
+  };
+}
+
+export function validateOnlineJsonUrl(value) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    return {ok: false, error: "Enter an online JSON file URL."};
+  }
+
+  let url;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return {ok: false, error: "Enter a valid URL."};
+  }
+
+  if (!["http:", "https:"].includes(url.protocol)) {
+    return {ok: false, error: "Use an online http:// or https:// JSON URL."};
+  }
+
+  return {ok: true, url: url.href};
+}
+
+// --- Shareable report payloads ---
+
+// Prefixes worth dropping, longest match first. This is a compression table and never an allowlist:
+// validateOnlineJsonUrl remains the only gate on what may be loaded, so a URL on any other host
+// encodes and decodes exactly the same way - it just has less in common with the table and so
+// compresses less. The two generic entries mean every http(s) URL matches something.
+const REPORT_PAYLOAD_PREFIXES = [
+  "https://gist.githubusercontent.com/",
+  "https://raw.githubusercontent.com/",
+  "https://",
+  "http://",
+]
+
+// Marks a packed hex run inside the byte stream. 0x01 cannot occur in the text of a URL - control
+// characters are percent-encoded by URL normalization long before they reach here - so no escaping
+// is needed to tell a marker apart from content.
+const REPORT_PAYLOAD_HEX_MARKER = 0x01
+
+// Below this a run costs more in framing than it saves. 16 hex characters pack to 8 bytes plus 2 of
+// framing; shorter runs are left as text.
+const REPORT_PAYLOAD_HEX_MIN = 16
+
+const DAMAGED_PAYLOAD = "This shared link is damaged. Ask for a fresh link."
+
+// Two trailing bytes over the rest of the token, so a link damaged in transit is reported as damaged.
+//
+// Without it, truncation is only caught when it lands inside a packed hex run: a cut that lands in
+// the filename leaves a perfectly valid URL pointing at something that was never shared, and the
+// reader is told the log could not be retrieved - the wrong remedy for a broken link. Two bytes are
+// free here in practice, since base64 rounds to groups of three.
+function payloadChecksum(bytes) {
+  let hash = 0x811c9dc5
+  for (const byte of bytes) {
+    hash ^= byte
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+
+  const folded = ((hash >>> 16) ^ (hash & 0xffff)) & 0xffff
+  return [folded >>> 8, folded & 0xff]
+}
+
+function base64UrlFromBytes(bytes) {
+  let binary = ""
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")
+}
+
+function bytesFromBase64Url(token) {
+  const padded = token.replaceAll("-", "+").replaceAll("_", "/")
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4))
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+// Packable only when the whole segment is lowercase hex of even length: an odd length cannot be
+// halved into bytes, and uppercase would not survive the round trip byte-for-byte.
+function isPackableHexSegment(segment) {
+  return (
+    segment.length >= REPORT_PAYLOAD_HEX_MIN &&
+    segment.length % 2 === 0 &&
+    /^[0-9a-f]+$/.test(segment)
+  )
+}
+
+// encodeReportPayload turns a log URL into the token a shared link carries.
+//
+// Recoverable by design - this compacts and obscures, it does not conceal, and nothing shown to a
+// reader should suggest otherwise. What it buys is that the log address is no longer sitting in the
+// page as a URL to be read, copied or crawled out of a screenshot.
+//
+// Two savings, in order: the prefix, and any long hex run. A content-addressed URL spends most of
+// its length on hex that is really half as many bytes - the sample gist URL carries a 32-character
+// id and a 40-character revision - and base64 costs 33%, so dropping the prefix alone would produce
+// a token longer than the URL it replaced.
+export function encodeReportPayload(value) {
+  const validation = validateOnlineJsonUrl(value)
+  if (!validation.ok) {
+    return validation
+  }
+
+  const index = REPORT_PAYLOAD_PREFIXES.findIndex((prefix) => validation.url.startsWith(prefix))
+  const encoder = new TextEncoder()
+  const bytes = [index]
+
+  validation.url.slice(REPORT_PAYLOAD_PREFIXES[index].length).split("/").forEach((segment, position) => {
+    if (position > 0) {
+      bytes.push(...encoder.encode("/"))
+    }
+
+    if (!isPackableHexSegment(segment)) {
+      bytes.push(...encoder.encode(segment))
+      return
+    }
+
+    bytes.push(REPORT_PAYLOAD_HEX_MARKER, segment.length / 2)
+    for (let at = 0; at < segment.length; at += 2) {
+      bytes.push(Number.parseInt(segment.slice(at, at + 2), 16))
+    }
+  })
+
+  return {ok: true, payload: base64UrlFromBytes(Uint8Array.from([...bytes, ...payloadChecksum(bytes)]))}
+}
+
+// decodeReportPayload reverses it, answering in the same shape validateOnlineJsonUrl uses so callers
+// handle one result type.
+//
+// The rebuilt URL is passed back through validateOnlineJsonUrl rather than trusted: a token arrives
+// from whatever pasted the link, and a hand-edited one must not be able to produce something the
+// loader would have refused had it been typed into the form.
+export function decodeReportPayload(value) {
+  const token = String(value ?? "").trim()
+  if (!token) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  let framed
+  try {
+    framed = bytesFromBase64Url(token)
+  } catch {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  if (framed.length < 4) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const bytes = framed.subarray(0, framed.length - 2)
+  const [high, low] = payloadChecksum(bytes)
+  if (framed[framed.length - 2] !== high || framed[framed.length - 1] !== low) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const prefix = REPORT_PAYLOAD_PREFIXES[bytes[0]]
+  if (prefix === undefined) {
+    return {ok: false, error: DAMAGED_PAYLOAD}
+  }
+
+  const decoder = new TextDecoder()
+  let rest = ""
+  let literalFrom = 1
+
+  for (let at = 1; at < bytes.length; at += 1) {
+    if (bytes[at] !== REPORT_PAYLOAD_HEX_MARKER) {
+      continue
+    }
+
+    const count = bytes[at + 1]
+    // A run claiming more bytes than the token holds is a truncated link, not a shorter URL.
+    if (count === undefined || at + 2 + count > bytes.length) {
+      return {ok: false, error: DAMAGED_PAYLOAD}
+    }
+
+    rest += decoder.decode(bytes.subarray(literalFrom, at))
+    rest += [...bytes.subarray(at + 2, at + 2 + count)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("")
+    at += 1 + count
+    literalFrom = at + 1
+  }
+
+  return validateOnlineJsonUrl(prefix + rest + decoder.decode(bytes.subarray(literalFrom)))
+}
+
+export function reportTabLabelFromUrl(value, index = 0) {
+  const fallback = `Report ${index + 1}`;
+  try {
+    const url = new URL(value);
+    const name = decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "");
+    return trimReportTabLabel(name || url.hostname || fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+export function trimReportTabLabel(value, maxLength = 34) {
+  const label = String(value ?? "").trim();
+  if (label.length <= maxLength) return label;
+  return `...${label.slice(-(maxLength - 3))}`;
+}
+
+export function addReportTab(state, id = reportTabId()) {
+  return {
+    ...state,
+    pendingTabId: id,
+    isAdding: true,
+    draftUrl: "",
+    draftStatus: "empty",
+    draftError: undefined,
+  };
+}
+
+export function updateReportTab(state, tabId, patch) {
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) => (tab.id === tabId ? {...tab, ...patch} : tab)),
+  };
+}
+
+export function deleteReportTab(state, tabId, createId = reportTabId) {
+  const deletedIndex = state.tabs.findIndex((tab) => tab.id === tabId);
+  const tabs = state.tabs.filter((tab) => tab.id !== tabId);
+  if (tabs.length === 0) {
+    return {
+      ...createInitialReportTabs(),
+      pendingTabId: createId(),
+    };
+  }
+
+  if (state.activeTabId !== tabId) {
+    return {...state, tabs};
+  }
+
+  const nextIndex = Math.min(Math.max(deletedIndex, 0), tabs.length - 1);
+  return {tabs, activeTabId: tabs[nextIndex].id};
+}
+
+export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText) {
+  const tabId = state.pendingTabId ?? reportTabId();
+  const validation = validateOnlineJsonUrl(state.draftUrl);
+  if (!validation.ok) {
+    return {
+      ...state,
+      isAdding: true,
+      draftStatus: "error",
+      draftError: validation.error,
+    };
+  }
+
+  const label = reportTabLabelFromUrl(validation.url, state.tabs.length);
+  const baseTab = {
+    id: tabId,
+    url: validation.url,
+    label,
+    loadedUrl: validation.url,
+  };
+
+  try {
+    const text = await fetchText(validation.url);
+    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
+    const tab = result.ok
+      ? {...baseTab, status: "loaded", result, error: undefined}
+      : {...baseTab, status: "error", result, error: result.error};
+    return {
+      ...state,
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      isAdding: false,
+      draftUrl: "",
+      draftStatus: "empty",
+      draftError: undefined,
+      pendingTabId: undefined,
+    };
+  } catch (error) {
+    const tab = {
+      ...baseTab,
+      status: "error",
+      error: describeFetchFailure(error),
+      result: undefined,
+    };
+    return {
+      ...state,
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      isAdding: false,
+      draftUrl: "",
+      draftStatus: "empty",
+      draftError: undefined,
+      pendingTabId: undefined,
+    };
+  }
+}
+
+export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReportText) {
+  const tab = state.tabs.find((candidate) => candidate.id === tabId);
+  const validation = validateOnlineJsonUrl(tab?.url);
+  if (!validation.ok) {
+    return updateReportTab(state, tabId, {
+      status: "error",
+      error: validation.error,
+      result: undefined,
+      loadedUrl: undefined,
+    });
+  }
+
+  const label = reportTabLabelFromUrl(validation.url, state.tabs.findIndex((candidate) => candidate.id === tabId));
+  try {
+    const text = await fetchText(validation.url);
+    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
+    return updateReportTab(state, tabId, result.ok
+      ? {status: "loaded", label, result, loadedUrl: validation.url, error: undefined}
+      : {status: "error", label, result, loadedUrl: validation.url, error: result.error});
+  } catch (error) {
+    return updateReportTab(state, tabId, {
+      status: "error",
+      label,
+      error: describeFetchFailure(error),
+      result: undefined,
+      loadedUrl: validation.url,
+    });
+  }
+}
+
+const REPORT_PAYLOAD_PARAM = "payload"
+
+// The route a shared report lives at. Namespaced under /r/ rather than sitting at the root so it
+// reads as a route, and so a future host with real routing can serve it without having to guess
+// whether a path segment is a token or a page.
+const REPORT_ROUTE = "r"
+const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`)
+
+// appBasePath finds where the app is served from, given any page within it.
+//
+// It has to strip a report route back off, because the address bar of a shared report already
+// carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
+// drops a trailing file name so /index.html and / produce the same base.
+export function appBasePath(pathname = "/") {
+  const withoutRoute = String(pathname).replace(REPORT_ROUTE_PATTERN, "/")
+  const withoutFile = withoutRoute.replace(/[^/]*\.html?$/, "")
+  return withoutFile.endsWith("/") ? withoutFile : `${withoutFile}/`
+}
+
+// shareLinkFor composes the link that reproduces one report.
+//
+// The token is a path segment, which means it is sent to the host: GitHub Pages will have the
+// (recoverable) log address in its request logs, and every shared link is served with a 404 status
+// through the shim in 404.md. That trade was made deliberately for a link that reads as a link.
+export function shareLinkFor(url, location = globalThis.location) {
+  const encoded = encodeReportPayload(url)
+  if (!encoded.ok) {
+    return null
+  }
+
+  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${encoded.payload}`
+}
+
+// reportPayloadFromPath reads the token out of a /r/<token> route.
+export function reportPayloadFromPath(pathname) {
+  return REPORT_ROUTE_PATTERN.exec(String(pathname ?? ""))?.[1] ?? null
+}
+
+// reportPayloadFromHash reads a token out of a location fragment.
+//
+// Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
+// cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
+// so the public form and the internal hop can change independently.
+export function reportPayloadFromHash(hash) {
+  const fragment = String(hash ?? "").replace(/^#/, "")
+  if (!fragment) {
+    return null
+  }
+
+  return new URLSearchParams(fragment).get(REPORT_PAYLOAD_PARAM)
+}
+
+// A chain, inline rather than a font or an image request: the page loads no third-party asset, and
+// an icon that fails to load beside its label would look like a broken control. A chain says "link"
+// where a paperclip says "attachment" - what this button hands over is a link, not a file.
+const CHAIN_ICON =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>' +
+  '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
+
+// Names what the button produces rather than the mechanics of producing it: what a reader wants is
+// a link to their report, and "copy" describes the clipboard, not the outcome.
+const SHARE_LABEL = "Share Report Link"
+
+// createShareControl builds the share button that sits to the right of the link.
+function createShareControl(url) {
+  const button = document.createElement("button")
+  button.type = "button"
+  button.className = "report-share"
+  const label = document.createElement("span")
+  // Icon first: innerHTML replaces everything already inside, so appending the label before it would
+  // silently drop the label.
+  button.innerHTML = CHAIN_ICON
+  label.textContent = SHARE_LABEL
+  button.append(label)
+  button.title = "Copy a link that reopens this report"
+
+  button.addEventListener("click", async () => {
+    const link = shareLinkFor(url)
+    if (!link) {
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(link)
+      label.textContent = "Copied"
+    } catch {
+      // Older browsers, and any context where the clipboard permission is refused. Selecting the
+      // link is still better than telling the reader nothing happened.
+      label.textContent = "Copy failed"
+    }
+
+    window.setTimeout(() => { label.textContent = SHARE_LABEL }, 1500)
+  })
+
+  return button
+}
+
+export function createReportTabsInput({fetchText = fetchReportText} = {}) {
+  let state = createInitialReportTabs();
+  const root = document.createElement("section");
+  root.className = "report-workspace";
+  Object.defineProperty(root, "value", {
+    get: () => state,
+  });
+
+  const emit = () => {
+    root.dispatchEvent(new Event("input", {bubbles: true}));
+    render();
+  };
+
+  const setState = (nextState) => {
+    state = nextState;
+    emit();
+  };
+
+  const loadNewTab = async () => {
+    const requestedUrl = state.draftUrl;
+    setState({...state, draftStatus: "loading", draftError: undefined});
+    const loadedState = await loadNewReportTabFromUrl(state, fetchText);
+    if (state.draftUrl !== requestedUrl) return;
+    setState(loadedState);
+    rememberActiveReport(loadedState);
+  };
+
+  // Keeps the address bar carrying the active report, so a reload or a bookmark reopens what is on
+  // screen. replaceState rather than assigning location.hash: assigning pushes an entry, and loading
+  // three reports would otherwise mean three presses of Back to leave the page.
+  const rememberActiveReport = (nextState) => {
+    const location = globalThis.location;
+    if (!location || !globalThis.history?.replaceState) {
+      return;
+    }
+
+    const active = nextState.tabs.find((tab) => tab.id === nextState.activeTabId);
+    // Falls back to the app root rather than leaving the route in place. A deleted report whose
+    // token stayed in the address bar would be a link to something no longer on screen - and a
+    // reload of it would bring the deleted report straight back.
+    const link = active?.status === "loaded"
+      ? shareLinkFor(active.loadedUrl ?? active.url)
+      : `${location.origin}${appBasePath(location.pathname)}`;
+
+    if (link) {
+      globalThis.history.replaceState(null, "", link);
+    }
+  };
+
+  // Opens the report a shared link names, with no input from the reader.
+  //
+  // Routed through the same loadNewReportTabFromUrl the form uses, so the fetch, the log-contract
+  // validation, the warnings and every error path are the ones already covered - a second loader for
+  // shared links would be a second place for them to diverge.
+  const restoreSharedReport = async () => {
+    const location = globalThis.location;
+    // Path first - that is the form people are handed. The fragment is only the hop 404.md uses to
+    // get the token into an app the host could not serve at that path directly.
+    const token = reportPayloadFromPath(location?.pathname) ?? reportPayloadFromHash(location?.hash);
+    if (!token) {
+      return;
+    }
+
+    const decoded = decodeReportPayload(token);
+    if (!decoded.ok) {
+      // The link is damaged, which is a different problem from the log being unreachable, and the
+      // reader can do nothing about it themselves - they never chose this URL.
+      setState({...state, isAdding: false, sharedLinkError: decoded.error});
+      return;
+    }
+
+    // The decoded URL is handed straight to the loader and never put into rendered state. Setting
+    // draftUrl here would show the add-report form while the fetch runs, with the full address
+    // sitting in an input for as long as the load takes - the one place it must not appear.
+    setState({...state, isAdding: false, sharedLinkLoading: true, sharedLinkError: undefined});
+    const loadedState = await loadNewReportTabFromUrl({...state, draftUrl: decoded.url}, fetchText);
+    setState({...loadedState, draftUrl: "", sharedLinkLoading: false});
+    // Puts /r/<token> back in the address bar. The fragment is an implementation detail of the hop
+    // through 404.md, and leaving it on screen would mean the link someone opened is not the link
+    // they could copy back out - or bookmark, or send on.
+    rememberActiveReport(loadedState);
+  };
+
+  const render = () => {
+    root.replaceChildren();
+    const navigator = document.createElement("section");
+    navigator.className = "report-navigator";
+    navigator.setAttribute("aria-label", "Loaded reports");
+
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "report-add";
+    add.textContent = "+ Add Report";
+    add.addEventListener("click", () => setState(addReportTab(state)));
+    navigator.append(add);
+
+    const nav = document.createElement("div");
+    nav.className = "report-list";
+    nav.setAttribute("role", "tablist");
+
+    for (const tab of state.tabs) {
+      const item = document.createElement("div");
+      item.className = `report-list-item${tab.id === state.activeTabId ? " report-list-item-active" : ""}`;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "report-list-button";
+      button.textContent = tab.label;
+      // The label, not the URL. A title carrying the address puts it back in the DOM for any reader,
+      // screenshot or copy-paste - the thing the share token exists to avoid.
+      button.title = tab.label;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
+      button.addEventListener("click", () => {
+        const nextState = {...state, activeTabId: tab.id, isAdding: false};
+        setState(nextState);
+        // The address bar names the active report, so switching which one is active has to move it
+        // too - otherwise the link on screen belongs to a tab the reader has left.
+        rememberActiveReport(nextState);
+      });
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "report-delete";
+      remove.setAttribute("aria-label", `Delete ${tab.label}`);
+      remove.textContent = "x";
+      remove.addEventListener("click", () => {
+        const nextState = deleteReportTab(state, tab.id);
+        setState(nextState);
+        rememberActiveReport(nextState);
+      });
+
+      item.append(button, remove);
+      nav.append(item);
+    }
+
+    navigator.append(nav);
+
+    const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
+    const content = document.createElement("section");
+    content.className = "report-active-panel";
+
+    // A damaged token never becomes a tab, so the report-level error notice never sees it. Told
+    // apart from a log that could not be retrieved on purpose: the remedies differ, and the reader
+    // of a broken link can only ask for another one.
+    if (state.sharedLinkLoading) {
+      const pending = document.createElement("p");
+      pending.className = "source-line";
+      pending.textContent = "Opening the shared report...";
+      content.append(pending);
+    }
+
+    if (state.sharedLinkError) {
+      const notice = document.createElement("p");
+      notice.className = "report-share-error";
+      notice.textContent = state.sharedLinkError;
+      content.append(notice);
+    }
+    if (!state.isAdding && activeTab) {
+      const sourceUrl = activeTab.loadedUrl ?? activeTab.url;
+      // The share link, not the log address. Showing both was showing the same thing twice - the
+      // link encodes the address, and a reader who needs the address can get it from the link - so
+      // the only thing the second copy added was the address itself, in readable form, on a panel
+      // people screenshot. The report is identified by its label in the tab strip and in the
+      // "Analyzing" line, so nothing is lost by dropping it.
+      const shareLink = activeTab.status === "loaded" ? shareLinkFor(sourceUrl) : null;
+      if (shareLink) {
+        // Shown whole, not trimmed. A trimmed log address was a courtesy - host and filename told a
+        // reader which report they had. A trimmed *link* is just broken: its whole value is being
+        // copied, and an ellipsis in the middle of it means anyone selecting it by hand gets
+        // something that does not work. It wraps instead.
+        const panel = document.createElement("div");
+        panel.className = "report-share-panel";
+
+        const source = document.createElement("p");
+        source.className = "report-source-url";
+        source.textContent = shareLink;
+
+        panel.append(source, createShareControl(sourceUrl));
+        content.append(panel);
+      }
+
+      root.append(navigator, content);
+      return;
+    }
+
+    if (!state.isAdding) {
+      root.append(navigator, content);
+      return;
+    }
+
+    const form = document.createElement("form");
+    form.className = "report-url-form";
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void loadNewTab();
+    });
+
+    const label = document.createElement("label");
+    label.textContent = "Online JSON file URL";
+    label.htmlFor = `${state.pendingTabId ?? "new-report"}-url`;
+
+    const input = document.createElement("input");
+    input.id = `${state.pendingTabId ?? "new-report"}-url`;
+    input.type = "url";
+    input.placeholder = "https://example.com/tapoo-agent-api-log.json";
+    input.value = state.draftUrl;
+    input.addEventListener("input", () => {
+      state = {...state, draftUrl: input.value, draftStatus: "empty", draftError: undefined};
+      root.dispatchEvent(new Event("input", {bubbles: true}));
+    });
+
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = state.draftStatus === "loading" ? "Loading..." : "Load report";
+    submit.disabled = state.draftStatus === "loading";
+
+    form.append(label, input, submit);
+    if (state.draftStatus === "error") {
+      const error = document.createElement("p");
+      error.className = "report-url-error";
+      error.textContent = state.draftError;
+      form.append(error);
+    }
+    content.append(form);
+    root.append(navigator, content);
+  };
+
+  render();
+  void restoreSharedReport();
+  return root;
 }
 
 // profileCards summarizes a report as headline counts.
@@ -48,6 +722,158 @@ export function analyzeLogText(text, {label = "pasted log"} = {}) {
 // explicit that they must not collapse into one score interval: a model with six capabilities and
 // two violations is not "four", and any arithmetic that produces a single number here would be
 // inventing a scale the contract deliberately refuses to define.
+// Column classes, keyed by header text. Positional selectors cannot address these columns: rows
+// after a group's first lose two cells to the merge below, so nth-last-child(4) is the group name on
+// one row and the leading spacer on the next. A class travels with the cell.
+const RUBRIC_COLUMN_CLASSES = {
+  "ID": "rubric-id",
+  "Group": "rubric-group",
+  "Fact question": "rubric-question",
+  "Answer": "rubric-answer",
+  "Group result": "rubric-result",
+}
+
+// prepareRubricTable labels each column and merges each group's repeated cells into one cell
+// spanning its questions.
+//
+// A group answers one verdict from several fact questions, and Inputs.table can only render flat
+// rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
+// column, that looks like three separate verdicts that happen to agree, which is the opposite of
+// what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
+// the cell states that in the table's own structure.
+//
+// Safe as a one-time pass because these tables are built with sort disabled and every row
+// materialized, so the body is never re-ordered or extended underneath it.
+export function prepareRubricTable(node) {
+  const table = node.querySelector("table")
+  const body = table?.querySelector("tbody")
+  if (!body) {
+    return node
+  }
+
+  // Located by header text rather than by a fixed index: Inputs.table emits a leading spacer cell,
+  // and a hard-coded position silently points one column off the moment that changes.
+  const headers = [...(table.querySelector("thead tr")?.cells ?? [])]
+
+  // Labelled before anything is merged, while every row still has every cell in the same position.
+  headers.forEach((header, index) => {
+    const columnClass = RUBRIC_COLUMN_CLASSES[header.textContent.trim()]
+    if (!columnClass) {
+      return
+    }
+
+    header.classList.add(columnClass)
+    for (const row of body.rows) {
+      row.cells[index]?.classList.add(columnClass)
+    }
+  })
+
+  const columns = ["Group", "Group result"]
+    .map((label) => headers.findIndex((cell) => cell.textContent.trim() === label))
+    .filter((index) => index >= 0)
+  if (columns.length === 0) {
+    return node
+  }
+
+  const groupOf = (row) => row.cells[columns[0]]?.textContent.trim()
+  let anchor = null
+  let span = 0
+
+  const closeRun = () => {
+    if (anchor && span > 1) {
+      for (const index of columns) {
+        anchor.cells[index].rowSpan = span
+      }
+    }
+  }
+
+  for (const row of [...body.rows]) {
+    if (anchor && groupOf(row) === groupOf(anchor)) {
+      span += 1
+      // Removed last-to-first so each removal cannot shift an index still to be used.
+      for (const index of [...columns].reverse()) {
+        row.cells[index].remove()
+      }
+      continue
+    }
+
+    closeRun()
+    anchor = row
+    span = 1
+  }
+
+  closeRun()
+  return node
+}
+
+// groupResultTone names the class a group result should carry, or null for no colour at all.
+//
+// Split out from the table's format callback because this is the part that can be wrong: YES means
+// opposite things in the two tables, and the rule for what stays uncoloured is a statement about
+// what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
+// the decision stays here where the suite can reach it.
+export function groupResultTone(kind, groupResult) {
+  // NO is never coloured. For a violation it is the good outcome, and for a capability it means the
+  // behavior was not observed in this sample - never that the model is incapable of it, which is the
+  // one thing this report exists not to say. Red on that line would say it.
+  if (!String(groupResult).startsWith("YES")) {
+    return null
+  }
+
+  return kind === "violation" ? "result-confirmed" : "result-demonstrated"
+}
+
+// enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
+// 13px square at the far left of a row whose content runs the width of the page, so hitting it means
+// aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
+// recommended target size outright.
+//
+// Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
+// body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
+// the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
+// without moving the input's value.
+export function enableRowSelection(node) {
+  const table = node.querySelector("table")
+  if (!table) {
+    return node
+  }
+
+  table.addEventListener("click", (event) => {
+    // The control itself already toggles; handling it here as well would toggle twice and land back
+    // where it started. Links and buttons inside a cell keep their own behavior.
+    if (event.target.closest("input, a, button, label")) {
+      return
+    }
+
+    // A click that ends a text selection is someone copying a fact question, not choosing a row.
+    if (window.getSelection()?.toString()) {
+      return
+    }
+
+    const checkbox = event.target.closest("tbody tr")?.querySelector("input[type=checkbox]")
+    if (!checkbox) {
+      return
+    }
+
+    // Forward the click to the checkbox rather than setting .checked and announcing it. Inputs.table
+    // wires every row checkbox with `input.onclick = reselect`, and that handler owns the selection
+    // set, the header checkbox's checked/indeterminate state, and the table's own value. Assigning
+    // .checked moves the tick and the :checked tint while none of that bookkeeping runs - the row
+    // looks selected, the header stays blank, and the value the table reports omits the row. A click
+    // dispatched on a checkbox performs its activation behavior, so the toggle is still native.
+    //
+    // shiftKey and detail are carried over so a shift-click on a row extends the range exactly as a
+    // shift-click on the checkbox does, and so reselect's blur-on-real-click still fires.
+    checkbox.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      shiftKey: event.shiftKey,
+      detail: event.detail,
+    }))
+  })
+
+  return node
+}
+
 export function profileCards(report) {
   const met = (groups) => groups.filter((group) => group.met).length;
 
@@ -67,20 +893,18 @@ export function profileCards(report) {
   ];
 }
 
-// groupRows renders one rubric group per row, keeping every per-question answer visible beside the
-// verdict. The fraction is carried because partial evidence is not the same as none: C7 at 1/2 and
-// C7 at 0/2 are both a `no`, and showing only the verdict would hide exactly the difference the
-// rubric asks to preserve.
-export function groupRows(groups) {
-  return groups.map((group) => ({
-    id: group.id,
-    group: group.label,
-    verdict: group.met ? "YES" : "no",
-    evidence: `${group.passed}/${group.total}`,
-    questions: Object.entries(group.answers)
-      .map(([question, answer]) => `${question}:${answer ? "Y" : "n"}`)
-      .join("  ")
-  }));
+// rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
+// visible because a partially evidenced group and a group with no evidence can share the same NO.
+export function rubricQuestionRows(groups) {
+  return groups.flatMap((group) =>
+    Object.entries(group.answers).map(([questionId, answer]) => ({
+      id: `${group.id}.${questionId}`,
+      group: group.label,
+      question: group.questions[questionId],
+      answer: answer ? "YES" : "NO",
+      groupResult: `${group.met ? "YES" : "NO"} (${group.passed}/${group.total})`,
+    })),
+  )
 }
 
 // diagnosticRows reports operational signals that are deliberately excluded from the violation
@@ -95,10 +919,29 @@ export function diagnosticRows(report) {
   ];
 }
 
+// diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
+// two measures as rows avoids packing count and scoring semantics into an ambiguous combined value.
+export function diagnosticTableData(report) {
+  const diagnostics = diagnosticRows(report)
+  const columns = ["measure", ...diagnostics.map((row) => row.signal)]
+
+  return {
+    columns,
+    rows: [
+      Object.fromEntries([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count])]),
+      Object.fromEntries([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored])]),
+    ],
+  }
+}
+
 // provenanceRows describe which build and which round produced the log, so a profile is never read
 // detached from what it was measured against.
 export function provenanceRows(source, report) {
   return [
+    // No source URL row. It is the one field here that is not read out of the log itself, the panel
+    // above already carries the share link that identifies the same log, and a table cell is the
+    // most screenshotted place on the page to put an address that the rest of this change exists to
+    // keep out of it. What remains is provenance the log vouches for.
     {field: "Tapoo version", value: source.version ?? "not recorded"},
     {field: "Control mode", value: source.mode ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
@@ -106,6 +949,16 @@ export function provenanceRows(source, report) {
     {field: "Model", value: report.model ?? "not recorded"},
     {field: "Player", value: report.player ?? "not recorded"}
   ];
+}
+
+// provenanceTableData renders the small provenance record as one horizontal row so a wide report
+// does not spend six rows on six short values.
+export function provenanceTableData(source, report) {
+  const provenance = provenanceRows(source, report)
+  return {
+    columns: provenance.map((row) => row.field),
+    rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
+  }
 }
 
 // narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
@@ -134,4 +987,33 @@ export function narrativeSummary(report) {
 
 function formatCount(value) {
   return Number(value).toLocaleString("en-US");
+}
+
+// describeFetchFailure turns what fetch throws into something a reader can act on.
+//
+// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
+// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
+// is the one failure where a link that works for whoever shared it can fail for whoever opens it.
+export function describeFetchFailure(error) {
+  const message = error?.message ?? String(error)
+  if (error instanceof TypeError) {
+    return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
+  }
+
+  return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`
+}
+
+async function fetchReportText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
+  }
+  return response.text();
+}
+
+function reportTabId() {
+  if (globalThis.crypto?.randomUUID) {
+    return `report-${globalThis.crypto.randomUUID()}`;
+  }
+  return `report-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }

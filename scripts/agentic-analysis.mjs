@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs"
 import { basename } from "node:path"
 
-// Answers the Tapoo Agentic Behavior Rubric (docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md) against one or
-// more exported agent-api gameplay logs.
+// Answers its embedded Tapoo agentic-behavior questions against one or more exported agent-api
+// gameplay logs. This duplicate evaluator is a known migration gap; the app's rubric engine is the
+// reference implementation.
 //
 //   node scripts/agentic-analysis.mjs <log.json> [<log.json> ...]
 //

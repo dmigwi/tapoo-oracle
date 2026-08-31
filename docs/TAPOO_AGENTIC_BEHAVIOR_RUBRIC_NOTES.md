@@ -1,7 +1,7 @@
 # Tapoo Agentic Behavior Rubric Notes
 
-These notes hold evaluator details and interpretation aids that are useful when
-implementing the rubric, but too specific for the main rubric contract.
+These notes hold evaluator details and interpretation aids that supplement the
+canonical fact-question definitions in `src/analysis/rubric-engine.js`.
 
 ## Dependency Ladders
 

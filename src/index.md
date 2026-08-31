@@ -5,62 +5,36 @@ toc: false
 
 ```js
 import {
-  analyzeLogText,
-  diagnosticRows,
-  groupRows,
+  createInitialReportTabs,
+  createReportTabsInput,
+  diagnosticTableData,
+  enableRowSelection,
+  groupResultTone,
+  prepareRubricTable,
+  rubricQuestionRows,
   narrativeSummary,
   profileCards,
-  provenanceRows
+  provenanceTableData
 } from "./components/oracle.js";
 ```
 
 <section class="oracle-hero">
   <div>
-    <p class="eyebrow">Tapoo analytics extension</p>
     <h1>Tapoo Oracle</h1>
-    <p class="lede">Load a downloaded Tapoo <code>agent-api</code> log and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
-  </div>
-  <div class="signal-panel" aria-label="Oracle analysis pipeline">
-    <span>agent-api log</span>
-    <span>validate contract</span>
-    <span>answer rubric</span>
-    <span>report profile</span>
+    <p class="lede">Load an online <a href="https://dmigwi.github.io/tapoo/">Tapoo</a> <code>agent-api</code> JSON log URL and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
   </div>
 </section>
 
 ```js
-const sampleText = await FileAttachment("./analysis/fixtures/sample-agent-api-log.json").text();
+const reportTabsState = view(createReportTabsInput());
 ```
 
 ```js
-const upload = view(Inputs.file({
-  label: "Downloaded log",
-  accept: ".json",
-  description: "The JSON file Tapoo's browser Logs panel downloads after an agent-api round."
-}));
-```
-
-```js
-const pasted = view(Inputs.textarea({
-  label: "…or paste JSON",
-  placeholder: "Paste a Tapoo agent-api log export here to override the file above.",
-  rows: 6,
-  resize: "vertical",
-  spellcheck: false,
-  monospace: true
-}));
-```
-
-```js
-// Precedence is pasted text, then an uploaded file, then the bundled sample, so the page always has
-// something real to render and never shows an empty analysis as if it were a result.
-const source = pasted?.trim()
-  ? {text: pasted, label: "pasted log"}
-  : upload
-    ? {text: await upload.text(), label: upload.name}
-    : {text: sampleText, label: "sample-agent-api-log.json (bundled reference export)"};
-
-const result = analyzeLogText(source.text, {label: source.label});
+const normalizedReportTabsState = reportTabsState?.tabs ? reportTabsState : createInitialReportTabs();
+const activeReportTab = normalizedReportTabsState.tabs.find(
+  (tab) => tab.id === normalizedReportTabsState.activeTabId
+) ?? normalizedReportTabsState.tabs[0];
+const result = activeReportTab?.result;
 ```
 
 ```js
@@ -68,31 +42,97 @@ const result = analyzeLogText(source.text, {label: source.label});
 // evaluates a block-level expression only when it is a single line: a multi-line ternary around an
 // html`` template leaks its source onto the page as literal text while still rendering the HTML
 // inside it, which looks close enough to correct to survive review.
-const groupTable = (rows, count) =>
-  Inputs.table(rows, {
-    columns: ["id", "group", "verdict", "evidence", "questions"],
-    header: {id: "ID", group: "Group", verdict: "Verdict", evidence: "Answered", questions: "Questions"},
-    width: {group: 260, questions: 220},
+// No fixed pixel widths: they added to 1060px, so the report's own content scrolled sideways on any
+// laptop narrower than that. Proportions live in oracle.css instead, which lets the question column
+// take the space it needs at any width.
+//
+// Selection stays on. Nothing downstream reads it, but that is not what it is for: these are 15 and
+// 9 row tables of near-identical sentences, and the checkbox is how a reader keeps their place or
+// marks the rows they are comparing. oracle.css tints the checked row.
+// kind is what makes the colour readable: YES means opposite things in the two tables. A capability
+// group answering YES was demonstrated, which is sage; a violation group answering YES was confirmed,
+// which is rose. Only the YES rows are coloured - a capability answering NO means the behavior was
+// not observed in this sample, never that the model cannot do it, and painting that red would state
+// the one thing this report exists to avoid saying.
+const rubricTable = (rows, kind) =>
+  prepareRubricTable(enableRowSelection(Inputs.table(rows, {
+    columns: ["id", "group", "question", "answer", "groupResult"],
+    header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
+    format: {
+      groupResult: (value) => {
+        const tone = groupResultTone(kind, value)
+        return tone ? html`<span class=${tone}>${value}</span>` : value
+      }
+    },
     sort: false,
-    rows: count
-  });
+    rows: rows.length
+  })));
 
-const notices = !result.ok
+const diagnosticsTable = (report) => {
+  const data = diagnosticTableData(report);
+  return enableRowSelection(Inputs.table(data.rows, {
+    columns: data.columns,
+    header: {measure: "Measure"},
+    sort: false,
+    rows: data.rows.length
+  }));
+};
+
+const provenanceTable = (source, report) => {
+  const data = provenanceTableData(source, report);
+  return enableRowSelection(Inputs.table(data.rows, {
+    columns: data.columns,
+    sort: false,
+    rows: data.rows.length
+  }));
+};
+
+const emptyState = activeReportTab?.status === "loaded" || activeReportTab?.status === "error"
+  ? ""
+  : html`<section class="notice empty-report-state">
+      <strong>Load an online JSON report URL</strong>
+      <ol>
+        <li>Enter an <code>http://</code> or <code>https://</code> URL.</li>
+        <li>Use a Tapoo <code>agent-api</code> JSON log, then select <strong>Load report</strong>.</li>
+        <li>Each report owns its URL and analysis; deleting a report removes both.</li>
+      </ol>
+      <div class="gist-help">
+        <strong>Host a local JSON payload with GitHub Gist</strong>
+        <ol>
+          <li>Open <a href="https://gist.github.com">gist.github.com</a> while signed in to GitHub.
+            <ul>
+              <li>Or skip the browser upload with the <a href="https://cli.github.com">GitHub CLI</a>, which
+                creates the gist and opens it ready for step 4:
+                <pre><code>gh gist create --desc "Tapoo v2.5.1 output payloads from level 54" --web sample-agent-api-log.json</code></pre>
+                <code>--desc</code> takes the description as its own argument, so it has to come before
+                <code>--web</code>. <code>gh</code> creates secret gists by default, which is the safer of the two
+                choices in step 3; add <code>--public</code> only when the payload is safe to publish.</li>
+            </ul>
+          </li>
+          <li>Create a new gist, name the file with a <code>.json</code> extension, and paste or drag in the Tapoo log JSON.</li>
+          <li>Create a secret gist for a share-by-link report, or a public gist only when the payload is safe to publish.</li>
+          <li>Open the created gist file's <strong>Raw</strong> view and copy that <code>gist.githubusercontent.com</code> URL.</li>
+          <li>Paste the raw URL into <strong>Online JSON file URL</strong>, then select <strong>Load report</strong>.</li>
+        </ol>
+      </div>
+    </section>`;
+
+const notices = activeReportTab?.status === "error"
   ? html`<section class="notice notice-error">
-      <strong>Cannot analyze this input</strong>
-      <span>${result.error}</span>
+      <strong>Cannot analyze this URL</strong>
+      <span>${activeReportTab.error}</span>
     </section>`
-  : result.warnings.length > 0
+  : result?.ok && result.warnings.length > 0
     ? html`<section class="notice notice-warn">
         <strong>Read with care</strong>
         <ul>${result.warnings.map((warning) => html`<li>${warning}</li>`)}</ul>
       </section>`
     : "";
 
-const profile = !result.ok
+const profile = !result?.ok
   ? ""
-  : html`<div>
-      <p class="source-line">Analyzing <strong>${source.label}</strong></p>
+  : html`<div class="report-region">
+      <p class="source-line">Analyzing <strong>${activeReportTab.label}</strong></p>
       <section class="analysis-strip">
         ${profileCards(result.report).map(
           (card) => html`<article class=${`metric metric-${card.tone}`}>
@@ -107,223 +147,98 @@ const profile = !result.ok
       </section>
     </div>`;
 
-const detail = !result.ok
+const detail = !result?.ok
   ? ""
-  : html`<div>
+  : html`<div class="report-region">
+      <details class="events-section methodology-section">
+        <summary>
+          <span class="methodology-title" role="heading" aria-level="2">How this report is generated</span>
+          <span class="methodology-preview">Five stages from the active URL to an evidence-based profile.</span>
+        </summary>
+        <div class="methodology-content">
+          <p class="methodology-intro">
+            Tapoo Oracle fetches the active tab's JSON URL and analyzes it entirely in this browser.
+            It does not persist the fetched log, infer missing fields, or assign a combined
+            intelligence score.
+          </p>
+          <ol class="analysis-pipeline">
+            <li>
+              <h3>Fetch the active tab's URL</h3>
+              <p>
+                Each tab owns one online JSON file URL. Loading that tab fetches the current URL;
+                editing the URL clears the previous result so stale analysis is not shown as current
+                evidence.
+              </p>
+            </li>
+            <li>
+              <h3>Validate the Tapoo log contract</h3>
+              <p>
+                The input must be valid JSON with the Tapoo export identity, an <code>entries</code>
+                array, and readable log entries. A non-<code>agent-api</code> mode, missing build
+                version, or skipped malformed entries produces a visible warning instead of being
+                silently ignored.
+              </p>
+            </li>
+            <li>
+              <h3>Build evidence from recorded events</h3>
+              <p>
+                The rubric engine reads the validated entries in their recorded order and derives
+                only contract-defined facts. Missing evidence answers <strong>NO</strong>, meaning the
+                behavior was not observed in this sample, not that the model is incapable of it.
+              </p>
+            </li>
+            <li>
+              <h3>Answer and aggregate the rubric</h3>
+              <p>
+                Every rubric question returns <strong>YES</strong> or <strong>NO</strong>. A capability
+                is demonstrated only when every question in its group is YES. A violation is confirmed
+                when any question in its group is YES. The report keeps fractions such as
+                <code>2/3</code> visible so partial evidence is not hidden by the group verdict. Each
+                exact question and its answer are displayed directly in the report below.
+              </p>
+            </li>
+            <li>
+              <h3>Present the profile with its boundaries</h3>
+              <p>
+                Capability and violation totals remain separate. Operational failures that may come
+                from provider infrastructure are reported as diagnostics, while build, model, player,
+                and log metadata are retained as provenance for the analyzed sample.
+              </p>
+            </li>
+          </ol>
+        </div>
+      </details>
       <section class="events-section">
         <h2>Capabilities</h2>
-        <p class="section-note">AND semantics: every question in a group must answer YES for the group to be demonstrated.</p>
-        ${groupTable(groupRows(result.report.capabilities), 9)}
+        <p class="section-note">AND semantics: every fact question must answer YES for its group to be demonstrated.</p>
+        <div class="rubric-table">${rubricTable(rubricQuestionRows(result.report.capabilities), "capability")}</div>
       </section>
       <section class="events-section">
         <h2>Violations</h2>
-        <p class="section-note">OR semantics: any question answering YES confirms the violation.</p>
-        ${groupTable(groupRows(result.report.violations), 6)}
+        <p class="section-note">OR semantics: any fact question answering YES confirms its violation group.</p>
+        <div class="rubric-table">${rubricTable(rubricQuestionRows(result.report.violations), "violation")}</div>
       </section>
       <section class="events-section">
         <h2>Operational Diagnostics</h2>
         <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
-        ${Inputs.table(diagnosticRows(result.report), {
-          columns: ["signal", "count", "scored"],
-          header: {signal: "Signal", count: "Count", scored: "Scored as"},
-          sort: false,
-          rows: 4
-        })}
+        ${diagnosticsTable(result.report)}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>
         <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
-        ${Inputs.table(provenanceRows(result.source, result.report), {
-          columns: ["field", "value"],
-          header: {field: "Field", value: "Value"},
-          sort: false,
-          rows: 6
-        })}
+        ${provenanceTable(result.source, result.report)}
         <p class="source-line">
-          Answers come from the rubric engine in this repository, against the
-          <a href="https://github.com/dmigwi/tapoo-oracle/blob/main/docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md">Tapoo Agentic Behavior Rubric</a>.
+          The question definitions and answers above come directly from the rubric engine that
+          analyzed this log.
         </p>
       </section>
     </div>`;
 ```
+
+${emptyState}
 
 ${notices}
 
 ${profile}
 
 ${detail}
-
-<style>
-:root {
-  --oracle-ink: #15201f;
-  --oracle-muted: #64706d;
-  --oracle-paper: #f6f2e8;
-  --oracle-line: #d8d0c1;
-  --oracle-teal: #167c80;
-  --oracle-amber: #b66a00;
-  --oracle-rose: #b8403c;
-}
-
-body {
-  background:
-    linear-gradient(120deg, rgba(22, 124, 128, 0.12), transparent 32rem),
-    radial-gradient(circle at 86% 8%, rgba(182, 106, 0, 0.16), transparent 24rem),
-    var(--oracle-paper);
-  color: var(--oracle-ink);
-}
-
-.oracle-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
-  gap: 2rem;
-  align-items: end;
-  margin: 1.5rem 0 2rem;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--oracle-line);
-}
-
-.eyebrow {
-  margin: 0 0 0.75rem;
-  color: var(--oracle-teal);
-  font: 700 0.78rem/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-transform: uppercase;
-}
-
-.oracle-hero h1 {
-  max-width: 10ch;
-  margin: 0;
-  font-size: clamp(3.2rem, 12vw, 8rem);
-  line-height: 0.9;
-}
-
-.lede {
-  max-width: 58rem;
-  margin: 1.25rem 0 0;
-  color: var(--oracle-muted);
-  font-size: 1.08rem;
-  line-height: 1.65;
-}
-
-.signal-panel {
-  display: grid;
-  gap: 0.5rem;
-  padding: 1rem;
-  border: 1px solid var(--oracle-line);
-  background: rgba(255, 255, 255, 0.56);
-}
-
-.signal-panel span {
-  padding: 0.72rem 0.85rem;
-  border-left: 4px solid var(--oracle-teal);
-  background: #fffaf0;
-  font: 700 0.82rem/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  text-transform: uppercase;
-}
-
-.analysis-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1rem;
-  margin: 1.5rem 0;
-}
-
-.metric,
-.oracle-summary,
-.events-section,
-.notice {
-  border: 1px solid var(--oracle-line);
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.metric {
-  padding: 1rem;
-}
-
-.metric span {
-  display: block;
-  color: var(--oracle-muted);
-  font-size: 0.86rem;
-}
-
-.metric strong {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: 2.4rem;
-  line-height: 1;
-}
-
-.metric-ink { border-top: 4px solid var(--oracle-ink); }
-.metric-teal { border-top: 4px solid var(--oracle-teal); }
-.metric-rose { border-top: 4px solid var(--oracle-rose); }
-
-.oracle-summary,
-.events-section,
-.notice {
-  padding: 1.2rem;
-  margin: 1.5rem 0;
-}
-
-.oracle-summary h2,
-.events-section h2 {
-  margin-top: 0;
-}
-
-.oracle-summary p {
-  max-width: 68rem;
-  font-size: 1.08rem;
-  line-height: 1.65;
-}
-
-.section-note {
-  max-width: 68rem;
-  margin: -0.4rem 0 1rem;
-  color: var(--oracle-muted);
-  font-size: 0.9rem;
-}
-
-.source-line,
-.source-line {
-  color: var(--oracle-muted);
-  font-size: 0.9rem;
-}
-
-.source-line {
-  margin-bottom: 0;
-}
-
-
-.notice {
-  display: grid;
-  gap: 0.4rem;
-}
-
-.notice ul {
-  margin: 0;
-  padding-left: 1.1rem;
-}
-
-.notice-error {
-  border-color: var(--oracle-rose);
-  color: var(--oracle-rose);
-}
-
-.notice-warn {
-  border-color: var(--oracle-amber);
-  color: var(--oracle-amber);
-}
-
-textarea {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
-}
-
-@media (max-width: 860px) {
-  .oracle-hero,
-  .analysis-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .oracle-hero h1 {
-    font-size: clamp(3rem, 18vw, 5rem);
-  }
-}
-</style>
