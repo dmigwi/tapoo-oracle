@@ -353,6 +353,64 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
 // explicit that they must not collapse into one score interval: a model with six capabilities and
 // two violations is not "four", and any arithmetic that produces a single number here would be
 // inventing a scale the contract deliberately refuses to define.
+// groupRubricRows merges each rubric group's repeated cells into one cell spanning its questions.
+//
+// A group answers one verdict from several fact questions, and Inputs.table can only render flat
+// rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
+// column, that looks like three separate verdicts that happen to agree, which is the opposite of
+// what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
+// the cell states that in the table's own structure.
+//
+// Safe as a one-time pass because these tables are built with sort disabled and every row
+// materialized, so the body is never re-ordered or extended underneath it.
+export function groupRubricRows(node) {
+  const table = node.querySelector("table")
+  const body = table?.querySelector("tbody")
+  if (!body) {
+    return node
+  }
+
+  // Located by header text rather than by a fixed index: Inputs.table emits a leading spacer cell,
+  // and a hard-coded position silently points one column off the moment that changes.
+  const headers = [...(table.querySelector("thead tr")?.cells ?? [])]
+  const columns = ["Group", "Group result"]
+    .map((label) => headers.findIndex((cell) => cell.textContent.trim() === label))
+    .filter((index) => index >= 0)
+  if (columns.length === 0) {
+    return node
+  }
+
+  const groupOf = (row) => row.cells[columns[0]]?.textContent.trim()
+  let anchor = null
+  let span = 0
+
+  const closeRun = () => {
+    if (anchor && span > 1) {
+      for (const index of columns) {
+        anchor.cells[index].rowSpan = span
+      }
+    }
+  }
+
+  for (const row of [...body.rows]) {
+    if (anchor && groupOf(row) === groupOf(anchor)) {
+      span += 1
+      // Removed last-to-first so each removal cannot shift an index still to be used.
+      for (const index of [...columns].reverse()) {
+        row.cells[index].remove()
+      }
+      continue
+    }
+
+    closeRun()
+    anchor = row
+    span = 1
+  }
+
+  closeRun()
+  return node
+}
+
 // groupResultTone names the class a group result should carry, or null for no colour at all.
 //
 // Split out from the table's format callback because this is the part that can be wrong: YES means

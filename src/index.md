@@ -10,6 +10,7 @@ import {
   diagnosticTableData,
   enableRowSelection,
   groupResultTone,
+  groupRubricRows,
   rubricQuestionRows,
   narrativeSummary,
   profileCards,
@@ -20,7 +21,7 @@ import {
 <section class="oracle-hero">
   <div>
     <h1>Tapoo Oracle</h1>
-    <p class="lede">Load an online Tapoo <code>agent-api</code> JSON log URL and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
+    <p class="lede">Load an online <a href="https://dmigwi.github.io/tapoo/">Tapoo</a> <code>agent-api</code> JSON log URL and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
   </div>
 </section>
 
@@ -54,7 +55,7 @@ const result = activeReportTab?.result;
 // not observed in this sample, never that the model cannot do it, and painting that red would state
 // the one thing this report exists to avoid saying.
 const rubricTable = (rows, kind) =>
-  enableRowSelection(Inputs.table(rows, {
+  groupRubricRows(enableRowSelection(Inputs.table(rows, {
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
     format: {
@@ -65,7 +66,7 @@ const rubricTable = (rows, kind) =>
     },
     sort: false,
     rows: rows.length
-  }));
+  })));
 
 const diagnosticsTable = (report) => {
   const data = diagnosticTableData(report);

@@ -569,34 +569,39 @@ pre code {
    select:false, so a mapping counted from column 1 silently lands one column off - which is exactly
    what happened here first, handing the question's share to the group name. The last five columns
    are the five declared ones whether or not that spacer is ever dropped. */
+/* Widths are declared on the header row alone. table-layout: fixed takes every column width from
+   the table's first row, and body rows lose cells to rowSpan (groupRubricRows), so counting columns
+   within them would land on the wrong one for every row after a group's first. */
 .rubric-table table {
   width: 100%;
   table-layout: fixed;
 }
 
-.rubric-table th:nth-last-child(5),
-.rubric-table td:nth-last-child(5) {
+.rubric-table th:nth-last-child(5) {
   width: 7%;
 }
 
-.rubric-table th:nth-last-child(4),
-.rubric-table td:nth-last-child(4) {
+.rubric-table th:nth-last-child(4) {
   width: 16%;
 }
 
-.rubric-table th:nth-last-child(3),
-.rubric-table td:nth-last-child(3) {
+.rubric-table th:nth-last-child(3) {
   width: 55%;
 }
 
-.rubric-table th:nth-last-child(2),
-.rubric-table td:nth-last-child(2) {
+.rubric-table th:nth-last-child(2) {
   width: 9%;
 }
 
-.rubric-table th:last-child,
-.rubric-table td:last-child {
+.rubric-table th:last-child {
   width: 13%;
+}
+
+/* A spanned group cell sits beside several questions, so it reads from the top of its run rather
+   than floating in the middle of it, and carries the rule that closes the group. */
+.rubric-table td[rowspan] {
+  vertical-align: top;
+  border-bottom: 1px solid var(--oracle-line);
 }
 
 .events-section form:has(> table) {
@@ -664,18 +669,15 @@ td {
   /* On a phone the whole table is ~310px wide, so the proportions that read well on a laptop leave
      the question about 130px - a sentence a word at a time. The short columns give up most of what
      they can; the id and the answer are the two nothing can be taken from. */
-  .rubric-table th:nth-last-child(4),
-  .rubric-table td:nth-last-child(4) {
+  .rubric-table th:nth-last-child(4) {
     width: 11%;
   }
 
-  .rubric-table th:nth-last-child(3),
-  .rubric-table td:nth-last-child(3) {
+  .rubric-table th:nth-last-child(3) {
     width: 63%;
   }
 
-  .rubric-table th:last-child,
-  .rubric-table td:last-child {
+  .rubric-table th:last-child {
     width: 10%;
   }
 
