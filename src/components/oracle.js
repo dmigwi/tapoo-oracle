@@ -67,20 +67,18 @@ export function profileCards(report) {
   ];
 }
 
-// groupRows renders one rubric group per row, keeping every per-question answer visible beside the
-// verdict. The fraction is carried because partial evidence is not the same as none: C7 at 1/2 and
-// C7 at 0/2 are both a `no`, and showing only the verdict would hide exactly the difference the
-// rubric asks to preserve.
-export function groupRows(groups) {
-  return groups.map((group) => ({
-    id: group.id,
-    group: group.label,
-    verdict: group.met ? "YES" : "no",
-    evidence: `${group.passed}/${group.total}`,
-    questions: Object.entries(group.answers)
-      .map(([question, answer]) => `${question}:${answer ? "Y" : "n"}`)
-      .join("  ")
-  }));
+// rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
+// visible because a partially evidenced group and a group with no evidence can share the same NO.
+export function rubricQuestionRows(groups) {
+  return groups.flatMap((group) =>
+    Object.entries(group.answers).map(([questionId, answer]) => ({
+      id: `${group.id}.${questionId}`,
+      group: group.label,
+      question: group.questions[questionId],
+      answer: answer ? "YES" : "NO",
+      groupResult: `${group.met ? "YES" : "NO"} (${group.passed}/${group.total})`,
+    })),
+  )
 }
 
 // diagnosticRows reports operational signals that are deliberately excluded from the violation

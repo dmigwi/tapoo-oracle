@@ -1,10 +1,9 @@
 // Tapoo Agentic Behavior rubric engine.
 //
-// Answers docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md against the entries of a downloaded agent-api log,
-// and returns the answers as data. It does no IO and prints nothing: scripts/agentic-analysis.mjs
-// renders the CLI report from this, and the Tapoo Oracle analytics app renders its views from the
-// same object. One implementation is the point - two would answer the same rubric question about the
-// same log differently, and nothing would reveal which one was wrong.
+// Answers the canonical fact questions below against the entries of a downloaded agent-api log and
+// returns both definitions and answers as data. It does no IO and prints nothing: the Tapoo Oracle
+// app renders its views from this object. Keeping definitions beside their evaluators prevents the
+// report from describing a different question than the engine actually answered.
 //
 // Like log-contract.mjs, this file must stay free of node: imports so it can be bundled for the
 // browser.
@@ -550,25 +549,134 @@ function failedStateRepetition(context) {
   return { Q1: false }
 }
 
+const contextAcquisitionQuestions = Object.fromEntries(
+  DECLARED_TOOLS.map((tool, index) => [
+    `Q${index + 1}`,
+    {
+      get_maze_structure: "Did the agent obtain the maze structure on every prediction turn?",
+      get_prediction_rules: "Did the agent obtain the prediction rules on every prediction turn?",
+      get_last_prediction_outcome: "Did the agent obtain the last prediction outcome on every prediction turn?",
+    }[tool] ?? `Did the agent obtain ${tool} on every prediction turn?`,
+  ]),
+)
+
 const CAPABILITIES = [
-  ["C1", "INSTRUCTION ADHERENCE", instructionAdherence],
-  ["C2", "VALID ACTION DELIVERY", validActionDelivery],
-  ["C3", "CONTEXT ACQUISITION", contextAcquisition],
-  ["C4", "STATE AWARENESS", stateAwareness],
-  ["C5", "RESOURCE EFFICIENCY", resourceEfficiency],
-  ["C6", "MULTI-STEP EXECUTION", multiStepExecution],
-  ["C7", "STRUCTURAL REASONING", structuralReasoning],
-  ["C8", "ADAPTIVE RECOVERY", adaptiveRecovery],
-  ["C9", "TASK COMPLETION", taskCompletion],
+  {
+    id: "C1",
+    label: "INSTRUCTION ADHERENCE",
+    questions: {
+      Q1: "Were all extracted prediction responses bare JSON with no Markdown fences or prose?",
+      Q2: "Did every prediction object contain exactly one top-level key named moves?",
+      Q3: "Were all submitted commands MoveUp, MoveDown, MoveLeft, or MoveRight?",
+    },
+    evaluate: instructionAdherence,
+  },
+  {
+    id: "C2",
+    label: "VALID ACTION DELIVERY",
+    questions: {Q1: "Did the agent produce at least one successfully applied move?"},
+    evaluate: validActionDelivery,
+  },
+  {
+    id: "C3",
+    label: "CONTEXT ACQUISITION",
+    questions: contextAcquisitionQuestions,
+    evaluate: contextAcquisition,
+  },
+  {
+    id: "C4",
+    label: "STATE AWARENESS",
+    questions: {
+      Q1: "Where the current cell's exits were known, was every first submitted move a confirmed open move?",
+    },
+    evaluate: stateAwareness,
+  },
+  {
+    id: "C5",
+    label: "RESOURCE EFFICIENCY",
+    questions: {
+      Q1: "Was the final recorded traversal speed at least 1.0000 unique cells per charged decay unit?",
+    },
+    evaluate: resourceEfficiency,
+  },
+  {
+    id: "C6",
+    label: "MULTI-STEP EXECUTION",
+    questions: {
+      Q1: "Did the agent submit at least one prediction containing two or more moves?",
+      Q2: "Did every move apply in at least one prediction containing two or more moves?",
+    },
+    evaluate: multiStepExecution,
+  },
+  {
+    id: "C7",
+    label: "STRUCTURAL REASONING",
+    questions: {
+      Q1: "Did a fully applied multi-move prediction start through two confirmed consecutive corridor cells?",
+      Q2: "Did the sampled level end in a win with traversal speed above 1.0000?",
+    },
+    evaluate: structuralReasoning,
+  },
+  {
+    id: "C8",
+    label: "ADAPTIVE RECOVERY",
+    questions: {
+      Q1: "After a partially or wholly failed prediction, did the next prediction apply at least two consecutive moves?",
+    },
+    evaluate: adaptiveRecovery,
+  },
+  {
+    id: "C9",
+    label: "TASK COMPLETION",
+    questions: {Q1: "Did the agent reach the destination in any sampled round?"},
+    evaluate: taskCompletion,
+  },
 ]
 
 const VIOLATIONS = [
-  ["V1", "TOOL HALLUCINATION", hallucinations],
-  ["V2", "OUTPUT CONTRACT FAILURE", outputContractFailure],
-  ["V3", "WARNING DISREGARD", warningDisregard],
-  ["V4", "AVAILABLE-CONTEXT DISREGARD", availableContextDisregard],
-  ["V5", "RESOURCE WASTE", resourceWaste],
-  ["V6", "FAILED-STATE REPETITION", failedStateRepetition],
+  {
+    id: "V1",
+    label: "TOOL HALLUCINATION",
+    questions: {Q1: "Did the agent call a tool outside the declared tool set?"},
+    evaluate: hallucinations,
+  },
+  {
+    id: "V2",
+    label: "OUTPUT CONTRACT FAILURE",
+    questions: {
+      Q1: "Did any final response contain content from which no moves prediction could be extracted?",
+      Q2: "Did any final response contain neither content nor tool calls, including no message object?",
+    },
+    evaluate: outputContractFailure,
+  },
+  {
+    id: "V3",
+    label: "WARNING DISREGARD",
+    questions: {Q1: "Did the agent repeat a duplicate tool call after receiving a warning?"},
+    evaluate: warningDisregard,
+  },
+  {
+    id: "V4",
+    label: "AVAILABLE-CONTEXT DISREGARD",
+    questions: {Q1: "Did any submitted move contradict the confirmed open moves of a known cell?"},
+    evaluate: availableContextDisregard,
+  },
+  {
+    id: "V5",
+    label: "RESOURCE WASTE",
+    questions: {
+      Q1: "Was any known cell entered more times than its confirmed open-move count?",
+      Q2: "Did the agent single-step where two consecutive branchless corridor cells were already known?",
+      Q3: "Did any response exhaust the configured completion-token cap?",
+    },
+    evaluate: resourceWaste,
+  },
+  {
+    id: "V6",
+    label: "FAILED-STATE REPETITION",
+    questions: {Q1: "From the same cell, did the agent repeat a moves array already proven wholly invalid there?"},
+    evaluate: failedStateRepetition,
+  },
 ]
 
 // A capability needs every question answered yes; a violation needs only one. The assertion is not
@@ -591,12 +699,16 @@ function aggregate(answers, kind) {
 export function answerRubric(entries, { label = "log" } = {}) {
   const context = buildContext(entries, { label })
 
-  const answerGroup = ([id, groupLabel, question], kind) => {
-    const answers = question(context)
+  const answerGroup = ({id, label: groupLabel, questions, evaluate}, kind) => {
+    const answers = evaluate(context)
+    if (Object.keys(answers).join() !== Object.keys(questions).join()) {
+      throw new Error(`${id} question definitions do not match its evaluated answers`)
+    }
     const values = Object.values(answers)
     return {
       id,
       label: groupLabel,
+      questions,
       answers,
       met: aggregate(answers, kind),
       passed: values.filter(Boolean).length,

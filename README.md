@@ -5,8 +5,8 @@
 
 Tapoo Oracle is the analytics extension of [Tapoo](https://github.com/dmigwi/tapoo). It is an
 [Observable Framework](https://observablehq.com/framework/) app that reads a downloaded Tapoo
-`agent-api` gameplay log and reports the agent's behavior profile against the
-[Tapoo Agentic Behavior Rubric](docs/TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md).
+`agent-api` gameplay log and reports the agent's behavior profile against fact questions defined by
+the rubric engine and displayed directly beside their answers in the report.
 
 The profile is a factual reasoning record, not a scorecard. Nine capability groups (`C1`–`C9`) and
 six violation groups (`V1`–`V6`) are each answered strictly YES or NO from logged evidence, reported
@@ -85,8 +85,7 @@ is uploaded.
 .
 ├─ .github/workflows        # CI and manual Pages deployment
 ├─ docs
-│  ├─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC.md        # the rubric both front ends answer
-│  └─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC_NOTES.md  # why each group is worded as it is
+│  └─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC_NOTES.md  # evaluator implementation notes
 ├─ scripts
 │  ├─ hooks/pre-commit      # lint and tests
 │  └─ agentic-analysis.mjs  # terminal front end
@@ -103,8 +102,9 @@ is uploaded.
 **`src/components/oracle.js`** holds no analysis of its own. It turns one engine result into
 presentation, and is the only place to change how a profile is displayed.
 
-**`src/analysis/`** is the analysis itself, and the only copy of it. Both front ends call
-it, so a change here changes what the terminal report and this app both answer.
+**`src/analysis/`** is the analysis itself. The rubric engine keeps each fact-question definition
+beside its evaluator and returns both to the app, so the visible wording cannot drift from the
+question that was answered.
 
 ## Command reference
 

@@ -4,7 +4,7 @@ import fixture from "../analysis/fixtures/sample-agent-api-log.json"
 import {
   analyzeLogText,
   diagnosticRows,
-  groupRows,
+  rubricQuestionRows,
   narrativeSummary,
   profileCards,
   provenanceRows,
@@ -64,11 +64,21 @@ describe("presentation", () => {
     expect(cards.map((card) => card.label)).not.toContain("Score")
   })
 
-  it("keeps partial evidence visible beside a negative verdict", () => {
-    const structural = groupRows(report.capabilities).find((row) => row.id === "C7")
-    expect(structural.verdict).toBe("no")
-    expect(structural.evidence).toBe("1/2")
-    expect(structural.questions).toBe("Q1:n  Q2:Y")
+  it("shows every fact question with its answer and group result", () => {
+    const rows = rubricQuestionRows(report.capabilities)
+    const structural = rows.filter((row) => row.id.startsWith("C7."))
+
+    expect(structural).toHaveLength(2)
+    expect(structural[0]).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (1/2)"})
+    expect(structural[0].question).toMatch(/corridor cells/)
+    expect(structural[1]).toMatchObject({id: "C7.Q2", answer: "YES", groupResult: "NO (1/2)"})
+  })
+
+  it("provides one definition for every evaluated rubric answer", () => {
+    for (const group of [...report.capabilities, ...report.violations]) {
+      expect(Object.keys(group.questions)).toEqual(Object.keys(group.answers))
+      expect(Object.values(group.questions).every((question) => question.length > 0)).toBe(true)
+    }
   })
 
   it("marks endpoint failures as unscored", () => {
