@@ -1,30 +1,49 @@
 import { describe, expect, it } from "vitest"
 
-import { LOG_EVENTS } from "./log-contract.js"
-import { CAPABILITIES, VIOLATIONS, aggregate, answerRubric, parsePrediction } from "./rubric-engine.js"
+import {LOG_EVENTS} from "./log-contract"
+import {answerRubric} from "./report"
+import {CAPABILITIES, VIOLATIONS, aggregate, parsePrediction} from "./rubric-engine"
+import type {GroupResult, LogEntry, LogLevel, Report} from "./types"
+import {at} from "./test-support";
 
 // A log is a sequence of entries, and every question below is answered from what those entries do or
 // do not contain. These builders keep each test to the entries it is actually about: anything a test
 // does not add is absent from the log, which is the state the rubric answers NO for.
 let clock = 0
 
-function entry(payload, details, {log = "info", turn = 0} = {}) {
+function entry(
+  payload: string,
+  details?: unknown,
+  {log = "info", turn = 0}: {log?: LogLevel; turn?: number} = {},
+): LogEntry {
   clock += 1000
   return {epochMs: clock, time: "2026-08-31T09-00-00+02-00", level: 1, game: 1, turn, log, payload, details}
 }
 
-const toolMessage = (payload) => ({role: "tool", content: JSON.stringify(payload)})
+const toolMessage = (payload: unknown) => ({role: "tool", content: JSON.stringify(payload)})
 
 // One turn: the request carrying whichever tool results it read, then the model's reply.
-function turn(number, {tools = [], content, messages = []} = {}) {
+function turn(
+  number: number,
+  {tools = [], content, messages = []}: {tools?: string[]; content?: string; messages?: unknown[]} = {},
+): LogEntry[] {
   return [
     entry(LOG_EVENTS.request, {tools: tools.map((name) => ({name})), messages}, {turn: number}),
     entry(LOG_EVENTS.response, {payload: {model: "test-model", message: {content}}}, {turn: number}),
   ]
 }
 
-const group = (report, id) =>
-  [...report.capabilities, ...report.violations].find((candidate) => candidate.id === id)
+const firstLevel = (report: Report) => {
+  const level = report.levels[0]
+  if (!level) throw new Error("expected at least one round")
+  return level
+}
+
+const group = (report: Report, id: string): GroupResult => {
+  const found = [...report.capabilities, ...report.violations].find((candidate) => candidate.id === id)
+  if (!found) throw new Error(`no such group: ${id}`)
+  return found
+}
 
 describe("aggregate", () => {
   // The two kinds read the same answers in opposite directions, and the whole report depends on it:
@@ -42,7 +61,7 @@ describe("aggregate", () => {
   // A question that returned undefined would otherwise count as a quiet NO, turning a broken
   // evaluator into a clean-looking report rather than an error.
   it("refuses an answer that is not a boolean", () => {
-    expect(() => aggregate({a: true, b: undefined}, "capability")).toThrow(/non-boolean/)
+    expect(() => aggregate({a: true, b: undefined as unknown as boolean}, "capability")).toThrow(/non-boolean/)
   })
 })
 
@@ -260,5 +279,183 @@ describe("answerRubric", () => {
       expect(report.traversalSpeed).toBeNull()
       expect(report.traversalSpeedClass).toBeNull()
     })
+  })
+})
+
+// Downloaded logs compact every get_maze_structure result before writing it: cells become [row, col]
+// arrays and openMoves becomes [move, visitStatus] pairs. Only the uncompacted object form used to be
+// read, so against a real export every cell key became "undefined,undefined" and every move name became
+// an array index - which did not fail, it just answered C4, C7, V4 and V5 about nothing at all. These
+// fixtures are in the shape a real download actually carries.
+describe("compacted log shape", () => {
+  const compactStructure = (currentCell: [number, number], history: Array<[[number, number], string[]]>) =>
+    toolMessage({
+      currentCell,
+      filteredTraversalHistory: history.map(([cell, openMoves]: [[number, number], string[]]) => ({
+        playerName: "Katara",
+        cell,
+        openMoves: openMoves.map((move: string) => [move, "explored"]),
+      })),
+    })
+
+  // A two-cell corridor: (0,0) opens down into (1,0), and nothing else is open anywhere.
+  const compactedLog = [
+    ...turn(0, {
+      tools: ["get_maze_structure"],
+      messages: [compactStructure([0, 0], [[[0, 0], ["MoveDown"]], [[1, 0], ["MoveUp"]]])],
+      content: '{"moves":["MoveDown"]}',
+    }),
+    ...turn(1, {
+      tools: ["get_maze_structure"],
+      messages: [compactStructure([1, 0], [[[0, 0], ["MoveDown"]], [[1, 0], ["MoveUp"]]])],
+      content: '{"moves":["MoveUp"]}',
+    }),
+  ]
+
+  it("reads real cell keys and move names, not undefined and array indices", () => {
+    const report = answerRubric(compactedLog)
+    const level = firstLevel(report)
+
+    expect([...level.observedExits.keys()]).toEqual(["0,0", "1,0"])
+    expect([...(level.observedExits.get("0,0") ?? [])]).toEqual(["MoveDown"])
+    expect(level.positions).toEqual(["0,0", "1,0"])
+  })
+
+  it("does not confirm a context violation for moves the maze allows", () => {
+    // Every submitted move is an exit the log states outright, so V4 has nothing to fire on. Before the
+    // shape fix this answered YES, accusing the model on the strength of a junk exit set.
+    expect(group(answerRubric(compactedLog), "V4").met).toBe(false)
+  })
+
+  it("confirms a context violation for a move the maze forbids", () => {
+    const walledLog = [
+      ...turn(0, {
+        tools: ["get_maze_structure"],
+        messages: [compactStructure([0, 0], [[[0, 0], ["MoveDown"]]])],
+        content: '{"moves":["MoveRight"]}',
+      }),
+    ]
+
+    expect(group(answerRubric(walledLog), "V4").met).toBe(true)
+  })
+
+  it("still reads the uncompacted shape, which older logs carry", () => {
+    const uncompacted = [
+      ...turn(0, {
+        tools: ["get_maze_structure"],
+        messages: [
+          toolMessage({
+            currentCell: {row: 0, col: 0},
+            filteredTraversalHistory: [
+              {cell: {row: 0, col: 0}, openMoves: {MoveDown: {row: 1, col: 0}}},
+            ],
+          }),
+        ],
+        content: '{"moves":["MoveDown"]}',
+      }),
+    ]
+
+    expect([...firstLevel(answerRubric(uncompacted)).observedExits.keys()]).toEqual(["0,0"])
+  })
+})
+
+describe("C5 resource efficiency", () => {
+  const rules = (cells: number, decay: number) =>
+    toolMessage({suggestedMovesPerTurn: 2, playerUniqueCellsVisited: cells, decayUnitsCharged: decay})
+
+  it("uses the settled round-end totals rather than the last mid-round reading", () => {
+    // The rubric asks this at round end and requires the winning turn to be counted. Mid-round the
+    // agent reads 15/16 = 0.9375; the round settles at 17/17 = 1.0000, which is the answer.
+    const report = answerRubric([
+      ...turn(0, {tools: ["get_prediction_rules"], messages: [rules(15, 16)], content: '{"moves":["MoveUp"]}'}),
+      entry(LOG_EVENTS.levelWon, {
+        outcome: "won",
+        traversalSpeed: "1.0000",
+        agent: {playerName: "Katara"},
+        playerUniqueCellsVisited: 17,
+        decayUnitsCharged: 17,
+      }),
+    ])
+
+    expect(group(report, "C5").met).toBe(true)
+  })
+
+  it("falls back to the last reading when the round end records no totals", () => {
+    // Older logs end a round without those fields. Reading them as zero would answer no for a round the
+    // per-turn readings already prove efficient.
+    const report = answerRubric([
+      ...turn(0, {tools: ["get_prediction_rules"], messages: [rules(4, 2)], content: '{"moves":["MoveUp"]}'}),
+      entry(LOG_EVENTS.levelWon, {outcome: "won", traversalSpeed: "2.0000", agent: {playerName: "Blue"}}),
+    ])
+
+    expect(group(report, "C5").met).toBe(true)
+  })
+})
+
+describe("buildLevels", () => {
+  const round = (game: number, level: number, content: string) => [
+    entry(LOG_EVENTS.levelStarted, {startPosition: {x: 1, y: 1}}, {turn: 0}),
+    ...turn(0, {tools: ["get_maze_structure"], content}),
+  ].map((record) => ({...record, game, level}))
+
+  it("keeps a retry of the same level as its own round", () => {
+    // A retry regenerates the maze, so grouping by level alone would merge two different mazes and draw
+    // a path crossing walls that exist in neither.
+    const report = answerRubric([
+      ...round(1, 1, '{"moves":["MoveDown"]}'),
+      ...round(2, 1, '{"moves":["MoveUp"]}'),
+    ])
+
+    expect(report.levels.map((level) => level.key)).toEqual(["1/1", "2/1"])
+    expect(firstLevel(report).startCell).toBe("0,0")
+  })
+
+  it("attributes a turn to the acting agent named in the request", () => {
+    const report = answerRubric([
+      entry(LOG_EVENTS.request, {
+        player: "Katara the Trailblazer - Default",
+        tools: [{name: "get_maze_structure"}],
+        messages: [
+          toolMessage({
+            currentCell: [0, 0],
+            filteredTraversalHistory: [{playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          }),
+        ],
+      }, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {model: "m", message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
+    ])
+
+    expect(firstLevel(report).turns[0]?.playerName).toBe("Katara")
+  })
+
+  it("records the refused move of a turn that was cut short", () => {
+    const report = answerRubric([
+      ...turn(0, {
+        tools: ["get_maze_structure"],
+        messages: [
+          toolMessage({
+            currentCell: [0, 0],
+            filteredTraversalHistory: [{playerName: "K", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          }),
+        ],
+        content: '{"moves":["MoveDown","MoveUp"]}',
+      }),
+      entry(LOG_EVENTS.request, {
+        tools: [{name: "get_last_prediction_outcome"}],
+        messages: [
+          toolMessage({
+            lastMoveStatus: "invalid-move",
+            lastSubmittedMoves: ["MoveDown", "MoveUp"],
+            lastAppliedMoveIndex: 0,
+            chargedMovesCount: 2,
+          }),
+        ],
+      }, {turn: 1}),
+    ])
+
+    const first = at(at(report.levels, 0).turns, 0)
+    expect(first.applied).toBe(1)
+    expect(first.rejectedMove).toBe("MoveUp")
+    expect(first.cells).toEqual(["0,0", "1,0"])
   })
 })

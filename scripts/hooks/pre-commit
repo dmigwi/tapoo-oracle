@@ -1,10 +1,19 @@
 #!/bin/sh
 # Pre-commit hook for tapoo-oracle.
 #
-# Runs the checks that are cheap locally and expensive to discover in CI: lint and the test suite.
+# Runs the checks that are cheap locally and expensive to discover in CI: the type check, lint and the
+# test suite. The type check runs first - a type error usually explains the lint findings after it.
 # Nothing here reaches the network, so committing never depends on GitHub being available.
 
 set -e
+
+echo "Type-checking..."
+if ! pnpm run typecheck; then
+    echo ""
+    echo "Commit rejected: tsc found type errors."
+    echo ""
+    exit 1
+fi
 
 echo "Running eslint..."
 if ! pnpm run lint; then

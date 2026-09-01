@@ -1,33 +1,19 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
-import {
-  addReportTab,
-  analyzeLogText,
-  createInitialReportTabs,
-  deleteReportTab,
-  diagnosticRows,
-  diagnosticTableData,
-  groupResultTone,
-  loadNewReportTabFromUrl,
-  loadReportTabFromUrl,
-  rubricQuestionRows,
-  narrativeSummary,
-  profileCards,
-  provenanceRows,
-  provenanceTableData,
-  reportTabLabelFromUrl,
-  trimReportTabLabel,
-  validateOnlineJsonUrl,
-} from "./oracle.js"
+import {diagnosticRows, diagnosticTableData, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows} from "./report-adapters"
+import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
+import {validateOnlineJsonUrl} from "./share-link"
+import type {Report, ReportTabsState, TapooLog} from "./types"
+import {at, expectErr, expectOk, must} from "./test-support";
 
 const fixtureUrl =
   "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c/raw/" +
   "9495b1c9b5c69f0c4276dd0d9ea1ae638be8db58/sample-agent-api-log.json"
 
-let fixture
-let fixtureText
-let fixtureReport
-let fixtureSource
+let fixture: Record<string, unknown>
+let fixtureText: string
+let fixtureReport: Report
+let fixtureSource: TapooLog
 
 beforeAll(async () => {
   let response
@@ -44,7 +30,7 @@ beforeAll(async () => {
   }
 
   fixtureText = await response.text()
-  fixture = JSON.parse(fixtureText)
+  fixture = JSON.parse(fixtureText) as Record<string, unknown>
 
   const result = analyzeLogText(fixtureText, {label: "fixture"})
   if (!result.ok) {
@@ -60,10 +46,10 @@ describe("analyzeLogText", () => {
     const result = analyzeLogText(fixtureText, { label: "fixture" })
 
     expect(result.ok).toBe(true)
-    expect(result.warnings).toEqual([])
-    expect(result.report.model).toBe("test-model")
-    expect(result.report.capabilities).toHaveLength(9)
-    expect(result.report.violations).toHaveLength(6)
+    expect(expectOk(result).warnings).toEqual([])
+    expect(expectOk(result).report.model).toBe("test-model")
+    expect(expectOk(result).report.capabilities).toHaveLength(9)
+    expect(expectOk(result).report.violations).toHaveLength(6)
   })
 
   it("explains an empty input rather than failing silently", () => {
@@ -76,7 +62,7 @@ describe("analyzeLogText", () => {
   it("reports malformed JSON", () => {
     const result = analyzeLogText("{not json")
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/^Not valid JSON:/)
+    expect(expectErr(result).error).toMatch(/^Not valid JSON:/)
   })
 
   // The previous analyzer accepted any JSON and inferred "events" from guessed key names, so an
@@ -85,13 +71,13 @@ describe("analyzeLogText", () => {
   it("rejects JSON that is not a Tapoo export", () => {
     const result = analyzeLogText(JSON.stringify({ turns: [{ action: "move", status: "applied" }] }))
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/Not a Tapoo log export/)
+    expect(expectErr(result).error).toMatch(/Not a Tapoo log export/)
   })
 
   it("surfaces contract warnings without refusing the log", () => {
     const result = analyzeLogText(JSON.stringify({ ...fixture, mode: "human" }))
     expect(result.ok).toBe(true)
-    expect(result.warnings.join(" ")).toMatch(/not "agent-api"/)
+    expect(expectOk(result).warnings.join(" ")).toMatch(/not "agent-api"/)
   })
 
   it("retains the source URL when one is provided", () => {
@@ -101,7 +87,7 @@ describe("analyzeLogText", () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(result.source.sourceUrl).toBe("https://example.com/logs/sample-agent-api-log.json")
+    expect(expectOk(result).source.sourceUrl).toBe("https://example.com/logs/sample-agent-api-log.json")
   })
 })
 
@@ -137,7 +123,7 @@ describe("report URL tabs", () => {
   })
 
   it("deletes the active tab and selects the nearest remaining tab", () => {
-    const state = {
+    const state: ReportTabsState = {
       ...createInitialReportTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "loaded"},
@@ -153,7 +139,7 @@ describe("report URL tabs", () => {
   })
 
   it("returns to an empty report list after the last tab is deleted", () => {
-    const state = {
+    const state: ReportTabsState = {
       ...createInitialReportTabs(),
       tabs: [{id: "only", url: "https://example.com/only.json", label: "Only", status: "loaded"}],
       activeTabId: "only",
@@ -176,12 +162,12 @@ describe("report URL tabs", () => {
       status: "loaded",
       loadedUrl: "https://example.com/first.json",
     })
-    expect(first.result.ok).toBe(true)
+    expect(must(must(first, "the loaded tab").result, "an analysis on the loaded tab").ok).toBe(true)
     expect(next).toMatchObject({activeTabId: "first", isAdding: false, draftUrl: ""})
   })
 
   it("loads one existing tab without mutating other tabs", async () => {
-    const state = {
+    const state: ReportTabsState = {
       ...createInitialReportTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "empty"},
@@ -195,18 +181,19 @@ describe("report URL tabs", () => {
     const second = next.tabs.find((tab) => tab.id === "second")
 
     expect(first).toMatchObject({label: "first.json", status: "loaded"})
-    expect(first.result.ok).toBe(true)
+    expect(must(must(first, "the loaded tab").result, "an analysis on the loaded tab").ok).toBe(true)
     expect(second).toMatchObject({url: "https://example.com/second.json", status: "empty"})
   })
 
   it("stores load failures on the owning tab", async () => {
-    const tabState = {
+    const tabState: ReportTabsState = {
+      ...createInitialReportTabs(),
       tabs: [{id: "missing", url: "notaurl", label: "New report", status: "empty"}],
       activeTabId: "missing",
     }
 
     const next = await loadReportTabFromUrl(tabState, "missing", async () => fixtureText)
-    expect(next.tabs[0]).toMatchObject({
+    expect(at(next.tabs, 0)).toMatchObject({
       status: "error",
       error: "Enter a valid URL.",
     })
@@ -228,8 +215,8 @@ describe("report URL tabs", () => {
 describe("presentation", () => {
   it("keeps capabilities and violations as separate fractions", () => {
     const cards = profileCards(fixtureReport)
-    expect(cards[0]).toMatchObject({ label: "Capabilities demonstrated", value: "7/9" })
-    expect(cards[1]).toMatchObject({ label: "Violations confirmed", value: "0/6" })
+    expect(at(cards, 0)).toMatchObject({ label: "Capabilities demonstrated", value: "7/9" })
+    expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "0/6" })
 
     // The rubric forbids collapsing the two into one score interval.
     expect(cards.map((card) => card.label)).not.toContain("Score")
@@ -237,12 +224,12 @@ describe("presentation", () => {
 
   it("shows every fact question with its answer and group result", () => {
     const rows = rubricQuestionRows(fixtureReport.capabilities)
-    const structural = rows.filter((row) => row.id.startsWith("C7."))
+    const structural = rows.filter((row) => row.id?.startsWith("C7.") ?? false)
 
     expect(structural).toHaveLength(2)
-    expect(structural[0]).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (1/2)"})
-    expect(structural[0].question).toMatch(/corridor cells/)
-    expect(structural[1]).toMatchObject({id: "C7.Q2", answer: "YES", groupResult: "NO (1/2)"})
+    expect(at(structural, 0)).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (1/2)"})
+    expect(at(structural, 0).question).toMatch(/corridor cells/)
+    expect(at(structural, 1)).toMatchObject({id: "C7.Q2", answer: "YES", groupResult: "NO (1/2)"})
   })
 
   it("provides one definition for every evaluated rubric answer", () => {
@@ -253,7 +240,7 @@ describe("presentation", () => {
   })
 
   it("marks endpoint failures as unscored", () => {
-    const endpoint = diagnosticRows(fixtureReport).find((row) => row.signal === "Endpoint failures")
+    const endpoint = must(diagnosticRows(fixtureReport).find((row) => row.signal === "Endpoint failures"), "a matching row")
     expect(endpoint.scored).toBe("no")
   })
 
@@ -282,11 +269,12 @@ describe("presentation", () => {
 
   it("describes provenance without inventing missing fields", () => {
     const rows = provenanceRows(fixtureSource, fixtureReport)
-    expect(rows.find((row) => row.field === "Tapoo version").value).toBe("2.5.0")
+    expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.0")
 
     const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
-    const missing = provenanceRows(withoutVersion.source, withoutVersion.report)
-    expect(missing.find((row) => row.field === "Tapoo version").value).toBe("not recorded")
+    const withoutVersionOk = expectOk(withoutVersion)
+    const missing = provenanceRows(withoutVersionOk.source, withoutVersionOk.report)
+    expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
   it("pivots provenance into one complete row", () => {

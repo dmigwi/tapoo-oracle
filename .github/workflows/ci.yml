@@ -35,6 +35,9 @@ jobs:
       - name: Audit the dependency graph
         run: pnpm audit --audit-level=low
 
+      - name: Type-check
+        run: pnpm run typecheck
+
       - name: Lint
         run: pnpm run lint
 

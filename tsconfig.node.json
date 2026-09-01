@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "vitest.config.ts",
+    "scripts/**/*.mjs",
+    // Reads src/*.md off disk, so it needs node's types rather than the DOM's.
+    "src/lib/markdown-fences.test.ts"
+  ],
+
+  // `exclude` is inherited through `extends`, and the base excludes the file just named above - so
+  // without this the guard belongs to no project at all and `tsc` passes by never reading it.
+  "exclude": []
+}

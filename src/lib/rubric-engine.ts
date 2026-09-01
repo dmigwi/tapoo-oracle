@@ -20,25 +20,48 @@
 import {
   DECLARED_TOOLS,
   LOG_EVENTS,
-  MOVES,
-  cellKey,
-  classifyTraversalSpeed,
   stepFrom,
-} from "./log-contract.js"
+  cellFromLogged,
+  isMove,
+  movesFromLogged,
+} from "./log-contract"
+import type {
+  CellKey,
+  Context,
+  GroupKind,
+  LogEntry,
+  Outcome,
+  Submission,
+  RubricGroup,
+} from "./types"
+
+// --- Reading a log entry ---
+
+// asRecord is the boundary between arbitrary JSON and everything below it.
+//
+// A log's `details` and a tool result's parsed content are whatever the producer wrote. Narrowing them
+// to a record of unknowns - rather than trusting a shape - is what forces each read below to say what
+// it expects, and is why a malformed field now produces a skipped entry instead of a TypeError that
+// takes the whole report down with it.
+export const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+// asArray keeps a field that should be a list from being iterated when it is not one.
+export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
 // parsePrediction recovers the moves array a model submitted, mirroring the three tiers
 // frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
 // prose. The tier matters on its own - it is what C1.Q1 scores - so it is returned, not discarded.
-function parsePrediction(content) {
-  if (!content?.trim()) {
+export function parsePrediction(content: unknown): Omit<Submission, "turn"> | null {
+  if (typeof content !== "string" || !content.trim()) {
     return null
   }
 
   const text = content.trim()
-  const candidates = [[text, 1]]
+  const candidates: Array<[string, Submission["tier"]]> = [[text, 1]]
 
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
-  if (fenced) {
+  if (fenced?.[1]) {
     candidates.push([fenced[1].trim(), 2])
   }
 
@@ -49,9 +72,21 @@ function parsePrediction(content) {
 
   for (const [candidate, tier] of candidates) {
     try {
-      const parsed = JSON.parse(candidate)
-      if (parsed && typeof parsed === "object" && "moves" in parsed) {
-        return { moves: parsed.moves, tier, keys: Object.keys(parsed) }
+      // JSON.parse is `any`; narrowing here is what stops an arbitrary model response being carried
+      // into the rubric as if its shape were known. `moves` stays unknown[] on purpose - what the
+      // model sent is exactly the thing the questions are asking about.
+      const parsed: unknown = JSON.parse(candidate)
+      if (parsed !== null && typeof parsed === "object" && "moves" in parsed) {
+        // A `moves` that is not a list is a malformed prediction, and it becomes an empty one rather
+        // than a one-move one: wrapping it would let `{"moves": "MoveUp"}` be scored as a valid single
+        // move, which is the opposite of what the questions are asking. The key is still recorded in
+        // `keys`, so the difference between "no moves key" and "a moves key holding junk" survives.
+        //
+        // Before this returned whatever the model sent, and a string reached `.every` in the rubric -
+        // not a function on a string - so one malformed response threw out of answerRubric and took
+        // the whole page render with it.
+        const moves: unknown = parsed.moves
+        return {moves: Array.isArray(moves) ? moves : [], tier, keys: Object.keys(parsed)}
       }
     } catch {
       // Candidate was not JSON; fall through to the next tier.
@@ -61,16 +96,18 @@ function parsePrediction(content) {
   return null
 }
 
+// --- Building the context ---
+
 // buildContext walks the log once and derives everything the questions need. It takes already-parsed
 // entries rather than a path so the same derivation serves a file on disk and a pasted payload.
-export function buildContext(entries, { label = "log" } = {}) {
+export function buildContext(entries: LogEntry[], { label = "log" }: { label?: string } = {}): Context {
 
   // Logs written before the turn counter landed have no turn field, so turn boundaries are inferred
   // from predictions instead - exactly one closes each turn. Without this every entry collapses onto
   // turn 0 and the per-turn questions pass trivially.
   const hasTurnField = entries.some((entry) => "turn" in entry)
 
-  const context = {
+  const context: Context = {
     label,
     model: null,
     player: null,
@@ -84,7 +121,6 @@ export function buildContext(entries, { label = "log" } = {}) {
     turnTools: new Map(),
     turnsWithPrediction: new Set(),
     speedReadings: [],
-    suggested: null,
     outcomes: [],
     duplicatesAfterWarning: 0,
     hallucinated: 0,
@@ -97,60 +133,62 @@ export function buildContext(entries, { label = "log" } = {}) {
   let currentTurn = 0
   let lastReplayKey = null
 
-  const noteTool = (name) => {
-    if (!context.turnTools.has(currentTurn)) {
-      context.turnTools.set(currentTurn, new Set())
-    }
-    context.turnTools.get(currentTurn).add(name)
+  const noteTool = (name: string): void => {
+    const tools = context.turnTools.get(currentTurn) ?? new Set<string>()
+    tools.add(name)
+    context.turnTools.set(currentTurn, tools)
   }
 
   for (const entry of entries) {
-    const details = entry.details ?? {}
+    const details = asRecord(entry.details)
 
     if (entry.payload === LOG_EVENTS.request) {
-      if (hasTurnField) {
+      if (hasTurnField && typeof entry.turn === "number") {
         currentTurn = entry.turn
       }
 
-      for (const tool of details.tools ?? []) {
+      for (const tool of asArray(details.tools).map(asRecord)) {
         // Logs record tools flat as { name, description }; the wire format nests them under
         // `function`. Accepting either keeps declaredTools populated - an empty set would make every
         // legitimate call look hallucinated.
-        const name = tool.name ?? tool.function?.name
-        if (name) {
+        const name = tool.name ?? asRecord(tool.function).name
+        if (typeof name === "string" && name) {
           context.declaredTools.add(name)
         }
       }
 
-      for (const message of details.messages ?? []) {
+      for (const message of asArray(details.messages).map(asRecord)) {
         if (message.role !== "tool") {
           continue
         }
 
-        let payload
+        let parsed: unknown
         try {
-          payload = JSON.parse(message.content ?? "")
+          parsed = JSON.parse(typeof message.content === "string" ? message.content : "")
         } catch {
           continue
         }
-        if (!payload || typeof payload !== "object") {
+        if (!parsed || typeof parsed !== "object") {
           continue
         }
+        const payload = parsed as Record<string, unknown>
 
         if ("filteredTraversalHistory" in payload) {
           noteTool("get_maze_structure")
-          for (const record of payload.filteredTraversalHistory) {
-            context.exits.set(
-              cellKey(record.cell.row, record.cell.col),
-              new Set(Object.keys(record.openMoves ?? {})),
-            )
+          // Guarded as an array: the key being present does not make the value iterable, and a
+          // non-list here used to throw straight out of the report.
+          for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
+            const cell = cellFromLogged(record.cell)
+            if (cell) {
+              context.exits.set(cell, movesFromLogged(record.openMoves))
+            }
           }
         }
 
         if ("currentCell" in payload) {
           noteTool("get_maze_structure")
-          if (payload.currentCell) {
-            const cell = cellKey(payload.currentCell.row, payload.currentCell.col)
+          const cell = cellFromLogged(payload.currentCell)
+          if (cell) {
             // Consecutive identical readings are one arrival, not several.
             if (context.positions.at(-1) !== cell) {
               context.positions.push(cell)
@@ -161,10 +199,9 @@ export function buildContext(entries, { label = "log" } = {}) {
 
         if ("suggestedMovesPerTurn" in payload) {
           noteTool("get_prediction_rules")
-          context.suggested = payload.suggestedMovesPerTurn
           context.speedReadings.push([
-            payload.playerUniqueCellsVisited ?? 0,
-            payload.decayUnitsCharged ?? 0,
+            Number(payload.playerUniqueCellsVisited ?? 0),
+            Number(payload.decayUnitsCharged ?? 0),
           ])
         }
 
@@ -190,8 +227,8 @@ export function buildContext(entries, { label = "log" } = {}) {
     }
 
     if (entry.payload === LOG_EVENTS.response) {
-      const body = details.payload ?? {}
-      context.model = body.model ?? context.model
+      const body = asRecord(details.payload)
+      context.model = typeof body.model === "string" ? body.model : context.model
 
       const message = body.message
       if (!message) {
@@ -199,14 +236,19 @@ export function buildContext(entries, { label = "log" } = {}) {
         continue
       }
 
-      const calls = message.tool_calls ?? []
+      const calls = asArray(asRecord(message).tool_calls).map(asRecord)
       if (calls.length > 0) {
-        context.toolCalls.push(...calls.map((call) => call.function?.name))
+        context.toolCalls.push(
+          ...calls.map((call) => {
+            const name = asRecord(call.function).name
+            return typeof name === "string" ? name : undefined
+          }),
+        )
         continue
       }
 
-      const content = message.content ?? ""
-      if (!content.trim()) {
+      const content = asRecord(message).content
+      if (typeof content !== "string" || !content.trim()) {
         context.emptyResponses += 1
         continue
       }
@@ -244,10 +286,11 @@ export function buildContext(entries, { label = "log" } = {}) {
       // agent but are Tapoo's fault, so they are deliberately not counted here.
       context.endpointFailures += 1
     } else if (entry.payload === LOG_EVENTS.levelWon || entry.payload === LOG_EVENTS.levelLost) {
-      context.outcomes.push(details)
-      context.player = details.agent?.playerName ?? context.player
-      if (details.lastActionResult?.lastMoveStatus) {
-        context.replays.push(details.lastActionResult)
+      const outcome = details as Outcome
+      context.outcomes.push(outcome)
+      context.player = outcome.agent?.playerName ?? context.player
+      if (outcome.lastActionResult?.lastMoveStatus) {
+        context.replays.push(outcome.lastActionResult)
       }
     }
   }
@@ -260,13 +303,17 @@ export function buildContext(entries, { label = "log" } = {}) {
 // can prove it. Neither alone is enough: replay results are absent for a model that never calls
 // get_last_prediction_outcome, and position triangulation is blind whenever a turn is not bracketed by two
 // readings.
-function annotateApplied(context) {
-  const byMoves = new Map()
+function annotateApplied(context: Context): void {
+  const byMoves = new Map<string, number>()
   for (const replay of context.replays) {
-    const submitted = (replay.lastSubmittedMoves ?? []).map((move) => move.split(":").at(-1))
+    // Two different producers push into replays, so the field is only trusted to be a list of strings
+    // once it has been checked here.
+    const submitted = asArray(replay.lastSubmittedMoves)
+      .filter((move): move is string => typeof move === "string")
+      .map((move) => move.split(":").at(-1))
     if (submitted.length > 0) {
       const index = replay.lastAppliedMoveIndex
-      byMoves.set(JSON.stringify(submitted), index === null ? 0 : index + 1)
+      byMoves.set(JSON.stringify(submitted), typeof index === "number" ? index + 1 : 0)
     }
   }
 
@@ -280,14 +327,16 @@ function annotateApplied(context) {
     const after = findCell(context.timeline, position, 1)
     record.before = before
 
-    let applied = byMoves.get(JSON.stringify(record.moves))
+    let applied: number | null | undefined = byMoves.get(JSON.stringify(record.moves))
     if (applied === undefined && before && after) {
       // Position unchanged proves the very first move failed; otherwise the prefix that lands on the
       // observed cell is what applied.
       applied = before === after ? 0 : null
-      let cell = before
+      let cell: CellKey = before
       for (const [step, move] of record.moves.entries()) {
-        if (!MOVES[move]) {
+        // A move the maze cannot apply ends the walk. The submitted array is a model's JSON, so it can
+        // name anything at all.
+        if (!isMove(move)) {
           break
         }
         cell = stepFrom(cell, move)
@@ -302,35 +351,43 @@ function annotateApplied(context) {
   })
 }
 
-function findCell(timeline, from, direction) {
+function findCell(timeline: Context["timeline"], from: number, direction: 1 | -1): CellKey | null {
   for (let i = from + direction; i >= 0 && i < timeline.length; i += direction) {
-    if (timeline[i].kind === "position") {
-      return timeline[i].cell
+    const event = timeline[i]
+    if (event?.kind === "position") {
+      return event.cell
     }
   }
 
   return null
 }
 
-const exitsOf = (context, cell) => context.exits.get(cell) ?? null
-const isCorridor = (context, cell) => exitsOf(context, cell)?.size === 2
-const fullyApplied = (record) => record.applied === record.moves.length
+// --- Shared predicates ---
+
+const exitsOf = (context: Context, cell: CellKey | null | undefined): Set<string> | null =>
+  (cell === null || cell === undefined ? null : context.exits.get(cell)) ?? null
+
+const isCorridor = (context: Context, cell: CellKey | null | undefined): boolean =>
+  exitsOf(context, cell)?.size === 2
+
+const fullyApplied = (record: Submission): boolean => record.applied === record.moves.length
 
 // inConfirmedCorridorRun reports whether at least two forced steps ahead are already known safe:
 // both the current cell and the one the move leads into are confirmed two-exit corridors. That is
 // the shape where batching costs nothing extra and single-stepping wastes a free decay unit.
-function inConfirmedCorridorRun(context, cell, move) {
-  if (!MOVES[move] || !isCorridor(context, cell) || !exitsOf(context, cell)?.has(move)) {
+function inConfirmedCorridorRun(context: Context, cell: CellKey, move: unknown): boolean {
+  if (!isMove(move) || !isCorridor(context, cell) || !exitsOf(context, cell)?.has(move)) {
     return false
   }
 
   return isCorridor(context, stepFrom(cell, move))
 }
 
-// --- capabilities --------------------------------------------------------
+
+// --- Capability questions ---
 
 // C1. INSTRUCTION ADHERENCE   scope: responses a moves array was extracted from
-function instructionAdherence(context) {
+function instructionAdherence(context: Context): Record<string, boolean> {
   const submissions = context.submissions
   if (submissions.length === 0) {
     return { Q1: false, Q2: false, Q3: false }
@@ -342,19 +399,30 @@ function instructionAdherence(context) {
     // Q2. Do all carry no fields beyond "moves"?
     Q2: submissions.every((entry) => entry.keys.length === 1 && entry.keys[0] === "moves"),
     // Q3. Are all move commands one of MoveUp / MoveDown / MoveLeft / MoveRight?
-    Q3: submissions.every((entry) => entry.moves.every((move) => move in MOVES)),
+    Q3: submissions.every((entry) => entry.moves.every((move) => isMove(move))),
   }
 }
 
 // C2. VALID ACTION DELIVERY
 // Q1. Did the agent produce at least one valid move (a successfully applied move)?
-function validActionDelivery(context) {
+function validActionDelivery(context: Context): Record<string, boolean> {
   return { Q1: context.submissions.some((entry) => (entry.applied ?? 0) > 0) }
 }
 
+const contextAcquisitionQuestions = Object.fromEntries(
+  DECLARED_TOOLS.map((tool, index) => [
+    `Q${index + 1}`,
+    {
+      get_maze_structure: "Did the agent obtain the maze structure on every prediction turn?",
+      get_prediction_rules: "Did the agent obtain the prediction rules on every prediction turn?",
+      get_last_prediction_outcome: "Did the agent obtain the last prediction outcome on every prediction turn?",
+    }[tool] ?? `Did the agent obtain ${tool} on every prediction turn?`,
+  ]),
+)
+
 // C3. CONTEXT ACQUISITION - each question asks whether one payload was extracted on
 // every prediction turn.
-function contextAcquisition(context) {
+function contextAcquisition(context: Context): Record<string, boolean> {
   const turns = [...context.turnsWithPrediction]
   const needed = DECLARED_TOOLS
 
@@ -368,30 +436,53 @@ function contextAcquisition(context) {
 
 // C4. STATE AWARENESS
 // Q1. Was each first submitted move consistent with confirmed open exits when known?
-function stateAwareness(context) {
+function stateAwareness(context: Context): Record<string, boolean> {
   const checkable = context.submissions.filter((entry) => entry.before && exitsOf(context, entry.before))
   if (checkable.length === 0) {
     return { Q1: false }
   }
 
-  return { Q1: checkable.every((entry) => exitsOf(context, entry.before).has(entry.moves[0])) }
+  return {
+    Q1: checkable.every((entry) => {
+      const known = exitsOf(context, entry.before)
+      const first = entry.moves[0]
+      return known !== null && typeof first === "string" && known.has(first)
+    }),
+  }
 }
 
 // C5. RESOURCE EFFICIENCY
 // Q1. At round end, is traversal speed (playerUniqueCellsVisited per decayUnitsCharged)
 //     at least 1.0000 (Navigator)?
-function resourceEfficiency(context) {
-  const reading = context.speedReadings.at(-1)
+function resourceEfficiency(context: Context): Record<string, boolean> {
+  // The rubric asks this "at round end", and requires the winning turn's own progress and decay to be
+  // included. speedReadings holds per-request tool readings, so its last entry is the state *before*
+  // the final turn resolved - on a won round that undercounts both terms and answers no for an agent
+  // that finished at exactly 1.0000. The round-end entry carries the settled totals, so it is preferred
+  // and the last reading is used only when no round ended in this sample.
+  // A round-end entry is only preferable when it actually carries both totals: older logs record the
+  // outcome without them, and reading those as a zero pair would answer no for a round whose per-turn
+  // readings prove otherwise. Absent totals fall through to the last reading rather than to a verdict.
+  const outcome = context.outcomes.at(-1)
+  const settled = [outcome?.playerUniqueCellsVisited, outcome?.decayUnitsCharged]
+  const reading = settled.every((value) => Number.isFinite(value))
+    ? settled
+    : context.speedReadings.at(-1)
+
   if (!reading) {
     return { Q1: false }
   }
 
   const [cells, decay] = reading
+  if (cells === undefined || decay === undefined) {
+    return { Q1: false }
+  }
+
   return { Q1: decay > 0 && cells / decay >= 1.0000 }
 }
 
 // C6. MULTI-STEP EXECUTION
-function multiStepExecution(context) {
+function multiStepExecution(context: Context): Record<string, boolean> {
   const batches = context.submissions.filter((entry) => entry.moves.length >= 2)
   return {
     // Q1. Did the agent make any batched (2+ move) prediction?
@@ -402,7 +493,7 @@ function multiStepExecution(context) {
 }
 
 // C7. STRUCTURAL REASONING
-function structuralReasoning(context) {
+function structuralReasoning(context: Context): Record<string, boolean> {
   const batches = context.submissions.filter((entry) => entry.moves.length >= 2)
   const trailblazerWin = context.outcomes.some(
     (outcome) => outcome.outcome === "won" && Number(outcome.traversalSpeed) > 1.0000,
@@ -427,11 +518,11 @@ function structuralReasoning(context) {
 // A single applied move proves nothing here: the current cell's open exits are handed to the model on
 // every tool call, so repeating one back is transcription. The second consecutive move is the first
 // that requires reasoning about a cell it was not given.
-function adaptiveRecovery(context) {
+function adaptiveRecovery(context: Context): Record<string, boolean> {
   const submissions = context.submissions
   for (const [index, failed] of submissions.entries()) {
     const next = submissions[index + 1]
-    if (!next || failed.applied === null || next.applied === null) {
+    if (!next || typeof failed.applied !== "number" || typeof next.applied !== "number") {
       continue
     }
 
@@ -445,21 +536,22 @@ function adaptiveRecovery(context) {
 
 // C9. TASK COMPLETION
 // Q1. Did the agent reach the destination in any sampled round?
-function taskCompletion(context) {
+function taskCompletion(context: Context): Record<string, boolean> {
   return { Q1: context.outcomes.some((outcome) => outcome.outcome === "won") }
 }
 
-// --- violations ----------------------------------------------------------
+
+// --- Violation questions ---
 
 // V1. HALLUCINATIONS
 // Q1. Any tool call naming something outside the declared tools set?
-function hallucinations(context) {
+function hallucinations(context: Context): Record<string, boolean> {
   const undeclared = context.toolCalls.some((name) => name && !context.declaredTools.has(name))
   return { Q1: undeclared || context.hallucinated > 0 }
 }
 
 // V2. OUTPUT CONTRACT FAILURE
-function outputContractFailure(context) {
+function outputContractFailure(context: Context): Record<string, boolean> {
   return {
     // Q1. Any response with content but no extractable moves array?
     Q1: context.unparseableResponses > 0,
@@ -471,12 +563,12 @@ function outputContractFailure(context) {
 
 // V3. WARNING DISREGARD
 // Q1. Any duplicate tool call repeated after a warning?
-function warningDisregard(context) {
+function warningDisregard(context: Context): Record<string, boolean> {
   return { Q1: context.duplicatesAfterWarning > 0 }
 }
 
 // V4. AVAILABLE-CONTEXT DISREGARD
-function availableContextDisregard(context) {
+function availableContextDisregard(context: Context): Record<string, boolean> {
   // Q1. Any move submitted that was not among its cell's confirmed open exits
   //     (open exits clue disregarded)?
   return { Q1: context.submissions.some((entry) => {
@@ -487,11 +579,19 @@ function availableContextDisregard(context) {
     let cell = entry.before
     for (const move of entry.moves) {
       const known = exitsOf(context, cell)
-      if (!known) {
+      if (!known || cell === null || cell === undefined) {
         return false
       }
-      if (!known.has(move)) {
+      // A move that is not among the cell's stated exits disregards the context - that is the question.
+      if (typeof move !== "string" || !known.has(move)) {
         return true
+      }
+      // A move the cell *does* list but that is not a command Tapoo accepts is a different matter: the
+      // agent used what it was told, so nothing was disregarded, but the walk cannot continue either.
+      // Stop checking this submission rather than inventing a verdict - the rubric answers NO on absent
+      // evidence. Before, this reached stepFrom and threw the whole report away.
+      if (!isMove(move)) {
+        break
       }
       cell = stepFrom(cell, move)
     }
@@ -501,19 +601,20 @@ function availableContextDisregard(context) {
 }
 
 // V5. RESOURCE WASTE
-function resourceWaste(context) {
+function resourceWaste(context: Context): Record<string, boolean> {
   // Q2. Any cell visited more times than its openMoves count (visit record
   //     disregarded)?
-  const arrivals = new Map()
+  const arrivals = new Map<CellKey, number>()
   for (const cell of context.positions) {
     arrivals.set(cell, (arrivals.get(cell) ?? 0) + 1)
   }
 
   // A spanning tree lets a complete depth-first exploration touch a cell once per exit - in and back
   // out of each branch - so exceeding the exit count, not matching it, is what cannot be justified.
-  const excessVisits = [...arrivals].some(
-    ([cell, count]) => exitsOf(context, cell) !== null && count > exitsOf(context, cell).size,
-  )
+  const excessVisits = [...arrivals].some(([cell, count]) => {
+    const known = exitsOf(context, cell)
+    return known !== null && count > known.size
+  })
 
   // Q3. Any single-move prediction from inside a confirmed branchless corridor
   //     (corridor structure disregarded)?
@@ -530,7 +631,7 @@ function resourceWaste(context) {
 // V6. FAILED-STATE REPETITION
 // Q1. Any prediction repeating verbatim a moves array already proven invalid from
 //     the same cell?
-function failedStateRepetition(context) {
+function failedStateRepetition(context: Context): Record<string, boolean> {
   const failed = new Set()
   for (const entry of context.submissions) {
     if (!entry.before || entry.applied === null) {
@@ -549,18 +650,9 @@ function failedStateRepetition(context) {
   return { Q1: false }
 }
 
-const contextAcquisitionQuestions = Object.fromEntries(
-  DECLARED_TOOLS.map((tool, index) => [
-    `Q${index + 1}`,
-    {
-      get_maze_structure: "Did the agent obtain the maze structure on every prediction turn?",
-      get_prediction_rules: "Did the agent obtain the prediction rules on every prediction turn?",
-      get_last_prediction_outcome: "Did the agent obtain the last prediction outcome on every prediction turn?",
-    }[tool] ?? `Did the agent obtain ${tool} on every prediction turn?`,
-  ]),
-)
+// --- Groups ---
 
-const CAPABILITIES = [
+export const CAPABILITIES: RubricGroup[] = [
   {
     id: "C1",
     label: "INSTRUCTION ADHERENCE",
@@ -633,7 +725,7 @@ const CAPABILITIES = [
   },
 ]
 
-const VIOLATIONS = [
+export const VIOLATIONS: RubricGroup[] = [
   {
     id: "V1",
     label: "TOOL HALLUCINATION",
@@ -681,7 +773,7 @@ const VIOLATIONS = [
 
 // A capability needs every question answered yes; a violation needs only one. The assertion is not
 // defensive noise - a question returning anything but a boolean would silently skew both rules.
-function aggregate(answers, kind) {
+export function aggregate(answers: Record<string, boolean>, kind: GroupKind): boolean {
   const values = Object.values(answers)
   if (!values.every((value) => value === true || value === false)) {
     throw new Error(`non-boolean answer: ${JSON.stringify(answers)}`)
@@ -689,56 +781,3 @@ function aggregate(answers, kind) {
 
   return kind === "capability" ? values.every(Boolean) : values.some(Boolean)
 }
-
-// answerRubric is the engine's public entry point: it returns the complete rubric result for one
-// log as plain data, with each group's per-question answers preserved alongside its verdict.
-//
-// The group fractions are carried rather than reduced to the verdict because the rubric requires
-// partial evidence to stay visible - "2/3" and "0/3" are both a `no`, and collapsing them would hide
-// the difference the contract exists to preserve.
-export function answerRubric(entries, { label = "log" } = {}) {
-  const context = buildContext(entries, { label })
-
-  const answerGroup = ({id, label: groupLabel, questions, evaluate}, kind) => {
-    const answers = evaluate(context)
-    if (Object.keys(answers).join() !== Object.keys(questions).join()) {
-      throw new Error(`${id} question definitions do not match its evaluated answers`)
-    }
-    const values = Object.values(answers)
-    return {
-      id,
-      label: groupLabel,
-      questions,
-      answers,
-      met: aggregate(answers, kind),
-      passed: values.filter(Boolean).length,
-      total: values.length,
-    }
-  }
-
-  const winningOutcome = context.outcomes.find((outcome) => outcome.outcome === "won")
-
-  return {
-    label,
-    model: context.model,
-    player: context.player,
-    predictions: context.submissions.length,
-    rounds: context.outcomes.length,
-    traversalSpeed: winningOutcome ? Number(winningOutcome.traversalSpeed) : null,
-    traversalSpeedClass: winningOutcome ? classifyTraversalSpeed(winningOutcome.traversalSpeed) : null,
-    capabilities: CAPABILITIES.map((group) => answerGroup(group, "capability")),
-    violations: VIOLATIONS.map((group) => answerGroup(group, "violation")),
-
-    // Operational diagnostics, kept separate from the violation profile on purpose. The rubric notes
-    // are explicit that endpoint failures can be caused by infrastructure outside the model's
-    // reasoning behavior, so they are preserved as evidence but never scored as a violation.
-    diagnostics: {
-      endpointFailures: context.endpointFailures,
-      emptyResponses: context.emptyResponses,
-      unparseableResponses: context.unparseableResponses,
-      tokenExhaustions: context.tokenExhaustions,
-    },
-  }
-}
-
-export { CAPABILITIES, VIOLATIONS, aggregate, parsePrediction }
