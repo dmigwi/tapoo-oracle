@@ -1,5 +1,24 @@
 // See https://observablehq.com/framework/config for documentation.
 import packageMetadata from "./package.json" with {type: "json"};
+import {STAGED_ROOT, STRIPPED_BUILD_ENV} from "./scripts/build-root.mjs";
+
+// `observable build` and `observable deploy` both write a published artifact, and both must read the
+// stripped root staged by scripts/build.mjs rather than src directly - otherwise the site ships every
+// source comment. package.json chains the two halves and sets this flag; invoking the CLI by hand
+// skips the strip, so that path is refused loudly instead of quietly producing an unstripped build.
+//
+// `observable preview` is deliberately not covered: a local preview should serve the real, commented
+// source, and it publishes nothing.
+const emitsArtifact = ["build", "deploy"].includes(process.argv[2]);
+const isStrippedBuild = process.env[STRIPPED_BUILD_ENV] === "1";
+
+if (emitsArtifact && !isStrippedBuild) {
+  throw new Error(
+    `Refusing to ${process.argv[2]} directly from the observable CLI.\n` +
+      "Run `pnpm run build` (or `pnpm run deploy`), which strips the sources first.\n" +
+      "See the Build section of README.md."
+  );
+}
 
 export default {
   // The app’s title; used in the sidebar and webpage titles.
@@ -52,7 +71,8 @@ export default {
   globalStylesheets: [],
 
   // The path to the source root.
-  root: "src",
+  // A stripped build reads the staged copy; preview reads the real source root.
+  root: isStrippedBuild ? STAGED_ROOT : "src",
 
   // Some additional configuration options and their defaults:
   style: "oracle.css",

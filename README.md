@@ -88,7 +88,9 @@ is uploaded.
 │  └─ TAPOO_AGENTIC_BEHAVIOR_RUBRIC_NOTES.md  # evaluator implementation notes
 ├─ scripts
 │  ├─ hooks/pre-commit      # lint and tests
-│  └─ agentic-analysis.mjs  # terminal front end
+│  ├─ agentic-analysis.mjs  # terminal front end
+│  ├─ build-root.mjs        # where the stripped build root lives
+│  └─ build.mjs             # stages and strips sources for the build
 ├─ src
 │  ├─ components
 │  │  └─ oracle.js          # adapter: engine results → cards, rows, sentences
@@ -106,6 +108,62 @@ presentation, and is the only place to change how a profile is displayed.
 beside its evaluator and returns both to the app, so the visible wording cannot drift from the
 question that was answered.
 
+## Build
+
+```bash
+make build
+```
+
+The build is a chained sequence, spelled out in `package.json` so neither half is hidden:
+
+```
+trap 'rimraf .tmp/build-root' EXIT; node ./scripts/build.mjs && ORACLE_STRIPPED_BUILD=1 observable build
+```
+
+`scripts/build.mjs` stages a copy of `src/` under `.tmp/build-root` and strips every `.js` in that
+copy with esbuild. Observable then templates the site from that staged root into `./public`.
+
+The staged root is removed by an `EXIT` trap, so it is cleaned up whether the build succeeds or fails
+— including when the strip step itself rejects a malformed source. The trap does not swallow the exit
+status: a failed build still exits non-zero, so CI fails rather than passing on a half-finished
+artifact.
+
+The modules in this app are heavily commented on purpose — the rubric issues strict verdicts about a
+model's behavior, so the reasoning behind each answer belongs next to the code. That reasoning is for
+readers of the repository, not for browsers downloading the page, where it is inert payload. Stripping
+takes the emitted modules from **85 kB to 35 kB**.
+
+Stripping happens before Observable runs rather than over the built output, and the order matters:
+Observable fingerprints each emitted module by content hash. Minifying afterwards would leave every
+filename describing bytes that are no longer being served.
+
+`src/` is never modified, and the staged copy never outlives the build that created it. To inspect the
+stripped output, run the staging step on its own — it leaves `.tmp/build-root` in place:
+
+```bash
+node ./scripts/build.mjs
+```
+
+An interrupt (Ctrl-C) may terminate the shell before the trap runs. That is harmless: `.tmp/` is
+ignored by git, and `scripts/build.mjs` wipes the staged root at the start of every run.
+
+Running the Observable CLI by hand is refused. `observable build` and `observable deploy` both publish
+an artifact, so `observablehq.config.js` rejects either one unless `scripts/build.mjs` has already
+staged the stripped root:
+
+```
+Refusing to build directly from the observable CLI.
+Run `pnpm run build` (or `pnpm run deploy`), which strips the sources first.
+```
+
+Without that guard, the two steps are only chained by convention, and a bare `observable build` would
+quietly publish every source comment. `observable preview` is deliberately not covered: `make dev`
+serves the real, commented source and publishes nothing.
+
+The chained scripts use POSIX shell syntax — an inline environment variable and `trap`. CI runs on
+Ubuntu and development is on macOS/Linux; building on Windows would need `cross-env` and a different
+cleanup mechanism.
+
 ## Command reference
 
 | Command | Description |
@@ -120,7 +178,7 @@ question that was answered.
 | `make quality` | Lint and tests |
 | `make ci` | Run the local equivalent of the CI pipeline |
 | `make dev` | Start the local preview server |
-| `make build` | Build the static site into `./dist` |
+| `make build` | Strip the sources, build the static site into `./public`, then clean up |
 | `make clean` | Clear the local data loader cache |
 
 Each target delegates to `pnpm`; use `PNPM=/path/to/pnpm` to override the executable.

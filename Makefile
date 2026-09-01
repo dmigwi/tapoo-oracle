@@ -41,7 +41,7 @@ ci: ## Run the local equivalent of the CI pipeline.
 dev: ## Start the local preview server.
 	$(PNPM) dev
 
-build: ## Build the static site into ./dist.
+build: ## Strip sources, build the static site into ./public, then clean up.
 	$(PNPM) build
 
 deploy: ## Deploy the app to Observable.
