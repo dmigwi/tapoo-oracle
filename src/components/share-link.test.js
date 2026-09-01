@@ -93,6 +93,60 @@ describe("decodeReportPayload", () => {
     expect(decodeReportPayload(undefined).ok).toBe(false)
   })
 
+  it("names the broken link in the message, so a reader can tell which one failed", () => {
+    // The identifier belongs to the decoder, not to whichever caller happens to render the failure:
+    // every rejection here is the same failure and needs the same handle on it.
+    const {payload} = encodeReportPayload(gistUrl)
+    const truncated = `${payload.slice(0, -2)}zz`
+
+    const result = decodeReportPayload(truncated)
+    expect(result.ok).toBe(false)
+    // Shown as the link's own shape, so it reads as a URL rather than a string of characters.
+    expect(result.link).toContain(`/r/${truncated.slice(0, 10)}`)
+    expect(result.link).toContain(truncated.slice(-8))
+    // Both ends, not the whole token: it identifies the link, it does not dump the payload.
+    expect(result.link).not.toContain(truncated)
+  })
+
+  // The two sentences are asserted literally here and nowhere else. Every other case below compares
+  // against these instead of repeating the prose, so rewording a message is a one-line change rather
+  // than a sweep through the file - which it was, three times over, before this was pulled out.
+  const UNNAMED = "This link does not name a report."
+  const ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
+
+  it("gives the reason alone when there is no link to point at", () => {
+    const result = decodeReportPayload("")
+
+    expect(result.error).toBe(UNNAMED)
+    expect(result.link).toBeNull()
+  })
+
+  // Pins the contract: every rejection past "no token at all" carries the same sentence and names the
+  // link.
+  //
+  // With one sentence for all of them these cannot, on their own, prove which guard fired - an input
+  // that slips past its own guard is caught by the next one and reports identically. Checked by
+  // removing guards one at a time: the overshooting run does fail without its own guard, while a
+  // too-short token is caught by the checksum guard regardless, so that length check is defensive
+  // rather than load-bearing.
+  it.each([
+    ["characters no token contains", "!!!not-a-token!!!"],
+    ["a token too short to carry an address", "AQ"],
+    ["a run that overshoots the token", encodeBase64UrlForTest(withChecksum(Uint8Array.from([0, 104, 105, 0x01, 200])))],
+    ["a token altered in transit", null]
+  ])("rejects %s", (_label, token) => {
+    const value = token ?? `${encodeReportPayload(gistUrl).payload.slice(0, -2)}zz`
+    const result = decodeReportPayload(value)
+
+    expect(result.ok).toBe(false)
+    // One sentence for every one of them, and never the unnamed one - a token that was present but
+    // unusable is a different situation from a link that named nothing at all.
+    expect(result.error).toBe(ALTERED)
+    expect(result.error).not.toBe(UNNAMED)
+    // The link is a value, not part of the sentence: the view marks it up as code.
+    expect(result.link).toMatch(/^(https?:\/\/[^/]+)?\/r\//)
+  })
+
   it("rejects a token naming a prefix that does not exist", () => {
     // First byte is the prefix index; a hand-edited token can name index 99. Rebuilt through the
     // encoder so the checksum is valid and it is genuinely the prefix being rejected.
@@ -100,7 +154,10 @@ describe("decodeReportPayload", () => {
     const bytes = decodeBase64UrlForTest(payload)
     bytes[0] = 99
 
-    expect(decodeReportPayload(encodeBase64UrlForTest(withChecksum(bytes.slice(0, -2)))).ok).toBe(false)
+    const result = decodeReportPayload(encodeBase64UrlForTest(withChecksum(bytes.slice(0, -2))))
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe(ALTERED)
   })
 
   it("rejects a single flipped character", () => {

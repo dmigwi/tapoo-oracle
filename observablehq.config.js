@@ -76,7 +76,10 @@ export default {
     "if (!match) return;" +
     'document.write(\'<base href="../">\');' +
     // replace, not assign, so Back leaves the site rather than bouncing through the route again.
-    "location.replace(location.origin + location.pathname.replace(route, '/') + '#' + match[1]);" +
+    // The fragment carries the same "r=" marker the /r/ path segment does. A bare #<token> is the same
+    // shape as an ordinary page anchor, so the app could not tell one from the other; the marker is
+    // what makes the hop unambiguous, exactly as /r/ does for the public form.
+    "location.replace(location.origin + location.pathname.replace(route, '/') + '#r=' + match[1]);" +
     "})();</script>" +
     '<link rel="icon" type="image/svg+xml" href="./images/favicon.svg">',
   globalStylesheets: [],

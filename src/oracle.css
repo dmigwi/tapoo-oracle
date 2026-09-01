@@ -938,3 +938,16 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+/* The broken link inside a shared-link error. Monospace and a faint ground so an opaque address is
+   picked out of the sentence around it rather than read as more prose - the reader is matching it
+   against a link they were sent, character by character. Wraps anywhere, because it has no spaces
+   and would otherwise push the notice wider than the page. */
+.report-broken-link {
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.2rem;
+  background: var(--oracle-footer);
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+  overflow-wrap: anywhere;
+}

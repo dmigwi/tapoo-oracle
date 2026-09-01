@@ -104,9 +104,44 @@ const REPORT_PAYLOAD_HEX_MARKER = 0x01
 // framing; shorter runs are left as text.
 const REPORT_PAYLOAD_HEX_MIN = 16
 
-const DAMAGED_PAYLOAD = "This shared link is damaged. Ask for a fresh link."
+// Two outcomes, because a reader has exactly two situations to be in: either the link named no report
+// at all, or it named one and did not survive the trip. Every way a token can fail past that point -
+// characters that were never base64url, a run that overshoots the token, a checksum that no longer
+// matches, a prefix this build does not know - is the same event to the person holding it, and the
+// same remedy. Splitting them further only asks the reader to care which byte went wrong.
+const LINK_UNNAMED = "This link does not name a report."
+const LINK_ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
 
-// Two trailing bytes over the rest of the token, so a link damaged in transit is reported as damaged.
+// elideToken keeps both ends of an opaque token. The head is what a reader matches at a glance against
+// the link they were sent; the tail is where truncation and transcription damage actually shows up. A
+// tail alone reads as random text, which is the one thing this label must not do.
+const elideToken = (token, head = 10, tail = 12) =>
+  token.length <= head + tail + 3 ? token : `${token.slice(0, head)}...${token.slice(-tail)}`
+
+// damagedLinkLabel shows the failure in the shape the reader was actually handed - origin, base path,
+// /r/, then the elided token. The scheme and host are what make it recognizable as a URL at a glance
+// rather than a string of characters. Off a browser there is no origin to name, so it degrades to the
+// route path, which still reads as a link.
+const damagedLinkLabel = (token) => {
+  const elided = elideToken(token)
+  const location = globalThis.location
+  return location?.origin ? reportRouteFor(elided, location) : `/${REPORT_ROUTE}/${elided}`
+}
+
+// rejectedLink pairs a reason with the link it is about, kept as separate values rather than joined
+// into one sentence: the view marks the link up as code, which it cannot do once the two are one
+// string. An unnamed token - the empty case - carries no link, since there is nothing to point at.
+//
+// The link belongs in the message and never in the address bar: the token is opaque and this one does
+// not decode, so a /r/<token> address built from it would resolve to nothing while still looking usable.
+const rejectedLink = (reason, token) => ({
+  ok: false,
+  error: reason,
+  link: token ? damagedLinkLabel(token) : null
+})
+
+// Two trailing bytes over the rest of the token, so a link altered in transit is caught rather than
+// decoded into a different, valid-looking address.
 //
 // Without it, truncation is only caught when it lands inside a packed hex run: a cut that lands in
 // the filename leaves a perfectly valid URL pointing at something that was never shared, and the
@@ -195,29 +230,25 @@ export function encodeReportPayload(value) {
 export function decodeReportPayload(value) {
   const token = String(value ?? "").trim()
   if (!token) {
-    return {ok: false, error: DAMAGED_PAYLOAD}
+    return rejectedLink(LINK_UNNAMED, "")
   }
 
   let framed
   try {
     framed = bytesFromBase64Url(token)
   } catch {
-    return {ok: false, error: DAMAGED_PAYLOAD}
-  }
-
-  if (framed.length < 4) {
-    return {ok: false, error: DAMAGED_PAYLOAD}
+    return rejectedLink(LINK_ALTERED, token)
   }
 
   const bytes = framed.subarray(0, framed.length - 2)
   const [high, low] = reportPayloadIntegrityBytes(bytes)
   if (framed[framed.length - 2] !== high || framed[framed.length - 1] !== low) {
-    return {ok: false, error: DAMAGED_PAYLOAD}
+    return rejectedLink(LINK_ALTERED, token)
   }
 
   const prefix = REPORT_PAYLOAD_PREFIXES[bytes[0]]
   if (prefix === undefined) {
-    return {ok: false, error: DAMAGED_PAYLOAD}
+    return rejectedLink(LINK_ALTERED, token)
   }
 
   const decoder = new TextDecoder()
@@ -232,7 +263,7 @@ export function decodeReportPayload(value) {
     const count = bytes[at + 1]
     // A run claiming more bytes than the token holds is a truncated link, not a shorter URL.
     if (count === undefined || at + 2 + count > bytes.length) {
-      return {ok: false, error: DAMAGED_PAYLOAD}
+      return rejectedLink(LINK_ALTERED, token)
     }
 
     rest += decoder.decode(bytes.subarray(literalFrom, at))
@@ -243,7 +274,17 @@ export function decodeReportPayload(value) {
     literalFrom = at + 1
   }
 
-  return validateOnlineJsonUrl(prefix + rest + decoder.decode(bytes.subarray(literalFrom)))
+  // A token has to carry an address beyond its prefix. This replaces a "framed.length < 4" byte-count
+  // check that approximated the same thing: without either, a four-character token decodes to a bare
+  // "https://gist.githubusercontent.com/" - no path, no file - which is a syntactically valid URL, so
+  // it passes validation and the app goes and fetches a host root. Saying it in terms of the address
+  // states the rule the byte count was standing in for.
+  const address = rest + decoder.decode(bytes.subarray(literalFrom))
+  if (!address) {
+    return rejectedLink(LINK_ALTERED, token)
+  }
+
+  return validateOnlineJsonUrl(prefix + address)
 }
 
 export function reportTabLabelFromUrl(value, index = 0) {
@@ -390,7 +431,14 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
 // whether a path segment is a token or a page.
 const REPORT_ROUTE = "r"
 const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`)
-const REPORT_PAYLOAD_PATTERN = /^[A-Za-z0-9_-]+$/
+// The fragment hop carries the same marker the path form does.
+//
+// A bare #<token> cannot be told apart from an ordinary page anchor: base64url tokens use the same
+// characters a slug does, so #section-two and a real token are the same shape. The path form never had
+// this problem because the literal /r/ segment marks it, and this restores that symmetry. Everything
+// after the marker is captured, damaged or not, so a mangled token still reaches decodeReportPayload
+// and is reported as a damaged link rather than silently ignored.
+const REPORT_PAYLOAD_FRAGMENT_PATTERN = new RegExp(`^#?${REPORT_ROUTE}=(.+)$`)
 
 // appBasePath finds where the app is served from, given any page within it.
 //
@@ -414,7 +462,19 @@ export function shareLinkFor(url, location = globalThis.location) {
     return null
   }
 
-  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${encoded.payload}`
+  return reportRouteFor(encoded.payload, location)
+}
+
+// reportRouteFor composes the public form of a link from a token. Every address the reader is left
+// looking at goes through here, so the route is built one way only.
+function reportRouteFor(token, location = globalThis.location) {
+  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${token}`
+}
+
+// appRootFor is where a reader is left when no token can be shown - never the fragment, which is an
+// internal hop and not an address anyone should be handed.
+function appRootFor(location = globalThis.location) {
+  return `${location.origin}${appBasePath(location.pathname)}`
 }
 
 // reportPayloadFromPath reads the token out of a /r/<token> route.
@@ -428,8 +488,7 @@ export function reportPayloadFromPath(pathname) {
 // cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
 // so the public form and the internal hop can change independently.
 export function reportPayloadFromHash(hash) {
-  const token = String(hash ?? "").replace(/^#/, "")
-  return REPORT_PAYLOAD_PATTERN.test(token) ? token : null
+  return REPORT_PAYLOAD_FRAGMENT_PATTERN.exec(String(hash ?? ""))?.[1] ?? null
 }
 
 // A chain, inline rather than a font or an image request: the page loads no third-party asset, and
@@ -521,7 +580,7 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     // reload of it would bring the deleted report straight back.
     const link = active?.status === "loaded"
       ? shareLinkFor(active.loadedUrl ?? active.url)
-      : `${location.origin}${appBasePath(location.pathname)}`;
+      : appRootFor(location);
 
     if (link) {
       globalThis.history.replaceState(null, "", link);
@@ -546,14 +605,34 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     if (!decoded.ok) {
       // The link is damaged, which is a different problem from the log being unreachable, and the
       // reader can do nothing about it themselves - they never chose this URL.
-      setState({...state, isAdding: false, sharedLinkError: decoded.error});
+      //
+      // Lands on the app root, carrying nothing of the broken link. The reader must not be left on the
+      // #r= hop, which is an implementation detail of the 404 shim; nor is the token worth putting
+      // back into a path, because it is opaque and this one does not decode - a /r/<token> address
+      // that resolves to nothing is a link that only looks usable. The token itself belongs in the
+      // message, trimmed, where it identifies which link failed without pretending to be an address.
+      if (location && globalThis.history?.replaceState) {
+        globalThis.history.replaceState(null, "", appRootFor(location));
+      }
+      setState({
+        ...state,
+        isAdding: false,
+        sharedLinkError: decoded.error,
+        sharedLinkBroken: decoded.link
+      });
       return;
     }
 
     // The decoded URL is handed straight to the loader and never put into rendered state. Setting
     // draftUrl here would show the add-report form while the fetch runs, with the full address
     // sitting in an input for as long as the load takes - the one place it must not appear.
-    setState({...state, isAdding: false, sharedLinkLoading: true, sharedLinkError: undefined});
+    setState({
+      ...state,
+      isAdding: false,
+      sharedLinkLoading: true,
+      sharedLinkError: undefined,
+      sharedLinkBroken: undefined
+    });
     const loadedState = await loadNewReportTabFromUrl({...state, draftUrl: decoded.url}, fetchText);
     setState({...loadedState, draftUrl: "", sharedLinkLoading: false});
     // Puts /r/<token> back in the address bar. The fragment is an implementation detail of the hop
@@ -635,6 +714,15 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
       const notice = document.createElement("p");
       notice.className = "report-share-error";
       notice.textContent = state.sharedLinkError;
+      if (state.sharedLinkBroken) {
+        // A <code> element, not more prose: an opaque address set in the body face runs straight into
+        // the sentence around it, and the one thing a reader needs to pick out is where the link ends.
+        notice.append(" (broken link: ");
+        const link = document.createElement("code");
+        link.className = "report-broken-link";
+        link.textContent = state.sharedLinkBroken;
+        notice.append(link, ")");
+      }
       content.append(notice);
     }
     if (!state.isAdding && activeTab) {

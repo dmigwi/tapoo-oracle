@@ -99,15 +99,23 @@ describe("reportPayloadFromPath", () => {
 
 describe("reportPayloadFromHash", () => {
   // Not a shape anyone is handed: it is how 404.md hands the token to an app the host cannot serve
-  // at an arbitrary path.
+  // at an arbitrary path. It carries the same "r=" marker the /r/ path segment does.
   it("reads the token out of the redirect hop", () => {
-    expect(reportPayloadFromHash("#abc123")).toBe("abc123")
+    expect(reportPayloadFromHash("#r=abc123")).toBe("abc123")
   })
 
   it("ignores a fragment that carries something else", () => {
+    // Without the marker a plain anchor is the same shape as a token - base64url uses the characters a
+    // slug does - so the marker is the only thing that can tell them apart.
     expect(reportPayloadFromHash("#section-two")).toBeNull()
+    expect(reportPayloadFromHash("#abc123")).toBeNull()
     expect(reportPayloadFromHash("")).toBeNull()
     expect(reportPayloadFromHash(undefined)).toBeNull()
+  })
+
+  it("keeps a token that uses the whole base64url alphabet", () => {
+    // Real tokens contain - and _; a rule that rejected either would break live share links.
+    expect(reportPayloadFromHash("#r=ab-cd_ef")).toBe("ab-cd_ef")
   })
 })
 
@@ -132,7 +140,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("leaves nothing in the DOM that can be turned back into a working log address", async () => {
-    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#r=${encodeReportPayload(gistUrl).payload}`
     const node = createReportTabsInput({fetchText: async () => logExport})
     document.body.append(node)
     await settle()
@@ -255,8 +263,8 @@ describe("createReportTabsInput sharing", () => {
     expect(node.value.tabs[0].status).toBe("loaded")
   })
 
-  it("says the link is damaged rather than that the log is missing", async () => {
-    window.location.hash = "#!!!not-a-token!!!"
+  it("says the link itself is at fault, not that the log is missing", async () => {
+    window.location.hash = "#r=!!!not-a-token!!!"
     const fetchText = vi.fn(async () => logExport)
     const node = createReportTabsInput({fetchText})
     await settle()
@@ -264,18 +272,63 @@ describe("createReportTabsInput sharing", () => {
     // Distinct from a retrieval failure on purpose: nothing was ever fetched, and the reader's only
     // remedy is a fresh link.
     expect(fetchText).not.toHaveBeenCalled()
-    expect(panelText(node)).toMatch(/damaged/i)
+    expect(panelText(node)).toMatch(/\(broken link: /)
+  })
+
+  // /r/<token> is the public form, and a damaged link has no usable form at all. The reader lands on
+  // the app root: not the #r= hop, which is an internal detail of the 404 shim, and not /r/<token>
+  // either, because an address that resolves to nothing only looks usable.
+  it.each([
+    ["a token damaged in transit", `${"A".repeat(20)}zz`],
+    ["a token mangled beyond a path", "!!!not-a-token!!!"]
+  ])("drops %s from the address bar entirely", async (_label, token) => {
+    window.location.hash = `#r=${token}`
+    const replaceState = vi.spyOn(window.history, "replaceState")
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    await settle()
+
+    expect(panelText(node)).toMatch(/\(broken link: /)
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.not.stringContaining("#"))
+    expect(replaceState).toHaveBeenCalledWith(null, "", expect.not.stringContaining("/r/"))
+  })
+
+  it("names the failed link in the message, trimmed", async () => {
+    // The token is opaque and cannot be an address, but a reader comparing what they were sent still
+    // needs to see which link this was.
+    const token = `${encodeReportPayload(gistUrl).payload.slice(0, -2)}zz`
+    window.location.hash = `#r=${token}`
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    await settle()
+
+    expect(panelText(node)).toMatch(/Ask for a fresh link/)
+    expect(panelText(node)).toContain(token.slice(-8))
+    // Trimmed, not the whole token: the message is an explanation, not a payload dump.
+    expect(panelText(node)).not.toContain(token)
+  })
+
+  it("sets the broken link as code, apart from the sentence", async () => {
+    window.location.hash = `#r=${encodeReportPayload(gistUrl).payload.slice(0, -2)}zz`
+    const node = createReportTabsInput({fetchText: async () => logExport})
+    await settle()
+
+    // An opaque address set in the body face runs into the prose around it. The reader is matching it
+    // against a link they were sent character by character, so it has to be pickable out of the line.
+    const link = node.querySelector(".report-share-error code.report-broken-link")
+    expect(link).not.toBeNull()
+    expect(link.textContent).toMatch(/\/r\//)
+    // The sentence itself stays plain: the markup is around the link, not the whole notice.
+    expect(node.querySelector(".report-share-error").firstChild.nodeType).toBe(3)
   })
 
   it("reports a log that could not be retrieved as its own failure", async () => {
-    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#r=${encodeReportPayload(gistUrl).payload}`
     const node = createReportTabsInput({fetchText: async () => { throw new Error("404 Not Found") }})
     await settle()
 
     const [tab] = node.value.tabs
     expect(tab.status).toBe("error")
     expect(tab.error).toMatch(/404 Not Found/)
-    expect(tab.error).not.toMatch(/damaged/i)
+    expect(tab.error).not.toMatch(/\(broken link: /)
   })
 
   it("puts the loaded report in the address bar, without stacking history entries", async () => {
@@ -359,7 +412,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("restores the route to the address bar after opening a shared link", async () => {
-    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#r=${encodeReportPayload(gistUrl).payload}`
     const replaceState = vi.spyOn(window.history, "replaceState")
     createReportTabsInput({fetchText: async () => logExport})
     await settle()
@@ -373,7 +426,7 @@ describe("createReportTabsInput sharing", () => {
   it("also accepts the fragment the 404 shim redirects through", async () => {
     // A static host cannot serve the app at /r/<token>, so 404.md hands the token over this way.
     // Both readers have to work or a shared link dies at the hop.
-    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#r=${encodeReportPayload(gistUrl).payload}`
     const fetchText = vi.fn(async () => logExport)
     createReportTabsInput({fetchText})
     await settle()
