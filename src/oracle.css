@@ -827,3 +827,114 @@ td {
     font-size: clamp(1.75rem, 6vw, var(--fs-hero));
   }
 }
+
+/* --- Maze replay --- */
+
+.maze-replay {
+  margin: 2rem 0 0;
+  padding: 1.25rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+}
+
+.maze-heading {
+  margin: 0 0 0.75rem;
+  font-size: var(--fs-h2);
+}
+
+.maze-controls:not(:empty) {
+  margin-bottom: 0.85rem;
+}
+
+.maze-level-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.25rem;
+  background: var(--oracle-paper);
+  color: var(--oracle-ink);
+  font: inherit;
+  font-size: var(--fs-small);
+}
+
+/* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px
+   cells into dinner plates, and the walls stop reading as a maze. */
+.maze-figure {
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 0;
+}
+
+.maze-grid {
+  width: 100%;
+  max-width: 30rem;
+  height: auto;
+}
+
+.maze-caption {
+  margin: 0.5rem 0 0.75rem;
+  color: var(--oracle-muted);
+  font-size: var(--fs-small);
+  min-height: 1.4em;
+}
+
+.maze-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.maze-scrubber[hidden] {
+  display: none;
+}
+
+.maze-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--oracle-terracotta);
+}
+
+.maze-readout {
+  flex: 0 0 auto;
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+  color: var(--oracle-muted);
+}
+
+.maze-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.maze-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+
+.maze-summary-table th,
+.maze-summary-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--oracle-line);
+  text-align: left;
+}
+
+.maze-summary-table th {
+  color: var(--oracle-muted);
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.maze-summary-table td:last-child {
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+}
+
+@media (max-width: 860px) {
+  .maze-summary {
+    grid-template-columns: 1fr;
+  }
+}

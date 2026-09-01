@@ -52,12 +52,21 @@ export default {
   // different colour so they are told apart at 16px, where the shapes alone are indistinguishable.
   // src/images/favicon.svg records which Tapoo colour each role maps from.
   head:
-    '<link rel="icon" type="image/svg+xml" href="./images/favicon.svg">' +
-    // Inline, in the head, and deliberately not a module: a shared report lives at /r/<token>, which
-    // a static host answers with 404.html served *at that path*. Every asset reference in that page
-    // is relative, so they resolve one directory too deep and 404 - meaning nothing that depends on
-    // the framework's own JS can be trusted to run there. This has no dependencies and runs before
-    // any of it.
+    // First in the head, before any asset reference: a shared report lives at /r/<token>, which a
+    // static host answers with 404.html served *at that path*. Every asset reference in that page is
+    // relative, so they resolve one directory too deep and 404 - meaning nothing that depends on the
+    // framework's own JS can be trusted to run there. This has no dependencies and runs before any of
+    // it.
+    //
+    // Ordering alone does not fix the asset paths, and it was tried: with the script moved ahead of the
+    // icon link the browser still issued GET /r/<token>/_file/images/favicon.*.svg and still logged a
+    // 404, because starting a redirect does not cancel resource loads the parser has already queued.
+    // What actually corrects them is the <base> written below - a report route is always exactly one
+    // segment deeper than the app root, so "../" resolves every relative reference on this page back to
+    // where the assets really are, whatever base path the site is deployed under.
+    //
+    // document.write, not appendChild: the base element only governs elements parsed after it, so it
+    // has to land at the parser position rather than at the end of the head.
     //
     // Harmless on every other page: the guard only matches a report route, so the app itself never
     // sees it fire.
@@ -65,9 +74,11 @@ export default {
     "var route = /\\/r\\/([A-Za-z0-9_-]+)\\/?$/;" +
     "var match = route.exec(location.pathname);" +
     "if (!match) return;" +
+    'document.write(\'<base href="../">\');' +
     // replace, not assign, so Back leaves the site rather than bouncing through the route again.
-    "location.replace(location.origin + location.pathname.replace(route, '/') + '#payload=' + match[1]);" +
-    "})();</script>",
+    "location.replace(location.origin + location.pathname.replace(route, '/') + '#' + match[1]);" +
+    "})();</script>" +
+    '<link rel="icon" type="image/svg+xml" href="./images/favicon.svg">',
   globalStylesheets: [],
 
   // The path to the source root.

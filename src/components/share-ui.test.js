@@ -101,7 +101,7 @@ describe("reportPayloadFromHash", () => {
   // Not a shape anyone is handed: it is how 404.md hands the token to an app the host cannot serve
   // at an arbitrary path.
   it("reads the token out of the redirect hop", () => {
-    expect(reportPayloadFromHash("#payload=abc123")).toBe("abc123")
+    expect(reportPayloadFromHash("#abc123")).toBe("abc123")
   })
 
   it("ignores a fragment that carries something else", () => {
@@ -132,7 +132,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("leaves nothing in the DOM that can be turned back into a working log address", async () => {
-    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
     const node = createReportTabsInput({fetchText: async () => logExport})
     document.body.append(node)
     await settle()
@@ -256,7 +256,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("says the link is damaged rather than that the log is missing", async () => {
-    window.location.hash = "#payload=!!!not-a-token!!!"
+    window.location.hash = "#!!!not-a-token!!!"
     const fetchText = vi.fn(async () => logExport)
     const node = createReportTabsInput({fetchText})
     await settle()
@@ -268,7 +268,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("reports a log that could not be retrieved as its own failure", async () => {
-    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
     const node = createReportTabsInput({fetchText: async () => { throw new Error("404 Not Found") }})
     await settle()
 
@@ -359,7 +359,7 @@ describe("createReportTabsInput sharing", () => {
   })
 
   it("restores the route to the address bar after opening a shared link", async () => {
-    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
     const replaceState = vi.spyOn(window.history, "replaceState")
     createReportTabsInput({fetchText: async () => logExport})
     await settle()
@@ -367,13 +367,13 @@ describe("createReportTabsInput sharing", () => {
     // The fragment is an implementation detail of the hop through 404.md. What a reader sees after
     // it lands has to be the link they can copy back out, bookmark, or send on.
     expect(replaceState).toHaveBeenCalledWith(null, "", expect.stringContaining("/r/"))
-    expect(replaceState).not.toHaveBeenCalledWith(null, "", expect.stringContaining("#payload="))
+    expect(replaceState).not.toHaveBeenCalledWith(null, "", expect.stringContaining("#"))
   })
 
   it("also accepts the fragment the 404 shim redirects through", async () => {
     // A static host cannot serve the app at /r/<token>, so 404.md hands the token over this way.
     // Both readers have to work or a shared link dies at the hop.
-    window.location.hash = `#payload=${encodeReportPayload(gistUrl).payload}`
+    window.location.hash = `#${encodeReportPayload(gistUrl).payload}`
     const fetchText = vi.fn(async () => logExport)
     createReportTabsInput({fetchText})
     await settle()

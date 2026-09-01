@@ -34,15 +34,26 @@ const CACHE_DIR = ".observablehq"
 
 // Tests are never imported by a page, so Observable would not emit them anyway. Excluding them keeps
 // the staged root to just the files that can reach the output.
+//
+// Only test modules and the cache are ever excluded. Assets are not JavaScript and are never stripped
+// or filtered - a component resolving ../images/foo.svg has to find it under the staged root at the
+// same relative path it occupies under src, or Observable emits a page referencing a file it never
+// copied. STAGED_ASSET_DIRS below turns that from an incidental consequence of copying all of src into
+// something this script actually checks.
 const isExcluded = (path) => path.endsWith(".test.js") || path.split(/[\\/]/).includes(CACHE_DIR)
 
-function jsFilesIn(directory) {
+// STAGED_ASSET_DIRS are directories under src that must arrive in the staged root intact. Listing them
+// is what makes a future change to isExcluded fail here rather than silently ship a page with missing
+// images.
+const STAGED_ASSET_DIRS = ["images"]
+
+function filesIn(directory) {
   const found = []
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name)
     if (entry.isDirectory()) {
-      found.push(...jsFilesIn(path))
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
+      found.push(...filesIn(path))
+    } else if (entry.isFile()) {
       found.push(path)
     }
   }
@@ -50,9 +61,35 @@ function jsFilesIn(directory) {
   return found
 }
 
+// verifyStagedAssets fails the build when an asset directory did not survive staging.
+//
+// It compares by relative path, not by count: a file copied to the wrong place would keep the count
+// right while still breaking every reference to it.
+function verifyStagedAssets() {
+  for (const name of STAGED_ASSET_DIRS) {
+    const source = join(SOURCE_ROOT, name)
+    if (!existsSync(source)) {
+      continue
+    }
+
+    const expected = filesIn(source).map((path) => relative(SOURCE_ROOT, path))
+    const missing = expected.filter((path) => !existsSync(join(STAGED_ROOT, path)))
+    if (missing.length > 0) {
+      throw new Error(
+        `Assets missing from the staged root: ${missing.join(", ")}.\n` +
+          "Components resolve these by relative path, so the build would emit references to files it never copied."
+      )
+    }
+  }
+}
+
+const jsFilesIn = (directory) => filesIn(directory).filter((path) => path.endsWith(".js"))
+
 rmSync(STAGED_ROOT, { recursive: true, force: true })
 mkdirSync(dirname(STAGED_ROOT), { recursive: true })
 cpSync(SOURCE_ROOT, STAGED_ROOT, { recursive: true, filter: (source) => !isExcluded(source) })
+
+verifyStagedAssets()
 
 const realCache = resolve(SOURCE_ROOT, CACHE_DIR)
 if (existsSync(realCache)) {

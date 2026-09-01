@@ -14,12 +14,15 @@ import {
   diagnosticTableData,
   enableRowSelection,
   groupResultTone,
+  levelSummaryRows,
+  mazeReplayModel,
   prepareRubricTable,
   rubricQuestionRows,
   narrativeSummary,
   profileCards,
   provenanceTableData
 } from "./oracle.js";
+import {createMazeReplay} from "./maze-view.js";
 
 // Every conditional section is built here rather than in a markdown ${...} wrapper. Observable
 // evaluates a block-level expression only when it is a single line: a multi-line ternary around an
@@ -129,6 +132,9 @@ function profile({html}, tab, result) {
   if (!result?.ok) return "";
   return html`<div class="report-region">
       <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
+      ${createMazeReplay(mazeReplayModel(result.report), {
+        levelSummary: levelSummaryRows(result.report)
+      })}
       <section class="analysis-strip">
         ${profileCards(result.report).map(
           (card) => html`<article class=${`metric metric-${card.tone}`}>

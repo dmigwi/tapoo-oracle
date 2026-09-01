@@ -25,6 +25,7 @@ import {
   classifyTraversalSpeed,
   stepFrom,
 } from "./log-contract.js"
+import { cellFromGridPoint } from "./maze.js"
 
 // parsePrediction recovers the moves array a model submitted, mirroring the three tiers
 // frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
@@ -59,6 +60,39 @@ function parsePrediction(content) {
   }
 
   return null
+}
+
+// readCell accepts either shape a logged cell arrives in and returns its "row,col" key, or null.
+//
+// A downloaded log compacts every get_maze_structure result before writing it (compactLoggedToolResult
+// in Tapoo's frontend/app/agent/protocol.ts), turning {row, col} into [row, col]. Only the uncompacted
+// object form was read here originally, so against a real export every key became
+// "undefined,undefined": context.exits collapsed to a single junk entry and context.positions held one
+// junk cell. That did not fail loudly - it silently reduced C4, C7.Q1, V4 and V5 to verdicts about
+// nothing, and V4 in particular then reported a confirmed violation against the model. Both shapes are
+// accepted because a log may contain either, and neither is wrong.
+function readCell(cell) {
+  if (Array.isArray(cell)) {
+    return cell.length === 2 ? cellKey(cell[0], cell[1]) : null
+  }
+
+  if (cell && typeof cell === "object" && typeof cell.row === "number" && typeof cell.col === "number") {
+    return cellKey(cell.row, cell.col)
+  }
+
+  return null
+}
+
+// readOpenMoves returns the set of move names a cell's exits allow, from either logged shape: the
+// uncompacted object keyed by move name, or the compacted [move, visitStatus] pairs. Reading the
+// compacted form with Object.keys would yield array indices - "0", "1" - which match no move command,
+// so every exit check silently failed.
+function readOpenMoves(openMoves) {
+  if (Array.isArray(openMoves)) {
+    return new Set(openMoves.map((entry) => (Array.isArray(entry) ? entry[0] : entry)).filter(Boolean))
+  }
+
+  return new Set(Object.keys(openMoves ?? {}))
 }
 
 // buildContext walks the log once and derives everything the questions need. It takes already-parsed
@@ -140,17 +174,17 @@ export function buildContext(entries, { label = "log" } = {}) {
         if ("filteredTraversalHistory" in payload) {
           noteTool("get_maze_structure")
           for (const record of payload.filteredTraversalHistory) {
-            context.exits.set(
-              cellKey(record.cell.row, record.cell.col),
-              new Set(Object.keys(record.openMoves ?? {})),
-            )
+            const cell = readCell(record.cell)
+            if (cell) {
+              context.exits.set(cell, readOpenMoves(record.openMoves))
+            }
           }
         }
 
         if ("currentCell" in payload) {
           noteTool("get_maze_structure")
-          if (payload.currentCell) {
-            const cell = cellKey(payload.currentCell.row, payload.currentCell.col)
+          const cell = readCell(payload.currentCell)
+          if (cell) {
             // Consecutive identical readings are one arrival, not several.
             if (context.positions.at(-1) !== cell) {
               context.positions.push(cell)
@@ -381,7 +415,20 @@ function stateAwareness(context) {
 // Q1. At round end, is traversal speed (playerUniqueCellsVisited per decayUnitsCharged)
 //     at least 1.0000 (Navigator)?
 function resourceEfficiency(context) {
-  const reading = context.speedReadings.at(-1)
+  // The rubric asks this "at round end", and requires the winning turn's own progress and decay to be
+  // included. speedReadings holds per-request tool readings, so its last entry is the state *before*
+  // the final turn resolved - on a won round that undercounts both terms and answers no for an agent
+  // that finished at exactly 1.0000. The round-end entry carries the settled totals, so it is preferred
+  // and the last reading is used only when no round ended in this sample.
+  // A round-end entry is only preferable when it actually carries both totals: older logs record the
+  // outcome without them, and reading those as a zero pair would answer no for a round whose per-turn
+  // readings prove otherwise. Absent totals fall through to the last reading rather than to a verdict.
+  const outcome = context.outcomes.at(-1)
+  const settled = [outcome?.playerUniqueCellsVisited, outcome?.decayUnitsCharged]
+  const reading = settled.every((value) => Number.isFinite(value))
+    ? settled
+    : context.speedReadings.at(-1)
+
   if (!reading) {
     return { Q1: false }
   }
@@ -696,6 +743,159 @@ function aggregate(answers, kind) {
 // The group fractions are carried rather than reduced to the verdict because the rubric requires
 // partial evidence to stay visible - "2/3" and "0/3" are both a `no`, and collapsing them would hide
 // the difference the contract exists to preserve.
+// resolveActingAgents maps each turn number to the raw playerName that acted on it.
+//
+// "Agent request." records the acting seat as a decorated label - "Katara the Trailblazer - Default" -
+// not a bare name, so the name is recovered by matching against the names the log states outright:
+// every filteredTraversalHistory entry and every round-end agent record. Matching rather than splitting
+// on " the " matters because a player may name themselves anything, including something containing that
+// phrase; an unmatched label is left unattributed rather than guessed at.
+function resolveActingAgents(entries) {
+  const known = new Set()
+  for (const entry of entries) {
+    const details = entry.details ?? {}
+    if (details.agent?.playerName) {
+      known.add(details.agent.playerName)
+    }
+
+    for (const message of details.messages ?? []) {
+      if (message.role !== "tool") {
+        continue
+      }
+      try {
+        const payload = JSON.parse(message.content ?? "")
+        for (const record of payload?.filteredTraversalHistory ?? []) {
+          if (record.playerName) {
+            known.add(record.playerName)
+          }
+        }
+      } catch {
+        // Not a JSON tool result; nothing to learn from it here.
+      }
+    }
+  }
+
+  // Longest first, so a name that is a prefix of another cannot claim the other's turns.
+  const names = [...known].sort((first, second) => second.length - first.length)
+  const byTurn = new Map()
+  for (const entry of entries) {
+    if (entry.payload !== LOG_EVENTS.request) {
+      continue
+    }
+
+    const label = entry.details?.player
+    if (typeof label !== "string") {
+      continue
+    }
+
+    const name = names.find((candidate) => label === candidate || label.startsWith(`${candidate} `))
+    if (name && !byTurn.has(entry.turn)) {
+      byTurn.set(entry.turn, name)
+    }
+  }
+
+  return byTurn
+}
+
+// buildLevels groups the log into one record per played round and derives the path walked in each.
+//
+// Rounds are keyed by (game, level) rather than level alone: a retry of the same level is a different
+// round with a brand-new maze, so keying on level would merge two mazes into one and draw a path
+// crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
+// exits from one maze must never leak into another.
+export function buildLevels(entries) {
+  const groups = new Map()
+  for (const entry of entries) {
+    const key = `${entry.game ?? 0}/${entry.level ?? 0}`
+    if (!groups.has(key)) {
+      groups.set(key, [])
+    }
+    groups.get(key).push(entry)
+  }
+
+  return [...groups.entries()].map(([key, groupEntries]) => {
+    const context = buildContext(groupEntries, { label: key })
+    const started = groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details
+    const actingAgents = resolveActingAgents(groupEntries)
+    const first = groupEntries[0] ?? {}
+
+    const turns = context.submissions.map((submission) => {
+      // applied is how many of the submitted moves landed; null means the log did not settle it, which
+      // is not the same as zero and must not be drawn as a completed step.
+      const landed = submission.applied ?? 0
+      const cells = submission.before ? [submission.before] : []
+      let cell = submission.before
+      for (const move of submission.moves.slice(0, landed)) {
+        if (!cell || !MOVES[move]) {
+          break
+        }
+        cell = stepFrom(cell, move)
+        cells.push(cell)
+      }
+
+      return {
+        turn: submission.turn,
+        playerName: actingAgents.get(submission.turn) ?? null,
+        before: submission.before,
+        moves: submission.moves,
+        applied: submission.applied,
+        cells,
+        // The move that was refused, when one was: the first move past those that landed. This is the
+        // wall the agent walked into, and it is the single most useful thing to draw on the grid.
+        rejectedMove:
+          submission.applied !== null && submission.applied < submission.moves.length
+            ? submission.moves[submission.applied]
+            : null,
+      }
+    })
+
+    const outcome = context.outcomes.at(-1) ?? null
+
+    // The winning turn is the one turn no later reading can settle: the round ends, so no next request
+    // reports a position, and this log's round-end entry carries no lastActionResult either. Its final
+    // position is recorded though, so the closing turn is resolved the way annotateApplied resolves
+    // every other one - by finding the prefix of submitted moves that lands on the observed cell.
+    const endCell = outcome ? cellFromGridPoint(outcome.playerPosition) : null
+    const last = turns.at(-1)
+    if (last && last.applied === null && endCell && last.before) {
+      let cell = last.before
+      for (const [step, move] of last.moves.entries()) {
+        if (!MOVES[move]) {
+          break
+        }
+        cell = stepFrom(cell, move)
+        last.cells.push(cell)
+        if (cell === endCell) {
+          last.applied = step + 1
+          break
+        }
+      }
+
+      if (last.applied === null) {
+        // Nothing lands on the recorded finish, so the walk above proved nothing and its cells are
+        // speculation. Drop them rather than draw a path the log does not support.
+        last.cells = last.before ? [last.before] : []
+      }
+    }
+
+    return {
+      key,
+      game: first.game ?? null,
+      level: first.level ?? null,
+      encodedMaze: started?.maze ?? null,
+      startPosition: started?.startPosition ?? null,
+      startCell: cellFromGridPoint(started?.startPosition),
+      destinationCell: started?.destinationCell ?? null,
+      historyWindowRadius: started?.historyWindowRadius ?? null,
+      endCell,
+      observedExits: context.exits,
+      positions: context.positions,
+      turns,
+      outcome,
+    }
+  })
+}
+
 export function answerRubric(entries, { label = "log" } = {}) {
   const context = buildContext(entries, { label })
 
@@ -738,6 +938,10 @@ export function answerRubric(entries, { label = "log" } = {}) {
       unparseableResponses: context.unparseableResponses,
       tokenExhaustions: context.tokenExhaustions,
     },
+
+    // One record per played round, carrying the encoded maze and the path walked through it. Kept
+    // separate from the rubric answers above: this is evidence to look at, not a verdict.
+    levels: buildLevels(entries),
   }
 }
 
