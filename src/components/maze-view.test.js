@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from "vitest"
 
-import { levelSummaryRows, mazeReplayModel } from "./oracle.js"
 import { createMazeReplay } from "./maze-view.js"
 
 const REAL_MAZE = {
@@ -41,10 +40,8 @@ const level = ({ encodedMaze = REAL_MAZE, game = 2, lvl = 1 } = {}) => ({
   outcome: { outcome: "won", traversalSpeed: "1.0000", playerUniqueCellsVisited: 17, decayUnitsCharged: 17 },
 })
 
-const build = (levels) => {
-  const report = { levels }
-  return createMazeReplay(mazeReplayModel(report), { levelSummary: levelSummaryRows(report) })
-}
+// The view shapes its own data now, so a test hands it the same report the page does.
+const build = (levels) => createMazeReplay({ levels })
 
 const range = (node) => node.querySelector("input[type=range]")
 const caption = (node) => node.querySelector(".maze-caption").textContent

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows } from "./oracle.js"
+import { levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows } from "./maze-view.js"
 
 const REAL_MAZE = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],

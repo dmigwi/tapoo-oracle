@@ -9,8 +9,152 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { MOVES } from "../analysis/log-contract.js";
-import { mazeFrameAt, mazeSummaryRows } from "./oracle.js";
+import { MOVES, cellKey, classifyTraversalSpeed } from "../analysis/log-contract.js";
+import { mazeFromEncoded } from "../analysis/maze.js";
+import { formatCount } from "./oracle.js";
+
+// --- Model ---
+
+// The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
+// holds adapters and view modules hold DOM - but nothing outside this file uses them, and the split
+// meant reaching into a module about reports for two functions only the maze calls. Pure and
+// document-free, so they stay testable without a DOM.
+
+
+// mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
+// be drawn.
+//
+// The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
+// picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
+// instead of a partial grid, and the view renders the error.
+export function mazeReplayModel(report) {
+  const levels = report?.levels ?? [];
+
+  return levels.map((level) => {
+    const destination = level.destinationCell
+      ? cellKey(level.destinationCell.row, level.destinationCell.col)
+      : null;
+    const built = mazeFromEncoded(level.encodedMaze, {
+      startCell: level.startCell,
+      destinationCell: destination
+    });
+
+    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
+    // level of a log rather than changing when another seat happens to move first.
+    const agents = [];
+    for (const turn of level.turns) {
+      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
+    }
+
+    return {
+      key: level.key,
+      game: level.game,
+      level: level.level,
+      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
+      maze: built.ok ? built.maze : null,
+      error: built.ok ? null : built.error,
+      stats: built.ok ? built.stats : null,
+      startCell: level.startCell,
+      destinationCell: destination,
+      endCell: level.endCell,
+      observedExits: level.observedExits,
+      turns: level.turns,
+      outcome: level.outcome,
+      agents
+    };
+  });
+}
+
+// mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
+//
+// Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
+// means every position it can show is reachable in a test without a browser.
+export function mazeFrameAt(levelModel, turnIndex) {
+  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
+  const visited = new Map();
+
+  if (levelModel.startCell) visited.set(levelModel.startCell, null);
+  for (const turn of played) {
+    for (const cell of turn.cells) visited.set(cell, turn.playerName);
+  }
+
+  const current = played.at(-1);
+  const positions = new Map();
+  for (const turn of played) {
+    if (turn.playerName && turn.cells.length > 0) positions.set(turn.playerName, turn.cells.at(-1));
+  }
+
+  return {
+    // The turns this frame covers. Returned rather than recomputed by the caller: drawFrame needed the
+    // whole level model purely to slice this same range again.
+    played,
+    turnIndex: played.length,
+    totalTurns: levelModel.turns.length,
+    visited,
+    positions,
+    currentCell: current?.cells.at(-1) ?? levelModel.startCell ?? null,
+    // The wall the agent walked into on this turn, if any. Drawn only for the current turn: a rejected
+    // move is an event, not a lasting property of the cell.
+    rejected: current?.rejectedMove ? {cell: current.cells.at(-1), move: current.rejectedMove} : null,
+    turn: current ?? null
+  };
+}
+
+// mazeSummaryRows describes the maze itself and how much of it the round actually used.
+export function mazeSummaryRows(levelModel) {
+  if (!levelModel?.stats) return [];
+
+  const stats = levelModel.stats;
+  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
+  if (levelModel.startCell) walked.add(levelModel.startCell);
+  const outcome = levelModel.outcome ?? {};
+  const agentCells = Number(outcome.playerUniqueCellsVisited);
+  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
+
+  return [
+    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
+    {field: "Dead ends", value: formatCount(stats.deadEnds)},
+    {field: "Corridors", value: formatCount(stats.corridors)},
+    {field: "Junctions", value: formatCount(stats.junctions)},
+    {
+      field: "Shortest route",
+      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
+    },
+    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
+    {
+      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
+      // one below the cells its path covers. Reporting both stops that gap reading as an error.
+      field: "Credited to agent",
+      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
+    },
+    {
+      field: "Decay charged",
+      value: Number.isFinite(Number(outcome.decayUnitsCharged))
+        ? formatCount(outcome.decayUnitsCharged)
+        : "not recorded"
+    }
+  ];
+}
+
+// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
+// a single aggregate.
+export function levelSummaryRows(report) {
+  return (report?.levels ?? []).map((level) => {
+    const outcome = level.outcome ?? {};
+    const speed = Number(outcome.traversalSpeed);
+
+    return {
+      level: level.level ?? "-",
+      game: level.game ?? "-",
+      outcome: outcome.outcome ?? "unfinished",
+      turns: level.turns.length,
+      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
+      // spellings of the same class in one report read as two different things.
+      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
+      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
+    };
+  });
+}
 
 // --- Drawing constants ---
 
@@ -32,13 +176,13 @@ const AGENT_COLORS = [
 
 // --- Element helpers ---
 
-const svgEl = (name, attributes = {}) => {
+const createSvgElement = (name, attributes = {}) => {
   const node = document.createElementNS(SVG_NS, name);
   for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
   return node;
 };
 
-const el = (name, className, text) => {
+const createHtmlElement = (name, className, text) => {
   const node = document.createElement(name);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -56,7 +200,7 @@ const cellXY = (cell) => {
 // interior walls are drawn twice - once from each side - which costs nothing and avoids having to
 // special-case the outer boundary.
 function drawWalls(svg, maze) {
-  const walls = svgEl("g", {stroke: "var(--oracle-ink)", "stroke-width": 2, "stroke-linecap": "square"});
+  const walls = createSvgElement("g", {stroke: "var(--oracle-ink)", "stroke-width": 2, "stroke-linecap": "square"});
   for (const [cell, open] of maze.exits) {
     const {x, y} = cellXY(cell);
     const edges = {
@@ -66,7 +210,7 @@ function drawWalls(svg, maze) {
       MoveRight: [x + CELL, y, x + CELL, y + CELL]
     };
     for (const [move, [x1, y1, x2, y2]] of Object.entries(edges)) {
-      if (!open.has(move)) walls.append(svgEl("line", {x1, y1, x2, y2}));
+      if (!open.has(move)) walls.append(createSvgElement("line", {x1, y1, x2, y2}));
     }
   }
   svg.append(walls);
@@ -77,7 +221,7 @@ function drawMarkers(svg, model) {
   if (model.destinationCell) {
     const {x, y} = cellXY(model.destinationCell);
     svg.append(
-      svgEl("rect", {
+      createSvgElement("rect", {
         x: x + 6, y: y + 6, width: CELL - 12, height: CELL - 12,
         fill: "none", stroke: "var(--oracle-rose)", "stroke-width": 2
       })
@@ -86,7 +230,7 @@ function drawMarkers(svg, model) {
   if (model.startCell) {
     const {x, y} = cellXY(model.startCell);
     svg.append(
-      svgEl("circle", {cx: x + CELL / 2, cy: y + CELL / 2, r: 3, fill: "var(--oracle-muted)"})
+      createSvgElement("circle", {cx: x + CELL / 2, cy: y + CELL / 2, r: 3, fill: "var(--oracle-muted)"})
     );
   }
 }
@@ -95,7 +239,7 @@ function drawMarkers(svg, model) {
 
 // drawFrame paints everything that changes as the scrubber moves. Kept in its own group so a repaint
 // removes exactly the previous frame and never the walls beneath it.
-function drawFrame(overlay, model, frame, colorOf) {
+function drawFrame(overlay, frame, colorOf) {
   overlay.replaceChildren();
 
   // Visited cells are tinted. --oracle-selected is only 1.12:1 against paper so it never signals alone,
@@ -106,7 +250,7 @@ function drawFrame(overlay, model, frame, colorOf) {
   for (const cell of frame.visited.keys()) {
     const {x, y} = cellXY(cell);
     overlay.append(
-      svgEl("rect", {
+      createSvgElement("rect", {
         x: x + 1, y: y + 1, width: CELL - 2, height: CELL - 2,
         fill: "var(--oracle-selected)", opacity: 0.85
       })
@@ -115,7 +259,7 @@ function drawFrame(overlay, model, frame, colorOf) {
 
   // The path walked so far, per agent, so crossing trails stay tellable apart.
   const byAgent = new Map();
-  for (const turn of model.turns.slice(0, frame.turnIndex)) {
+  for (const turn of frame.played) {
     const name = turn.playerName ?? "";
     if (!byAgent.has(name)) byAgent.set(name, []);
     byAgent.get(name).push(...turn.cells);
@@ -127,7 +271,7 @@ function drawFrame(overlay, model, frame, colorOf) {
       return `${x + CELL / 2},${y + CELL / 2}`;
     });
     overlay.append(
-      svgEl("polyline", {
+      createSvgElement("polyline", {
         points: points.join(" "), fill: "none", stroke: colorOf(name),
         "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: 0.9
       })
@@ -156,7 +300,7 @@ function drawFrame(overlay, model, frame, colorOf) {
     for (const [width, stroke] of [[5, "var(--oracle-paper)"], [2.5, "var(--oracle-rose)"]]) {
       for (const [x1, y1, x2, y2] of strokes) {
         overlay.append(
-          svgEl("line", {x1, y1, x2, y2, stroke, "stroke-width": width, "stroke-linecap": "round"})
+          createSvgElement("line", {x1, y1, x2, y2, stroke, "stroke-width": width, "stroke-linecap": "round"})
         );
       }
     }
@@ -165,7 +309,7 @@ function drawFrame(overlay, model, frame, colorOf) {
   for (const [name, cell] of frame.positions) {
     const {x, y} = cellXY(cell);
     overlay.append(
-      svgEl("circle", {
+      createSvgElement("circle", {
         cx: x + CELL / 2, cy: y + CELL / 2, r: 7,
         fill: colorOf(name), stroke: "var(--oracle-paper)", "stroke-width": 2
       })
@@ -173,9 +317,9 @@ function drawFrame(overlay, model, frame, colorOf) {
   }
 }
 
-// describeTurn is the scrubber's spoken label and its caption, so what the grid shows is also stated in
+// turnNarrative is the scrubber's spoken label and its caption, so what the grid shows is also stated in
 // words - a colour-coded path is not readable to everyone looking at it.
-function describeTurn(frame) {
+function turnNarrative(frame) {
   if (frame.turnIndex === 0) return "Start position, before the first turn.";
 
   const turn = frame.turn;
@@ -194,17 +338,17 @@ function describeTurn(frame) {
 // --- Summaries ---
 
 function summaryTable(rows, headers) {
-  const table = el("table", "maze-summary-table");
-  const head = el("thead");
-  const headRow = el("tr");
-  for (const header of headers) headRow.append(el("th", null, header));
+  const table = createHtmlElement("table", "maze-summary-table");
+  const head = createHtmlElement("thead");
+  const headRow = createHtmlElement("tr");
+  for (const header of headers) headRow.append(createHtmlElement("th", null, header));
   head.append(headRow);
   table.append(head);
 
-  const body = el("tbody");
+  const body = createHtmlElement("tbody");
   for (const row of rows) {
-    const tr = el("tr");
-    for (const value of Object.values(row)) tr.append(el("td", null, String(value)));
+    const tr = createHtmlElement("tr");
+    for (const value of Object.values(row)) tr.append(createHtmlElement("td", null, String(value)));
     body.append(tr);
   }
   table.append(body);
@@ -214,36 +358,41 @@ function summaryTable(rows, headers) {
 // --- Entry point ---
 
 // createMazeReplay builds the whole section for one report and returns its root node.
-export function createMazeReplay(models, {levelSummary = []} = {}) {
-  const root = el("section", "maze-replay");
-  root.setAttribute("aria-label", "Maze traversal replay");
+export function createMazeReplay(report) {
+  // Takes the report, not a pre-built model: both adapters live in this module, and having the caller
+  // run them meant the view's own data shaping was spelled out at every call site.
+  const models = mazeReplayModel(report);
+  const levelSummary = levelSummaryRows(report);
+
+  const root = createHtmlElement("section", "maze-replay");
+  root.setAttribute("aria-label", "Maze traversal timeline replay");
 
   if (models.length === 0) return root;
 
-  const heading = el("h2", "maze-heading", "Maze Traversal");
+  const heading = createHtmlElement("h2", "maze-heading", "Maze Traversal Timeline Replay");
   root.append(heading);
 
-  const controls = el("div", "maze-controls");
-  const select = el("select", "maze-level-select");
+  const controls = createHtmlElement("div", "maze-controls");
+  const select = createHtmlElement("select", "maze-level-select");
   select.setAttribute("aria-label", "Level to replay");
   models.forEach((model, index) => {
-    const option = el("option", null, model.label);
+    const option = createHtmlElement("option", null, model.label);
     option.value = String(index);
     select.append(option);
   });
   if (models.length > 1) controls.append(select);
   root.append(controls);
 
-  const figure = el("div", "maze-figure");
-  const caption = el("p", "maze-caption");
-  const scrubberRow = el("div", "maze-scrubber");
-  const range = el("input");
+  const figure = createHtmlElement("div", "maze-figure");
+  const caption = createHtmlElement("p", "maze-caption");
+  const scrubberRow = createHtmlElement("div", "maze-scrubber");
+  const range = createHtmlElement("input");
   range.type = "range";
   range.className = "maze-range";
-  const readout = el("span", "maze-readout");
+  const readout = createHtmlElement("span", "maze-readout");
   scrubberRow.append(range, readout);
 
-  const summary = el("div", "maze-summary");
+  const summary = createHtmlElement("div", "maze-summary");
   root.append(figure, caption, scrubberRow, summary);
 
   let active = models[0];
@@ -257,10 +406,10 @@ export function createMazeReplay(models, {levelSummary = []} = {}) {
 
   const paint = () => {
     const frame = mazeFrameAt(active, Number(range.value));
-    if (overlay) drawFrame(overlay, active, frame, colorOf);
-    caption.textContent = describeTurn(frame);
+    if (overlay) drawFrame(overlay, frame, colorOf);
+    caption.textContent = turnNarrative(frame);
     readout.textContent = `${frame.turnIndex} / ${frame.totalTurns}`;
-    range.setAttribute("aria-valuetext", describeTurn(frame));
+    range.setAttribute("aria-valuetext", turnNarrative(frame));
   };
 
   const showLevel = (model) => {
@@ -271,11 +420,11 @@ export function createMazeReplay(models, {levelSummary = []} = {}) {
     if (!model.maze) {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
       // silently dropping the grid would read as "this round had nothing worth showing".
-      const notice = el("div", "notice notice-error");
-      notice.append(el("strong", null, "Maze unavailable for this round"));
-      notice.append(el("span", null, model.error));
+      const notice = createHtmlElement("div", "notice notice-error");
+      notice.append(createHtmlElement("strong", null, "Maze unavailable for this round"));
+      notice.append(createHtmlElement("span", null, model.error));
       notice.append(
-        el(
+        createHtmlElement(
           "span",
           null,
           "A round resumed from a saved snapshot, or logs reset mid-round, never write the level-started entry that carries the maze."
@@ -288,7 +437,7 @@ export function createMazeReplay(models, {levelSummary = []} = {}) {
     }
 
     scrubberRow.hidden = false;
-    const svg = svgEl("svg", {
+    const svg = createSvgElement("svg", {
       viewBox: `-2 -2 ${model.maze.cols * CELL + 4} ${model.maze.rows * CELL + 4}`,
       class: "maze-grid",
       role: "img",
@@ -296,7 +445,7 @@ export function createMazeReplay(models, {levelSummary = []} = {}) {
     });
     drawWalls(svg, model.maze);
     drawMarkers(svg, model);
-    overlay = svgEl("g", {class: "maze-overlay"});
+    overlay = createSvgElement("g", {class: "maze-overlay"});
     svg.append(overlay);
     figure.append(svg);
 
@@ -309,7 +458,7 @@ export function createMazeReplay(models, {levelSummary = []} = {}) {
       summaryTable(mazeSummaryRows(model), ["Maze", "Value"]),
       levelSummary.length > 0
         ? summaryTable(levelSummary, ["Level", "Game", "Outcome", "Turns", "Speed", "Class"])
-        : el("div")
+        : createHtmlElement("div")
     );
 
     paint();

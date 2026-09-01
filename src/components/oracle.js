@@ -10,8 +10,7 @@
 // signal that the contract does not define. A plausible-looking number with no basis in the log is
 // worse than an absent one, because it still reads as evidence.
 
-import { cellKey, classifyTraversalSpeed, parseTapooLogExport } from "../analysis/log-contract.js";
-import { mazeFromEncoded } from "../analysis/maze.js";
+import { parseTapooLogExport } from "../analysis/log-contract.js";
 import { answerRubric } from "../analysis/rubric-engine.js";
 
 // --- Analyzing a log ---
@@ -437,12 +436,12 @@ async function fetchReportText(url) {
   return response.text();
 }
 
-// describeFetchFailure turns what fetch throws into something a reader can act on.
+// fetchFailureMessage turns what fetch throws into something a reader can act on.
 //
 // A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
 // offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
 // is the one failure where a link that works for whoever shared it can fail for whoever opens it.
-export function describeFetchFailure(error) {
+export function fetchFailureMessage(error) {
   const message = error?.message ?? String(error)
   if (error instanceof TypeError) {
     return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
@@ -491,7 +490,7 @@ export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText
     const tab = {
       ...baseTab,
       status: "error",
-      error: describeFetchFailure(error),
+      error: fetchFailureMessage(error),
       result: undefined,
     };
     return {
@@ -530,7 +529,7 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
     return updateReportTab(state, tabId, {
       status: "error",
       label,
-      error: describeFetchFailure(error),
+      error: fetchFailureMessage(error),
       result: undefined,
       loadedUrl: validation.url,
     });
@@ -539,7 +538,7 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
 
 // --- Report adapters ---
 
-function formatCount(value) {
+export function formatCount(value) {
   return Number(value).toLocaleString("en-US");
 }
 
@@ -669,140 +668,6 @@ export function provenanceTableData(source, report) {
     columns: provenance.map((row) => row.field),
     rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
   }
-}
-
-// --- Maze replay adapters ---
-
-// mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
-// be drawn.
-//
-// The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
-// picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
-// instead of a partial grid, and the view renders the error.
-export function mazeReplayModel(report) {
-  const levels = report?.levels ?? [];
-
-  return levels.map((level) => {
-    const destination = level.destinationCell
-      ? cellKey(level.destinationCell.row, level.destinationCell.col)
-      : null;
-    const built = mazeFromEncoded(level.encodedMaze, {
-      startCell: level.startCell,
-      destinationCell: destination
-    });
-
-    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
-    // level of a log rather than changing when another seat happens to move first.
-    const agents = [];
-    for (const turn of level.turns) {
-      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
-    }
-
-    return {
-      key: level.key,
-      game: level.game,
-      level: level.level,
-      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
-      maze: built.ok ? built.maze : null,
-      error: built.ok ? null : built.error,
-      stats: built.ok ? built.stats : null,
-      startCell: level.startCell,
-      destinationCell: destination,
-      endCell: level.endCell,
-      observedExits: level.observedExits,
-      turns: level.turns,
-      outcome: level.outcome,
-      agents
-    };
-  });
-}
-
-// mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
-//
-// Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
-// means every position it can show is reachable in a test without a browser.
-export function mazeFrameAt(levelModel, turnIndex) {
-  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
-  const visited = new Map();
-
-  if (levelModel.startCell) visited.set(levelModel.startCell, null);
-  for (const turn of played) {
-    for (const cell of turn.cells) visited.set(cell, turn.playerName);
-  }
-
-  const current = played.at(-1);
-  const positions = new Map();
-  for (const turn of played) {
-    if (turn.playerName && turn.cells.length > 0) positions.set(turn.playerName, turn.cells.at(-1));
-  }
-
-  return {
-    turnIndex: played.length,
-    totalTurns: levelModel.turns.length,
-    visited,
-    positions,
-    currentCell: current?.cells.at(-1) ?? levelModel.startCell ?? null,
-    // The wall the agent walked into on this turn, if any. Drawn only for the current turn: a rejected
-    // move is an event, not a lasting property of the cell.
-    rejected: current?.rejectedMove ? {cell: current.cells.at(-1), move: current.rejectedMove} : null,
-    turn: current ?? null
-  };
-}
-
-// mazeSummaryRows describes the maze itself and how much of it the round actually used.
-export function mazeSummaryRows(levelModel) {
-  if (!levelModel?.stats) return [];
-
-  const stats = levelModel.stats;
-  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
-  if (levelModel.startCell) walked.add(levelModel.startCell);
-  const outcome = levelModel.outcome ?? {};
-  const agentCells = Number(outcome.playerUniqueCellsVisited);
-  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
-
-  return [
-    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Dead ends", value: formatCount(stats.deadEnds)},
-    {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "Junctions", value: formatCount(stats.junctions)},
-    {
-      field: "Shortest route",
-      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
-    },
-    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
-    {
-      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
-      // one below the cells its path covers. Reporting both stops that gap reading as an error.
-      field: "Credited to agent",
-      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
-    },
-    {
-      field: "Decay charged",
-      value: Number.isFinite(Number(outcome.decayUnitsCharged))
-        ? formatCount(outcome.decayUnitsCharged)
-        : "not recorded"
-    }
-  ];
-}
-
-// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
-// a single aggregate.
-export function levelSummaryRows(report) {
-  return (report?.levels ?? []).map((level) => {
-    const outcome = level.outcome ?? {};
-    const speed = Number(outcome.traversalSpeed);
-
-    return {
-      level: level.level ?? "-",
-      game: level.game ?? "-",
-      outcome: outcome.outcome ?? "unfinished",
-      turns: level.turns.length,
-      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
-      // spellings of the same class in one report read as two different things.
-      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
-      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
-    };
-  });
 }
 
 // --- Table post-processing ---

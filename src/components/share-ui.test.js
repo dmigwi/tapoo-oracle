@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   appBasePath,
   createReportTabsInput,
-  describeFetchFailure,
+  fetchFailureMessage,
   encodeReportPayload,
   reportPayloadFromHash,
   reportPayloadFromPath,
@@ -119,14 +119,14 @@ describe("reportPayloadFromHash", () => {
   })
 })
 
-describe("describeFetchFailure", () => {
+describe("fetchFailureMessage", () => {
   it("names the cross-origin case, which a bare TypeError does not", () => {
     // The one failure where a link that works for the sharer fails for the reader.
-    expect(describeFetchFailure(new TypeError("Failed to fetch"))).toMatch(/allow other sites/)
+    expect(fetchFailureMessage(new TypeError("Failed to fetch"))).toMatch(/allow other sites/)
   })
 
   it("suggests the likely cause of a status failure", () => {
-    expect(describeFetchFailure(new Error("404 Not Found"))).toMatch(/deleted|public/)
+    expect(fetchFailureMessage(new Error("404 Not Found"))).toMatch(/deleted|public/)
   })
 })
 

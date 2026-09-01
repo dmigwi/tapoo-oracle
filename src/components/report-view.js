@@ -14,8 +14,6 @@ import {
   diagnosticTableData,
   enableRowSelection,
   groupResultTone,
-  levelSummaryRows,
-  mazeReplayModel,
   prepareRubricTable,
   rubricQuestionRows,
   narrativeSummary,
@@ -118,7 +116,8 @@ function emptyState({html}, tab) {
     </section>`;
 }
 
-function notices({html}, tab, result) {
+function notices({html}, tab) {
+  const result = tab?.result;
   if (tab?.status === "error") {
     return html`<section class="notice notice-error">
       <strong>Cannot analyze this URL</strong>
@@ -134,14 +133,13 @@ function notices({html}, tab, result) {
   return "";
 }
 
-function profile({html}, tab, result) {
+function profile({html}, tab) {
+  const result = tab?.result;
   if (!result?.ok) return "";
   return html`<div class="report-region">
       <section class="events-section">
         <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
-        ${createMazeReplay(mazeReplayModel(result.report), {
-          levelSummary: levelSummaryRows(result.report)
-        })}
+        ${createMazeReplay(result.report)}
       </section>
       <section class="analysis-strip">
         ${profileCards(result.report).map(
@@ -198,11 +196,10 @@ function detail(ui, result) {
 // reading order stays visible in the markdown rather than being buried in this file.
 export function renderReportSections(ui, tabsState) {
   const tab = activeReportTab(tabsState);
-  const result = tab?.result;
   return {
     emptyState: emptyState(ui, tab),
-    notices: notices(ui, tab, result),
-    profile: profile(ui, tab, result),
-    detail: detail(ui, result)
+    notices: notices(ui, tab),
+    profile: profile(ui, tab),
+    detail: detail(ui, tab?.result)
   };
 }
