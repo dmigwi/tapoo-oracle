@@ -12,6 +12,8 @@
 import { MOVES } from "../analysis/log-contract.js";
 import { mazeFrameAt, mazeSummaryRows } from "./oracle.js";
 
+// --- Drawing constants ---
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 // CELL is the drawn size of one maze cell. The SVG scales to its container, so this only fixes the
@@ -27,6 +29,8 @@ const AGENT_COLORS = [
   "#4a5f8a",
   "#6c4a7a"
 ];
+
+// --- Element helpers ---
 
 const svgEl = (name, attributes = {}) => {
   const node = document.createElementNS(SVG_NS, name);
@@ -45,6 +49,8 @@ const cellXY = (cell) => {
   const [row, col] = cell.split(",").map(Number);
   return {row, col, x: col * CELL, y: row * CELL};
 };
+
+// --- Static layers ---
 
 // drawWalls renders the static maze once. Every edge a cell has no exit through becomes a line, so
 // interior walls are drawn twice - once from each side - which costs nothing and avoids having to
@@ -84,6 +90,8 @@ function drawMarkers(svg, model) {
     );
   }
 }
+
+// --- The scrubbed frame ---
 
 // drawFrame paints everything that changes as the scrubber moves. Kept in its own group so a repaint
 // removes exactly the previous frame and never the walls beneath it.
@@ -183,6 +191,8 @@ function describeTurn(frame) {
   return `Turn ${turn.turn}: ${who}submitted ${turn.moves.join(", ")} - ${landed}${wall}.`;
 }
 
+// --- Summaries ---
+
 function summaryTable(rows, headers) {
   const table = el("table", "maze-summary-table");
   const head = el("thead");
@@ -200,6 +210,8 @@ function summaryTable(rows, headers) {
   table.append(body);
   return table;
 }
+
+// --- Entry point ---
 
 // createMazeReplay builds the whole section for one report and returns its root node.
 export function createMazeReplay(models, {levelSummary = []} = {}) {

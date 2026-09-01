@@ -13,6 +13,8 @@
 
 import { MOVES, cellKey, stepFrom } from "./log-contract.js"
 
+// --- Rendered grid geometry ---
+
 // RENDER_CELL_STEP is the distance in rendered-grid units between neighboring logical cell centers.
 // Tapoo renders a maze with its walls interleaved between cells, so an R x C maze occupies a
 // (2R+1) x (2C+1) token grid and logical cell (r, c) sits at [2r+1][2c+1].
@@ -32,6 +34,15 @@ export function cellFromGridPoint(point) {
 
   return cellKey(Math.floor((y - 1) / RENDER_CELL_STEP), Math.floor((x - 1) / RENDER_CELL_STEP))
 }
+
+// isOpen reports whether a rendered token is a gap rather than a wall.
+//
+// Tapoo's own test is the first character being a space (isSpaceFound in frontend/app/traversal.ts): a
+// horizontal opening is the three-space token "   " while a vertical one is " ", so comparing the whole
+// token against a single space would read every horizontal opening as a wall.
+const isOpen = (token) => typeof token === "string" && token.length > 0 && token.charCodeAt(0) === 32
+
+// --- Decoding the logged maze ---
 
 // fnv1a64Checksum is the FNV-1a 64-bit hash Tapoo stamps onto an encoded maze, over UTF-8 bytes.
 // Ported rather than imported - the alternative is trusting a structure string that may have been
@@ -91,13 +102,6 @@ export function decodeEncodedMaze(encoded) {
   return { ok: true, grid }
 }
 
-// isOpen reports whether a rendered token is a gap rather than a wall.
-//
-// Tapoo's own test is the first character being a space (isSpaceFound in frontend/app/traversal.ts): a
-// horizontal opening is the three-space token "   " while a vertical one is " ", so comparing the whole
-// token against a single space would read every horizontal opening as a wall.
-const isOpen = (token) => typeof token === "string" && token.length > 0 && token.charCodeAt(0) === 32
-
 // mazeFromDecodedGrid reduces the rendered token grid to the logical wall graph the report reasons about.
 //
 // The result is deliberately the same shape as buildContext's context.exits - Map of "row,col" to a Set
@@ -138,6 +142,8 @@ export function mazeFromDecodedGrid(grid, dimensions) {
 
   return { ok: true, maze: { rows, cols, exits } }
 }
+
+// --- Reading the maze ---
 
 // shortestPathLength walks the maze breadth-first and returns the fewest moves between two cells, or
 // null when no route exists. Reported beside the agent's own path length, it is what turns "17 cells
@@ -195,6 +201,8 @@ export function mazeStats(maze, { startCell, destinationCell } = {}) {
     shortestPath: shortestPathLength(maze, startCell, destinationCell),
   }
 }
+
+// --- Entry point ---
 
 // mazeFromEncoded is the one call a consumer needs: encoded field in, wall graph and stats out.
 export function mazeFromEncoded(encoded, { startCell, destinationCell } = {}) {

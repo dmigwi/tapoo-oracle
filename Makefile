@@ -1,4 +1,4 @@
-PNPM ?= pnpm
+PNPM := pnpm
 
 .DEFAULT_GOAL := help
 

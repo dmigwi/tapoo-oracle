@@ -13,6 +13,8 @@
 // LOG_CONTRACT_VERSION below is what tells a consumer it is looking at something it does not know
 // how to read.
 
+// --- Export identity ---
+
 // LOG_CONTRACT_VERSION is the version of the *log shape*, not of Tapoo. It is independent of the
 // APP_VERSION stamped into an export, because the log shape changes far less often than the app:
 // tying consumers to the app version would reject logs on every unrelated patch release.
@@ -28,6 +30,8 @@ export const AGENT_API_MODE = "agent-api"
 
 // LOG_LEVELS mirrors the LogLevel union in frontend/app/types.ts.
 export const LOG_LEVELS = new Set(["error", "info", "warn"])
+
+// --- What a log says ---
 
 // LOG_EVENTS is the payload sentence vocabulary the analyzer branches on. These strings are the
 // stable identity of an event - the payload field is prose, but it is *fixed* prose, and matching it
@@ -57,6 +61,8 @@ export const DECLARED_TOOLS = [
   "get_last_prediction_outcome",
 ]
 
+// --- Maze geometry ---
+
 // MOVES maps each accepted move command to its [row, col] delta. The four keys are also the complete
 // set of valid commands, which is what C1.Q3 checks against.
 export const MOVES = {
@@ -65,6 +71,19 @@ export const MOVES = {
   MoveLeft: [0, -1],
   MoveRight: [0, 1],
 }
+
+// Cells are Map/Set keys, so they travel as "row,col" strings rather than arrays, which compare by
+// identity and would make every lookup miss.
+export const cellKey = (row, col) => `${row},${col}`
+
+// stepFrom resolves the cell reached by applying one move command to a "row,col" key.
+export function stepFrom(key, move) {
+  const [row, col] = key.split(",").map(Number)
+  const [rowDelta, colDelta] = MOVES[move]
+  return cellKey(row + rowDelta, col + colDelta)
+}
+
+// --- Traversal speed ---
 
 // TRAVERSAL_SPEED_CLASSES are the thresholds from the rubric's Agent-Scoped Traversal Speed section.
 export const TRAVERSAL_SPEED_CLASSES = {
@@ -85,16 +104,7 @@ export function classifyTraversalSpeed(speed) {
   return value > 1.0 ? TRAVERSAL_SPEED_CLASSES.trailblazer : TRAVERSAL_SPEED_CLASSES.navigator
 }
 
-// Cells are Map/Set keys, so they travel as "row,col" strings rather than arrays, which compare by
-// identity and would make every lookup miss.
-export const cellKey = (row, col) => `${row},${col}`
-
-// stepFrom resolves the cell reached by applying one move command to a "row,col" key.
-export function stepFrom(key, move) {
-  const [row, col] = key.split(",").map(Number)
-  const [rowDelta, colDelta] = MOVES[move]
-  return cellKey(row + rowDelta, col + colDelta)
-}
+// --- Validating an export ---
 
 // isLogEntry reports whether one array element carries the fields every consumer relies on. turn,
 // level, and game are checked but not required to be present: logs written before those counters
@@ -151,7 +161,11 @@ export function parseTapooLogExport(value) {
     // Unreadable entries are stand-ins written by storage-logs.ts when a record fails to decode.
     // They are dropped rather than fatal: the surrounding round is still worth analyzing, but the
     // count has to surface, because it bounds how complete any "not observed" answer really is.
-    warnings.push(`${skipped} entr${skipped === 1 ? "y" : "ies"} did not match the log entry shape and were skipped.`)
+    warnings.push(
+      skipped === 1
+        ? "1 entry did not match the log entry shape and was skipped."
+        : `${skipped} entries did not match the log entry shape and were skipped.`,
+    )
   }
 
   if (entries.length === 0) {

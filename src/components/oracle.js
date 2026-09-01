@@ -14,6 +14,8 @@ import { cellKey, classifyTraversalSpeed, parseTapooLogExport } from "../analysi
 import { mazeFromEncoded } from "../analysis/maze.js";
 import { answerRubric } from "../analysis/rubric-engine.js";
 
+// --- Analyzing a log ---
+
 // analyzeLogText is the single entry point from raw text to a rendered result. It returns a
 // discriminated result instead of throwing, because every failure here is a person's input mistake
 // that the page has to explain, not an exceptional condition.
@@ -43,24 +45,7 @@ export function analyzeLogText(text, {label = "online log", sourceUrl} = {}) {
   };
 }
 
-export function createEmptyReportTab(id = reportTabId()) {
-  return {
-    id,
-    url: "",
-    label: "New report",
-    status: "empty",
-  };
-}
-
-export function createInitialReportTabs() {
-  return {
-    tabs: [],
-    activeTabId: null,
-    isAdding: true,
-    draftUrl: "",
-    draftStatus: "empty",
-  };
-}
+// --- Online JSON URLs ---
 
 export function validateOnlineJsonUrl(value) {
   const trimmed = String(value ?? "").trim();
@@ -82,7 +67,7 @@ export function validateOnlineJsonUrl(value) {
   return {ok: true, url: url.href};
 }
 
-// --- Shareable report payloads ---
+// --- Share payload format ---
 
 // Prefixes worth dropping, longest match first. This is a compression table and never an allowlist:
 // validateOnlineJsonUrl remains the only gate on what may be loaded, so a URL on any other host
@@ -103,42 +88,6 @@ const REPORT_PAYLOAD_HEX_MARKER = 0x01
 // Below this a run costs more in framing than it saves. 16 hex characters pack to 8 bytes plus 2 of
 // framing; shorter runs are left as text.
 const REPORT_PAYLOAD_HEX_MIN = 16
-
-// Two outcomes, because a reader has exactly two situations to be in: either the link named no report
-// at all, or it named one and did not survive the trip. Every way a token can fail past that point -
-// characters that were never base64url, a run that overshoots the token, a checksum that no longer
-// matches, a prefix this build does not know - is the same event to the person holding it, and the
-// same remedy. Splitting them further only asks the reader to care which byte went wrong.
-const LINK_UNNAMED = "This link does not name a report."
-const LINK_ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
-
-// elideToken keeps both ends of an opaque token. The head is what a reader matches at a glance against
-// the link they were sent; the tail is where truncation and transcription damage actually shows up. A
-// tail alone reads as random text, which is the one thing this label must not do.
-const elideToken = (token, head = 10, tail = 12) =>
-  token.length <= head + tail + 3 ? token : `${token.slice(0, head)}...${token.slice(-tail)}`
-
-// damagedLinkLabel shows the failure in the shape the reader was actually handed - origin, base path,
-// /r/, then the elided token. The scheme and host are what make it recognizable as a URL at a glance
-// rather than a string of characters. Off a browser there is no origin to name, so it degrades to the
-// route path, which still reads as a link.
-const damagedLinkLabel = (token) => {
-  const elided = elideToken(token)
-  const location = globalThis.location
-  return location?.origin ? reportRouteFor(elided, location) : `/${REPORT_ROUTE}/${elided}`
-}
-
-// rejectedLink pairs a reason with the link it is about, kept as separate values rather than joined
-// into one sentence: the view marks the link up as code, which it cannot do once the two are one
-// string. An unnamed token - the empty case - carries no link, since there is nothing to point at.
-//
-// The link belongs in the message and never in the address bar: the token is opaque and this one does
-// not decode, so a /r/<token> address built from it would resolve to nothing while still looking usable.
-const rejectedLink = (reason, token) => ({
-  ok: false,
-  error: reason,
-  link: token ? damagedLinkLabel(token) : null
-})
 
 // Two trailing bytes over the rest of the token, so a link altered in transit is caught rather than
 // decoded into a different, valid-looking address.
@@ -181,6 +130,116 @@ function isPackableHexSegment(segment) {
     /^[0-9a-f]+$/.test(segment)
   )
 }
+
+// --- Report routes and links ---
+
+// The route a shared report lives at. Namespaced under /r/ rather than sitting at the root so it
+// reads as a route, and so a future host with real routing can serve it without having to guess
+// whether a path segment is a token or a page.
+const REPORT_ROUTE = "r"
+
+const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`)
+
+// The fragment hop carries the same marker the path form does.
+//
+// A bare #<token> cannot be told apart from an ordinary page anchor: base64url tokens use the same
+// characters a slug does, so #section-two and a real token are the same shape. The path form never had
+// this problem because the literal /r/ segment marks it, and this restores that symmetry. Everything
+// after the marker is captured, damaged or not, so a mangled token still reaches decodeReportPayload
+// and is reported as a damaged link rather than silently ignored.
+const REPORT_PAYLOAD_FRAGMENT_PATTERN = new RegExp(`^#?${REPORT_ROUTE}=(.+)$`)
+
+// appBasePath finds where the app is served from, given any page within it.
+//
+// It has to strip a report route back off, because the address bar of a shared report already
+// carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
+// drops a trailing file name so /index.html and / produce the same base.
+export function appBasePath(pathname = "/") {
+  const withoutRoute = String(pathname).replace(REPORT_ROUTE_PATTERN, "/")
+  const withoutFile = withoutRoute.replace(/[^/]*\.html?$/, "")
+  return withoutFile.endsWith("/") ? withoutFile : `${withoutFile}/`
+}
+
+// reportRouteFor composes the public form of a link from a token. Every address the reader is left
+// looking at goes through here, so the route is built one way only.
+function reportRouteFor(token, location = globalThis.location) {
+  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${token}`
+}
+
+// appRootFor is where a reader is left when no token can be shown - never the fragment, which is an
+// internal hop and not an address anyone should be handed.
+function appRootFor(location = globalThis.location) {
+  return `${location.origin}${appBasePath(location.pathname)}`
+}
+
+// shareLinkFor composes the link that reproduces one report.
+//
+// The token is a path segment, which means it is sent to the host: GitHub Pages will have the
+// (recoverable) log address in its request logs, and every shared link is served with a 404 status
+// through the shim in 404.md. That trade was made deliberately for a link that reads as a link.
+export function shareLinkFor(url, location = globalThis.location) {
+  const encoded = encodeReportPayload(url)
+  if (!encoded.ok) {
+    return null
+  }
+
+  return reportRouteFor(encoded.payload, location)
+}
+
+// reportPayloadFromPath reads the token out of a /r/<token> route.
+export function reportPayloadFromPath(pathname) {
+  return REPORT_ROUTE_PATTERN.exec(String(pathname ?? ""))?.[1] ?? null
+}
+
+// reportPayloadFromHash reads a token out of a location fragment.
+//
+// Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
+// cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
+// so the public form and the internal hop can change independently.
+export function reportPayloadFromHash(hash) {
+  return REPORT_PAYLOAD_FRAGMENT_PATTERN.exec(String(hash ?? ""))?.[1] ?? null
+}
+
+// --- Why a link failed ---
+
+// Two outcomes, because a reader has exactly two situations to be in: either the link named no report
+// at all, or it named one and did not survive the trip. Every way a token can fail past that point -
+// characters that were never base64url, a run that overshoots the token, a checksum that no longer
+// matches, a prefix this build does not know - is the same event to the person holding it, and the
+// same remedy. Splitting them further only asks the reader to care which byte went wrong.
+const LINK_UNNAMED = "This link does not name a report."
+
+const LINK_ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
+
+// elideToken keeps both ends of an opaque token. The head is what a reader matches at a glance against
+// the link they were sent; the tail is where truncation and transcription damage actually shows up. A
+// tail alone reads as random text, which is the one thing this label must not do.
+const elideToken = (token, head = 10, tail = 12) =>
+  token.length <= head + tail + 3 ? token : `${token.slice(0, head)}...${token.slice(-tail)}`
+
+// damagedLinkLabel shows the failure in the shape the reader was actually handed - origin, base path,
+// /r/, then the elided token. The scheme and host are what make it recognizable as a URL at a glance
+// rather than a string of characters. Off a browser there is no origin to name, so it degrades to the
+// route path, which still reads as a link.
+const damagedLinkLabel = (token) => {
+  const elided = elideToken(token)
+  const location = globalThis.location
+  return location?.origin ? reportRouteFor(elided, location) : `/${REPORT_ROUTE}/${elided}`
+}
+
+// rejectedLink pairs a reason with the link it is about, kept as separate values rather than joined
+// into one sentence: the view marks the link up as code, which it cannot do once the two are one
+// string. An unnamed token - the empty case - carries no link, since there is nothing to point at.
+//
+// The link belongs in the message and never in the address bar: the token is opaque and this one does
+// not decode, so a /r/<token> address built from it would resolve to nothing while still looking usable.
+const rejectedLink = (reason, token) => ({
+  ok: false,
+  error: reason,
+  link: token ? damagedLinkLabel(token) : null
+})
+
+// --- Encoding and decoding a link ---
 
 // encodeReportPayload turns a log URL into the token a shared link carries.
 //
@@ -287,6 +346,15 @@ export function decodeReportPayload(value) {
   return validateOnlineJsonUrl(prefix + address)
 }
 
+// --- Report tabs ---
+
+function reportTabId() {
+  if (globalThis.crypto?.randomUUID) {
+    return `report-${globalThis.crypto.randomUUID()}`;
+  }
+  return `report-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function reportTabLabelFromUrl(value, index = 0) {
   const fallback = `Report ${index + 1}`;
   try {
@@ -302,6 +370,25 @@ export function trimReportTabLabel(value, maxLength = 34) {
   const label = String(value ?? "").trim();
   if (label.length <= maxLength) return label;
   return `...${label.slice(-(maxLength - 3))}`;
+}
+
+export function createEmptyReportTab(id = reportTabId()) {
+  return {
+    id,
+    url: "",
+    label: "New report",
+    status: "empty",
+  };
+}
+
+export function createInitialReportTabs() {
+  return {
+    tabs: [],
+    activeTabId: null,
+    isAdding: true,
+    draftUrl: "",
+    draftStatus: "empty",
+  };
 }
 
 export function addReportTab(state, id = reportTabId()) {
@@ -338,6 +425,30 @@ export function deleteReportTab(state, tabId, createId = reportTabId) {
 
   const nextIndex = Math.min(Math.max(deletedIndex, 0), tabs.length - 1);
   return {tabs, activeTabId: tabs[nextIndex].id};
+}
+
+// --- Loading a report ---
+
+async function fetchReportText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
+  }
+  return response.text();
+}
+
+// describeFetchFailure turns what fetch throws into something a reader can act on.
+//
+// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
+// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
+// is the one failure where a link that works for whoever shared it can fail for whoever opens it.
+export function describeFetchFailure(error) {
+  const message = error?.message ?? String(error)
+  if (error instanceof TypeError) {
+    return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
+  }
+
+  return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`
 }
 
 export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText) {
@@ -426,70 +537,418 @@ export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReport
   }
 }
 
-// The route a shared report lives at. Namespaced under /r/ rather than sitting at the root so it
-// reads as a route, and so a future host with real routing can serve it without having to guess
-// whether a path segment is a token or a page.
-const REPORT_ROUTE = "r"
-const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`)
-// The fragment hop carries the same marker the path form does.
-//
-// A bare #<token> cannot be told apart from an ordinary page anchor: base64url tokens use the same
-// characters a slug does, so #section-two and a real token are the same shape. The path form never had
-// this problem because the literal /r/ segment marks it, and this restores that symmetry. Everything
-// after the marker is captured, damaged or not, so a mangled token still reaches decodeReportPayload
-// and is reported as a damaged link rather than silently ignored.
-const REPORT_PAYLOAD_FRAGMENT_PATTERN = new RegExp(`^#?${REPORT_ROUTE}=(.+)$`)
+// --- Report adapters ---
 
-// appBasePath finds where the app is served from, given any page within it.
-//
-// It has to strip a report route back off, because the address bar of a shared report already
-// carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
-// drops a trailing file name so /index.html and / produce the same base.
-export function appBasePath(pathname = "/") {
-  const withoutRoute = String(pathname).replace(REPORT_ROUTE_PATTERN, "/")
-  const withoutFile = withoutRoute.replace(/[^/]*\.html?$/, "")
-  return withoutFile.endsWith("/") ? withoutFile : `${withoutFile}/`
+function formatCount(value) {
+  return Number(value).toLocaleString("en-US");
 }
 
-// shareLinkFor composes the link that reproduces one report.
+export function profileCards(report) {
+  const met = (groups) => groups.filter((group) => group.met).length;
+
+  return [
+    {
+      label: "Capabilities demonstrated",
+      value: `${met(report.capabilities)}/${report.capabilities.length}`,
+      tone: "teal"
+    },
+    {
+      label: "Violations confirmed",
+      value: `${met(report.violations)}/${report.violations.length}`,
+      tone: "rose"
+    },
+    {label: "Predictions", value: formatCount(report.predictions), tone: "ink"},
+    {label: "Rounds", value: formatCount(report.rounds), tone: "ink"}
+  ];
+}
+
+// narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
+// reliably over-read a negative rubric answer as a claim about the model's ability, which it never
+// is - it says the behavior was not observed in this one sample.
+export function narrativeSummary(report) {
+  const capabilities = report.capabilities.filter((group) => group.met).map((group) => group.id);
+  const violations = report.violations.filter((group) => group.met).map((group) => group.id);
+  const speed = report.traversalSpeedClass
+    ? `Winning traversal speed ${report.traversalSpeed.toFixed(4)} (${report.traversalSpeedClass}).`
+    : "No winning round in this sample.";
+
+  return [
+    `${report.model ?? "This agent"} demonstrated ${capabilities.length} of ${report.capabilities.length} capabilities`,
+    capabilities.length ? `(${capabilities.join(", ")})` : "",
+    `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
+    violations.length
+      ? `Confirmed violations: ${violations.join(", ")}.`
+      : "No violations confirmed.",
+    speed,
+    "A negative answer means the behavior was not observed in this sample, not that the model is incapable of it."
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+// groupResultTone names the class a group result should carry, or null for no colour at all.
 //
-// The token is a path segment, which means it is sent to the host: GitHub Pages will have the
-// (recoverable) log address in its request logs, and every shared link is served with a 404 status
-// through the shim in 404.md. That trade was made deliberately for a link that reads as a link.
-export function shareLinkFor(url, location = globalThis.location) {
-  const encoded = encodeReportPayload(url)
-  if (!encoded.ok) {
+// Split out from the table's format callback because this is the part that can be wrong: YES means
+// opposite things in the two tables, and the rule for what stays uncoloured is a statement about
+// what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
+// the decision stays here where the suite can reach it.
+export function groupResultTone(kind, groupResult) {
+  // NO is never coloured. For a violation it is the good outcome, and for a capability it means the
+  // behavior was not observed in this sample - never that the model is incapable of it, which is the
+  // one thing this report exists not to say. Red on that line would say it.
+  if (!String(groupResult).startsWith("YES")) {
     return null
   }
 
-  return reportRouteFor(encoded.payload, location)
+  return kind === "violation" ? "result-confirmed" : "result-demonstrated"
 }
 
-// reportRouteFor composes the public form of a link from a token. Every address the reader is left
-// looking at goes through here, so the route is built one way only.
-function reportRouteFor(token, location = globalThis.location) {
-  return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${token}`
+// rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
+// visible because a partially evidenced group and a group with no evidence can share the same NO.
+export function rubricQuestionRows(groups) {
+  return groups.flatMap((group) =>
+    Object.entries(group.answers).map(([questionId, answer]) => ({
+      id: `${group.id}.${questionId}`,
+      group: group.label,
+      question: group.questions[questionId],
+      answer: answer ? "YES" : "NO",
+      groupResult: `${group.met ? "YES" : "NO"} (${group.passed}/${group.total})`,
+    })),
+  )
 }
 
-// appRootFor is where a reader is left when no token can be shown - never the fragment, which is an
-// internal hop and not an address anyone should be handed.
-function appRootFor(location = globalThis.location) {
-  return `${location.origin}${appBasePath(location.pathname)}`
+// diagnosticRows reports operational signals that are deliberately excluded from the violation
+// profile. Endpoint failures in particular can be caused by infrastructure outside the model's
+// reasoning, so the rubric notes require them to be preserved as evidence but never scored.
+export function diagnosticRows(report) {
+  return [
+    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scored: "no"},
+    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scored: "V2.Q2"},
+    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scored: "V2.Q1"},
+    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scored: "V5.Q3"}
+  ];
 }
 
-// reportPayloadFromPath reads the token out of a /r/<token> route.
-export function reportPayloadFromPath(pathname) {
-  return REPORT_ROUTE_PATTERN.exec(String(pathname ?? ""))?.[1] ?? null
+// diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
+// two measures as rows avoids packing count and scoring semantics into an ambiguous combined value.
+export function diagnosticTableData(report) {
+  const diagnostics = diagnosticRows(report)
+  const columns = ["measure", ...diagnostics.map((row) => row.signal)]
+
+  return {
+    columns,
+    rows: [
+      Object.fromEntries([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count])]),
+      Object.fromEntries([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored])]),
+    ],
+  }
 }
 
-// reportPayloadFromHash reads a token out of a location fragment.
+// provenanceRows describe which build and which round produced the log, so a profile is never read
+// detached from what it was measured against.
+export function provenanceRows(source, report) {
+  return [
+    // No source URL row. It is the one field here that is not read out of the log itself, the panel
+    // above already carries the share link that identifies the same log, and a table cell is the
+    // most screenshotted place on the page to put an address that the rest of this change exists to
+    // keep out of it. What remains is provenance the log vouches for.
+    {field: "Tapoo version", value: source.version ?? "not recorded"},
+    {field: "Control mode", value: source.mode ?? "not recorded"},
+    {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
+    {field: "Log entries", value: formatCount(source.entries.length)},
+    {field: "Model", value: report.model ?? "not recorded"},
+    {field: "Player", value: report.player ?? "not recorded"}
+  ];
+}
+
+// provenanceTableData renders the small provenance record as one horizontal row so a wide report
+// does not spend six rows on six short values.
+export function provenanceTableData(source, report) {
+  const provenance = provenanceRows(source, report)
+  return {
+    columns: provenance.map((row) => row.field),
+    rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
+  }
+}
+
+// --- Maze replay adapters ---
+
+// mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
+// be drawn.
 //
-// Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
-// cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
-// so the public form and the internal hop can change independently.
-export function reportPayloadFromHash(hash) {
-  return REPORT_PAYLOAD_FRAGMENT_PATTERN.exec(String(hash ?? ""))?.[1] ?? null
+// The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
+// picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
+// instead of a partial grid, and the view renders the error.
+export function mazeReplayModel(report) {
+  const levels = report?.levels ?? [];
+
+  return levels.map((level) => {
+    const destination = level.destinationCell
+      ? cellKey(level.destinationCell.row, level.destinationCell.col)
+      : null;
+    const built = mazeFromEncoded(level.encodedMaze, {
+      startCell: level.startCell,
+      destinationCell: destination
+    });
+
+    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
+    // level of a log rather than changing when another seat happens to move first.
+    const agents = [];
+    for (const turn of level.turns) {
+      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
+    }
+
+    return {
+      key: level.key,
+      game: level.game,
+      level: level.level,
+      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
+      maze: built.ok ? built.maze : null,
+      error: built.ok ? null : built.error,
+      stats: built.ok ? built.stats : null,
+      startCell: level.startCell,
+      destinationCell: destination,
+      endCell: level.endCell,
+      observedExits: level.observedExits,
+      turns: level.turns,
+      outcome: level.outcome,
+      agents
+    };
+  });
 }
+
+// mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
+//
+// Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
+// means every position it can show is reachable in a test without a browser.
+export function mazeFrameAt(levelModel, turnIndex) {
+  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
+  const visited = new Map();
+
+  if (levelModel.startCell) visited.set(levelModel.startCell, null);
+  for (const turn of played) {
+    for (const cell of turn.cells) visited.set(cell, turn.playerName);
+  }
+
+  const current = played.at(-1);
+  const positions = new Map();
+  for (const turn of played) {
+    if (turn.playerName && turn.cells.length > 0) positions.set(turn.playerName, turn.cells.at(-1));
+  }
+
+  return {
+    turnIndex: played.length,
+    totalTurns: levelModel.turns.length,
+    visited,
+    positions,
+    currentCell: current?.cells.at(-1) ?? levelModel.startCell ?? null,
+    // The wall the agent walked into on this turn, if any. Drawn only for the current turn: a rejected
+    // move is an event, not a lasting property of the cell.
+    rejected: current?.rejectedMove ? {cell: current.cells.at(-1), move: current.rejectedMove} : null,
+    turn: current ?? null
+  };
+}
+
+// mazeSummaryRows describes the maze itself and how much of it the round actually used.
+export function mazeSummaryRows(levelModel) {
+  if (!levelModel?.stats) return [];
+
+  const stats = levelModel.stats;
+  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
+  if (levelModel.startCell) walked.add(levelModel.startCell);
+  const outcome = levelModel.outcome ?? {};
+  const agentCells = Number(outcome.playerUniqueCellsVisited);
+  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
+
+  return [
+    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
+    {field: "Dead ends", value: formatCount(stats.deadEnds)},
+    {field: "Corridors", value: formatCount(stats.corridors)},
+    {field: "Junctions", value: formatCount(stats.junctions)},
+    {
+      field: "Shortest route",
+      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
+    },
+    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
+    {
+      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
+      // one below the cells its path covers. Reporting both stops that gap reading as an error.
+      field: "Credited to agent",
+      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
+    },
+    {
+      field: "Decay charged",
+      value: Number.isFinite(Number(outcome.decayUnitsCharged))
+        ? formatCount(outcome.decayUnitsCharged)
+        : "not recorded"
+    }
+  ];
+}
+
+// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
+// a single aggregate.
+export function levelSummaryRows(report) {
+  return (report?.levels ?? []).map((level) => {
+    const outcome = level.outcome ?? {};
+    const speed = Number(outcome.traversalSpeed);
+
+    return {
+      level: level.level ?? "-",
+      game: level.game ?? "-",
+      outcome: outcome.outcome ?? "unfinished",
+      turns: level.turns.length,
+      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
+      // spellings of the same class in one report read as two different things.
+      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
+      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
+    };
+  });
+}
+
+// --- Table post-processing ---
+
+// profileCards summarizes a report as headline counts.
+//
+// Capabilities and violations are reported as separate fractions and never combined. The rubric is
+// explicit that they must not collapse into one score interval: a model with six capabilities and
+// two violations is not "four", and any arithmetic that produces a single number here would be
+// inventing a scale the contract deliberately refuses to define.
+// Column classes, keyed by header text. Positional selectors cannot address these columns: rows
+// after a group's first lose two cells to the merge below, so nth-last-child(4) is the group name on
+// one row and the leading spacer on the next. A class travels with the cell.
+const RUBRIC_COLUMN_CLASSES = {
+  "ID": "rubric-id",
+  "Group": "rubric-group",
+  "Fact question": "rubric-question",
+  "Answer": "rubric-answer",
+  "Group result": "rubric-result",
+}
+
+// prepareRubricTable labels each column and merges each group's repeated cells into one cell
+// spanning its questions.
+//
+// A group answers one verdict from several fact questions, and Inputs.table can only render flat
+// rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
+// column, that looks like three separate verdicts that happen to agree, which is the opposite of
+// what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
+// the cell states that in the table's own structure.
+//
+// Safe as a one-time pass because these tables are built with sort disabled and every row
+// materialized, so the body is never re-ordered or extended underneath it.
+export function prepareRubricTable(node) {
+  const table = node.querySelector("table")
+  const body = table?.querySelector("tbody")
+  if (!body) {
+    return node
+  }
+
+  // Located by header text rather than by a fixed index: Inputs.table emits a leading spacer cell,
+  // and a hard-coded position silently points one column off the moment that changes.
+  const headers = [...(table.querySelector("thead tr")?.cells ?? [])]
+
+  // Labelled before anything is merged, while every row still has every cell in the same position.
+  headers.forEach((header, index) => {
+    const columnClass = RUBRIC_COLUMN_CLASSES[header.textContent.trim()]
+    if (!columnClass) {
+      return
+    }
+
+    header.classList.add(columnClass)
+    for (const row of body.rows) {
+      row.cells[index]?.classList.add(columnClass)
+    }
+  })
+
+  const columns = ["Group", "Group result"]
+    .map((label) => headers.findIndex((cell) => cell.textContent.trim() === label))
+    .filter((index) => index >= 0)
+  if (columns.length === 0) {
+    return node
+  }
+
+  const groupOf = (row) => row.cells[columns[0]]?.textContent.trim()
+  let anchor = null
+  let span = 0
+
+  const closeRun = () => {
+    if (anchor && span > 1) {
+      for (const index of columns) {
+        anchor.cells[index].rowSpan = span
+      }
+    }
+  }
+
+  for (const row of [...body.rows]) {
+    if (anchor && groupOf(row) === groupOf(anchor)) {
+      span += 1
+      // Removed last-to-first so each removal cannot shift an index still to be used.
+      for (const index of [...columns].reverse()) {
+        row.cells[index].remove()
+      }
+      continue
+    }
+
+    closeRun()
+    anchor = row
+    span = 1
+  }
+
+  closeRun()
+  return node
+}
+
+// enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
+// 13px square at the far left of a row whose content runs the width of the page, so hitting it means
+// aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
+// recommended target size outright.
+//
+// Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
+// body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
+// the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
+// without moving the input's value.
+export function enableRowSelection(node) {
+  const table = node.querySelector("table")
+  if (!table) {
+    return node
+  }
+
+  table.addEventListener("click", (event) => {
+    // The control itself already toggles; handling it here as well would toggle twice and land back
+    // where it started. Links and buttons inside a cell keep their own behavior.
+    if (event.target.closest("input, a, button, label")) {
+      return
+    }
+
+    // A click that ends a text selection is someone copying a fact question, not choosing a row.
+    if (window.getSelection()?.toString()) {
+      return
+    }
+
+    const checkbox = event.target.closest("tbody tr")?.querySelector("input[type=checkbox]")
+    if (!checkbox) {
+      return
+    }
+
+    // Forward the click to the checkbox rather than setting .checked and announcing it. Inputs.table
+    // wires every row checkbox with `input.onclick = reselect`, and that handler owns the selection
+    // set, the header checkbox's checked/indeterminate state, and the table's own value. Assigning
+    // .checked moves the tick and the :checked tint while none of that bookkeeping runs - the row
+    // looks selected, the header stays blank, and the value the table reports omits the row. A click
+    // dispatched on a checkbox performs its activation behavior, so the toggle is still native.
+    //
+    // shiftKey and detail are carried over so a shift-click on a row extends the range exactly as a
+    // shift-click on the checkbox does, and so reselect's blur-on-real-click still fires.
+    checkbox.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      shiftKey: event.shiftKey,
+      detail: event.detail,
+    }))
+  })
+
+  return node
+}
+
+// --- The report tabs control ---
 
 // A chain, inline rather than a font or an image request: the page loads no third-party asset, and
 // an icon that fails to load beside its label would look like a broken control. A chain says "link"
@@ -772,7 +1231,7 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
     const input = document.createElement("input");
     input.id = `${state.pendingTabId ?? "new-report"}-url`;
     input.type = "url";
-    input.placeholder = "https://example.com/tapoo-agent-api-log.json";
+    input.placeholder = "https://example.com/tapoo-v2.5.1-agent-api-logs-1788023517.json";
     input.value = state.draftUrl;
     input.addEventListener("input", () => {
       state = {...state, draftUrl: input.value, draftStatus: "empty", draftError: undefined};
@@ -798,440 +1257,4 @@ export function createReportTabsInput({fetchText = fetchReportText} = {}) {
   render();
   void restoreSharedReport();
   return root;
-}
-
-// profileCards summarizes a report as headline counts.
-//
-// Capabilities and violations are reported as separate fractions and never combined. The rubric is
-// explicit that they must not collapse into one score interval: a model with six capabilities and
-// two violations is not "four", and any arithmetic that produces a single number here would be
-// inventing a scale the contract deliberately refuses to define.
-// Column classes, keyed by header text. Positional selectors cannot address these columns: rows
-// after a group's first lose two cells to the merge below, so nth-last-child(4) is the group name on
-// one row and the leading spacer on the next. A class travels with the cell.
-const RUBRIC_COLUMN_CLASSES = {
-  "ID": "rubric-id",
-  "Group": "rubric-group",
-  "Fact question": "rubric-question",
-  "Answer": "rubric-answer",
-  "Group result": "rubric-result",
-}
-
-// prepareRubricTable labels each column and merges each group's repeated cells into one cell
-// spanning its questions.
-//
-// A group answers one verdict from several fact questions, and Inputs.table can only render flat
-// rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
-// column, that looks like three separate verdicts that happen to agree, which is the opposite of
-// what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
-// the cell states that in the table's own structure.
-//
-// Safe as a one-time pass because these tables are built with sort disabled and every row
-// materialized, so the body is never re-ordered or extended underneath it.
-export function prepareRubricTable(node) {
-  const table = node.querySelector("table")
-  const body = table?.querySelector("tbody")
-  if (!body) {
-    return node
-  }
-
-  // Located by header text rather than by a fixed index: Inputs.table emits a leading spacer cell,
-  // and a hard-coded position silently points one column off the moment that changes.
-  const headers = [...(table.querySelector("thead tr")?.cells ?? [])]
-
-  // Labelled before anything is merged, while every row still has every cell in the same position.
-  headers.forEach((header, index) => {
-    const columnClass = RUBRIC_COLUMN_CLASSES[header.textContent.trim()]
-    if (!columnClass) {
-      return
-    }
-
-    header.classList.add(columnClass)
-    for (const row of body.rows) {
-      row.cells[index]?.classList.add(columnClass)
-    }
-  })
-
-  const columns = ["Group", "Group result"]
-    .map((label) => headers.findIndex((cell) => cell.textContent.trim() === label))
-    .filter((index) => index >= 0)
-  if (columns.length === 0) {
-    return node
-  }
-
-  const groupOf = (row) => row.cells[columns[0]]?.textContent.trim()
-  let anchor = null
-  let span = 0
-
-  const closeRun = () => {
-    if (anchor && span > 1) {
-      for (const index of columns) {
-        anchor.cells[index].rowSpan = span
-      }
-    }
-  }
-
-  for (const row of [...body.rows]) {
-    if (anchor && groupOf(row) === groupOf(anchor)) {
-      span += 1
-      // Removed last-to-first so each removal cannot shift an index still to be used.
-      for (const index of [...columns].reverse()) {
-        row.cells[index].remove()
-      }
-      continue
-    }
-
-    closeRun()
-    anchor = row
-    span = 1
-  }
-
-  closeRun()
-  return node
-}
-
-// groupResultTone names the class a group result should carry, or null for no colour at all.
-//
-// Split out from the table's format callback because this is the part that can be wrong: YES means
-// opposite things in the two tables, and the rule for what stays uncoloured is a statement about
-// what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
-// the decision stays here where the suite can reach it.
-export function groupResultTone(kind, groupResult) {
-  // NO is never coloured. For a violation it is the good outcome, and for a capability it means the
-  // behavior was not observed in this sample - never that the model is incapable of it, which is the
-  // one thing this report exists not to say. Red on that line would say it.
-  if (!String(groupResult).startsWith("YES")) {
-    return null
-  }
-
-  return kind === "violation" ? "result-confirmed" : "result-demonstrated"
-}
-
-// enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
-// 13px square at the far left of a row whose content runs the width of the page, so hitting it means
-// aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
-// recommended target size outright.
-//
-// Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
-// body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
-// the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
-// without moving the input's value.
-export function enableRowSelection(node) {
-  const table = node.querySelector("table")
-  if (!table) {
-    return node
-  }
-
-  table.addEventListener("click", (event) => {
-    // The control itself already toggles; handling it here as well would toggle twice and land back
-    // where it started. Links and buttons inside a cell keep their own behavior.
-    if (event.target.closest("input, a, button, label")) {
-      return
-    }
-
-    // A click that ends a text selection is someone copying a fact question, not choosing a row.
-    if (window.getSelection()?.toString()) {
-      return
-    }
-
-    const checkbox = event.target.closest("tbody tr")?.querySelector("input[type=checkbox]")
-    if (!checkbox) {
-      return
-    }
-
-    // Forward the click to the checkbox rather than setting .checked and announcing it. Inputs.table
-    // wires every row checkbox with `input.onclick = reselect`, and that handler owns the selection
-    // set, the header checkbox's checked/indeterminate state, and the table's own value. Assigning
-    // .checked moves the tick and the :checked tint while none of that bookkeeping runs - the row
-    // looks selected, the header stays blank, and the value the table reports omits the row. A click
-    // dispatched on a checkbox performs its activation behavior, so the toggle is still native.
-    //
-    // shiftKey and detail are carried over so a shift-click on a row extends the range exactly as a
-    // shift-click on the checkbox does, and so reselect's blur-on-real-click still fires.
-    checkbox.dispatchEvent(new MouseEvent("click", {
-      bubbles: true,
-      shiftKey: event.shiftKey,
-      detail: event.detail,
-    }))
-  })
-
-  return node
-}
-
-export function profileCards(report) {
-  const met = (groups) => groups.filter((group) => group.met).length;
-
-  return [
-    {
-      label: "Capabilities demonstrated",
-      value: `${met(report.capabilities)}/${report.capabilities.length}`,
-      tone: "teal"
-    },
-    {
-      label: "Violations confirmed",
-      value: `${met(report.violations)}/${report.violations.length}`,
-      tone: "rose"
-    },
-    {label: "Predictions", value: formatCount(report.predictions), tone: "ink"},
-    {label: "Rounds", value: formatCount(report.rounds), tone: "ink"}
-  ];
-}
-
-// rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
-// visible because a partially evidenced group and a group with no evidence can share the same NO.
-export function rubricQuestionRows(groups) {
-  return groups.flatMap((group) =>
-    Object.entries(group.answers).map(([questionId, answer]) => ({
-      id: `${group.id}.${questionId}`,
-      group: group.label,
-      question: group.questions[questionId],
-      answer: answer ? "YES" : "NO",
-      groupResult: `${group.met ? "YES" : "NO"} (${group.passed}/${group.total})`,
-    })),
-  )
-}
-
-// diagnosticRows reports operational signals that are deliberately excluded from the violation
-// profile. Endpoint failures in particular can be caused by infrastructure outside the model's
-// reasoning, so the rubric notes require them to be preserved as evidence but never scored.
-export function diagnosticRows(report) {
-  return [
-    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scored: "no"},
-    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scored: "V2.Q2"},
-    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scored: "V2.Q1"},
-    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scored: "V5.Q3"}
-  ];
-}
-
-// diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
-// two measures as rows avoids packing count and scoring semantics into an ambiguous combined value.
-export function diagnosticTableData(report) {
-  const diagnostics = diagnosticRows(report)
-  const columns = ["measure", ...diagnostics.map((row) => row.signal)]
-
-  return {
-    columns,
-    rows: [
-      Object.fromEntries([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count])]),
-      Object.fromEntries([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored])]),
-    ],
-  }
-}
-
-// provenanceRows describe which build and which round produced the log, so a profile is never read
-// detached from what it was measured against.
-export function provenanceRows(source, report) {
-  return [
-    // No source URL row. It is the one field here that is not read out of the log itself, the panel
-    // above already carries the share link that identifies the same log, and a table cell is the
-    // most screenshotted place on the page to put an address that the rest of this change exists to
-    // keep out of it. What remains is provenance the log vouches for.
-    {field: "Tapoo version", value: source.version ?? "not recorded"},
-    {field: "Control mode", value: source.mode ?? "not recorded"},
-    {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
-    {field: "Log entries", value: formatCount(source.entries.length)},
-    {field: "Model", value: report.model ?? "not recorded"},
-    {field: "Player", value: report.player ?? "not recorded"}
-  ];
-}
-
-// provenanceTableData renders the small provenance record as one horizontal row so a wide report
-// does not spend six rows on six short values.
-export function provenanceTableData(source, report) {
-  const provenance = provenanceRows(source, report)
-  return {
-    columns: provenance.map((row) => row.field),
-    rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
-  }
-}
-
-// narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
-// reliably over-read a negative rubric answer as a claim about the model's ability, which it never
-// is - it says the behavior was not observed in this one sample.
-export function narrativeSummary(report) {
-  const capabilities = report.capabilities.filter((group) => group.met).map((group) => group.id);
-  const violations = report.violations.filter((group) => group.met).map((group) => group.id);
-  const speed = report.traversalSpeedClass
-    ? `Winning traversal speed ${report.traversalSpeed.toFixed(4)} (${report.traversalSpeedClass}).`
-    : "No winning round in this sample.";
-
-  return [
-    `${report.model ?? "This agent"} demonstrated ${capabilities.length} of ${report.capabilities.length} capabilities`,
-    capabilities.length ? `(${capabilities.join(", ")})` : "",
-    `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
-    violations.length
-      ? `Confirmed violations: ${violations.join(", ")}.`
-      : "No violations confirmed.",
-    speed,
-    "A negative answer means the behavior was not observed in this sample, not that the model is incapable of it."
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function formatCount(value) {
-  return Number(value).toLocaleString("en-US");
-}
-
-// describeFetchFailure turns what fetch throws into something a reader can act on.
-//
-// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
-// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
-// is the one failure where a link that works for whoever shared it can fail for whoever opens it.
-export function describeFetchFailure(error) {
-  const message = error?.message ?? String(error)
-  if (error instanceof TypeError) {
-    return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
-  }
-
-  return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`
-}
-
-async function fetchReportText(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
-  }
-  return response.text();
-}
-
-function reportTabId() {
-  if (globalThis.crypto?.randomUUID) {
-    return `report-${globalThis.crypto.randomUUID()}`;
-  }
-  return `report-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-// --- Maze Replay ---
-
-// mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
-// be drawn.
-//
-// The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
-// picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
-// instead of a partial grid, and the view renders the error.
-export function mazeReplayModel(report) {
-  const levels = report?.levels ?? [];
-
-  return levels.map((level) => {
-    const destination = level.destinationCell
-      ? cellKey(level.destinationCell.row, level.destinationCell.col)
-      : null;
-    const built = mazeFromEncoded(level.encodedMaze, {
-      startCell: level.startCell,
-      destinationCell: destination
-    });
-
-    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
-    // level of a log rather than changing when another seat happens to move first.
-    const agents = [];
-    for (const turn of level.turns) {
-      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
-    }
-
-    return {
-      key: level.key,
-      game: level.game,
-      level: level.level,
-      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
-      maze: built.ok ? built.maze : null,
-      error: built.ok ? null : built.error,
-      stats: built.ok ? built.stats : null,
-      startCell: level.startCell,
-      destinationCell: destination,
-      endCell: level.endCell,
-      observedExits: level.observedExits,
-      turns: level.turns,
-      outcome: level.outcome,
-      agents
-    };
-  });
-}
-
-// mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
-//
-// Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
-// means every position it can show is reachable in a test without a browser.
-export function mazeFrameAt(levelModel, turnIndex) {
-  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
-  const visited = new Map();
-
-  if (levelModel.startCell) visited.set(levelModel.startCell, null);
-  for (const turn of played) {
-    for (const cell of turn.cells) visited.set(cell, turn.playerName);
-  }
-
-  const current = played.at(-1);
-  const positions = new Map();
-  for (const turn of played) {
-    if (turn.playerName && turn.cells.length > 0) positions.set(turn.playerName, turn.cells.at(-1));
-  }
-
-  return {
-    turnIndex: played.length,
-    totalTurns: levelModel.turns.length,
-    visited,
-    positions,
-    currentCell: current?.cells.at(-1) ?? levelModel.startCell ?? null,
-    // The wall the agent walked into on this turn, if any. Drawn only for the current turn: a rejected
-    // move is an event, not a lasting property of the cell.
-    rejected: current?.rejectedMove ? {cell: current.cells.at(-1), move: current.rejectedMove} : null,
-    turn: current ?? null
-  };
-}
-
-// mazeSummaryRows describes the maze itself and how much of it the round actually used.
-export function mazeSummaryRows(levelModel) {
-  if (!levelModel?.stats) return [];
-
-  const stats = levelModel.stats;
-  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
-  if (levelModel.startCell) walked.add(levelModel.startCell);
-  const outcome = levelModel.outcome ?? {};
-  const agentCells = Number(outcome.playerUniqueCellsVisited);
-  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
-
-  return [
-    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Dead ends", value: formatCount(stats.deadEnds)},
-    {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "Junctions", value: formatCount(stats.junctions)},
-    {
-      field: "Shortest route",
-      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
-    },
-    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
-    {
-      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
-      // one below the cells its path covers. Reporting both stops that gap reading as an error.
-      field: "Credited to agent",
-      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
-    },
-    {
-      field: "Decay charged",
-      value: Number.isFinite(Number(outcome.decayUnitsCharged))
-        ? formatCount(outcome.decayUnitsCharged)
-        : "not recorded"
-    }
-  ];
-}
-
-// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
-// a single aggregate.
-export function levelSummaryRows(report) {
-  return (report?.levels ?? []).map((level) => {
-    const outcome = level.outcome ?? {};
-    const speed = Number(outcome.traversalSpeed);
-
-    return {
-      level: level.level ?? "-",
-      game: level.game ?? "-",
-      outcome: outcome.outcome ?? "unfinished",
-      turns: level.turns.length,
-      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
-      // spellings of the same class in one report read as two different things.
-      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
-      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
-    };
-  });
 }

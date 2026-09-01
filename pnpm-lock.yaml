@@ -39,6 +39,9 @@ importers:
       globals:
         specifier: ^17.11.0
         version: 17.11.0
+      htl:
+        specifier: 1.0.0
+        version: 1.0.0
       jsdom:
         specifier: ^30.0.1
         version: 30.0.1
@@ -1327,6 +1330,10 @@ packages:
 
   htl@0.3.1:
     resolution: {integrity: sha512-1LBtd+XhSc+++jpOOt0lCcEycXs/zTQSupOISnVAUmvGBpV7DH+C2M6hwV7zWYfpTMMg9ch4NO0lHiOTAMHdVA==}
+    engines: {node: '>=12'}
+
+  htl@1.0.0:
+    resolution: {integrity: sha512-dbNhlENVOgGIXNP7iYKS+p3uH7mc6CZJIubDiKpOn0eKYHdOzoZgkXI9Z4AH3gLZzFwz9/6xgPsc2fff7zXxUg==}
     engines: {node: '>=12'}
 
   html-encoding-sniffer@4.0.0:
@@ -3422,6 +3429,8 @@ snapshots:
   highlight.js@11.12.0: {}
 
   htl@0.3.1: {}
+
+  htl@1.0.0: {}
 
   html-encoding-sniffer@4.0.0:
     dependencies:

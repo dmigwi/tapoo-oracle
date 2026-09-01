@@ -27,6 +27,8 @@ import {
 } from "./log-contract.js"
 import { cellFromGridPoint } from "./maze.js"
 
+// --- Reading a log entry ---
+
 // parsePrediction recovers the moves array a model submitted, mirroring the three tiers
 // frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
 // prose. The tier matters on its own - it is what C1.Q1 scores - so it is returned, not discarded.
@@ -94,6 +96,8 @@ function readOpenMoves(openMoves) {
 
   return new Set(Object.keys(openMoves ?? {}))
 }
+
+// --- Building the context ---
 
 // buildContext walks the log once and derives everything the questions need. It takes already-parsed
 // entries rather than a path so the same derivation serves a file on disk and a pasted payload.
@@ -346,8 +350,12 @@ function findCell(timeline, from, direction) {
   return null
 }
 
+// --- Shared predicates ---
+
 const exitsOf = (context, cell) => context.exits.get(cell) ?? null
+
 const isCorridor = (context, cell) => exitsOf(context, cell)?.size === 2
+
 const fullyApplied = (record) => record.applied === record.moves.length
 
 // inConfirmedCorridorRun reports whether at least two forced steps ahead are already known safe:
@@ -361,7 +369,8 @@ function inConfirmedCorridorRun(context, cell, move) {
   return isCorridor(context, stepFrom(cell, move))
 }
 
-// --- capabilities --------------------------------------------------------
+
+// --- Capability questions ---
 
 // C1. INSTRUCTION ADHERENCE   scope: responses a moves array was extracted from
 function instructionAdherence(context) {
@@ -385,6 +394,17 @@ function instructionAdherence(context) {
 function validActionDelivery(context) {
   return { Q1: context.submissions.some((entry) => (entry.applied ?? 0) > 0) }
 }
+
+const contextAcquisitionQuestions = Object.fromEntries(
+  DECLARED_TOOLS.map((tool, index) => [
+    `Q${index + 1}`,
+    {
+      get_maze_structure: "Did the agent obtain the maze structure on every prediction turn?",
+      get_prediction_rules: "Did the agent obtain the prediction rules on every prediction turn?",
+      get_last_prediction_outcome: "Did the agent obtain the last prediction outcome on every prediction turn?",
+    }[tool] ?? `Did the agent obtain ${tool} on every prediction turn?`,
+  ]),
+)
 
 // C3. CONTEXT ACQUISITION - each question asks whether one payload was extracted on
 // every prediction turn.
@@ -496,7 +516,8 @@ function taskCompletion(context) {
   return { Q1: context.outcomes.some((outcome) => outcome.outcome === "won") }
 }
 
-// --- violations ----------------------------------------------------------
+
+// --- Violation questions ---
 
 // V1. HALLUCINATIONS
 // Q1. Any tool call naming something outside the declared tools set?
@@ -596,16 +617,7 @@ function failedStateRepetition(context) {
   return { Q1: false }
 }
 
-const contextAcquisitionQuestions = Object.fromEntries(
-  DECLARED_TOOLS.map((tool, index) => [
-    `Q${index + 1}`,
-    {
-      get_maze_structure: "Did the agent obtain the maze structure on every prediction turn?",
-      get_prediction_rules: "Did the agent obtain the prediction rules on every prediction turn?",
-      get_last_prediction_outcome: "Did the agent obtain the last prediction outcome on every prediction turn?",
-    }[tool] ?? `Did the agent obtain ${tool} on every prediction turn?`,
-  ]),
-)
+// --- Groups ---
 
 const CAPABILITIES = [
   {
@@ -736,6 +748,8 @@ function aggregate(answers, kind) {
 
   return kind === "capability" ? values.every(Boolean) : values.some(Boolean)
 }
+
+// --- Rounds ---
 
 // answerRubric is the engine's public entry point: it returns the complete rubric result for one
 // log as plain data, with each group's per-question answers preserved alongside its verdict.
@@ -895,6 +909,8 @@ export function buildLevels(entries) {
     }
   })
 }
+
+// --- Entry point ---
 
 export function answerRubric(entries, { label = "log" } = {}) {
   const context = buildContext(entries, { label })
