@@ -1,30 +1,49 @@
 import { describe, expect, it } from "vitest"
 
-import { LOG_EVENTS } from "../contracts/log-contract.js"
-import { CAPABILITIES, VIOLATIONS, aggregate, answerRubric, parsePrediction } from "./rubric-engine.js"
+import {LOG_EVENTS} from "./log-contract"
+import {answerRubric} from "./report"
+import {CAPABILITIES, VIOLATIONS, aggregate, parsePrediction} from "./rubric-engine"
+import type {GroupResult, LogEntry, LogLevel, Report} from "./types"
+import {at} from "./test-support";
 
 // A log is a sequence of entries, and every question below is answered from what those entries do or
 // do not contain. These builders keep each test to the entries it is actually about: anything a test
 // does not add is absent from the log, which is the state the rubric answers NO for.
 let clock = 0
 
-function entry(payload, details, {log = "info", turn = 0} = {}) {
+function entry(
+  payload: string,
+  details?: unknown,
+  {log = "info", turn = 0}: {log?: LogLevel; turn?: number} = {},
+): LogEntry {
   clock += 1000
   return {epochMs: clock, time: "2026-08-31T09-00-00+02-00", level: 1, game: 1, turn, log, payload, details}
 }
 
-const toolMessage = (payload) => ({role: "tool", content: JSON.stringify(payload)})
+const toolMessage = (payload: unknown) => ({role: "tool", content: JSON.stringify(payload)})
 
 // One turn: the request carrying whichever tool results it read, then the model's reply.
-function turn(number, {tools = [], content, messages = []} = {}) {
+function turn(
+  number: number,
+  {tools = [], content, messages = []}: {tools?: string[]; content?: string; messages?: unknown[]} = {},
+): LogEntry[] {
   return [
     entry(LOG_EVENTS.request, {tools: tools.map((name) => ({name})), messages}, {turn: number}),
     entry(LOG_EVENTS.response, {payload: {model: "test-model", message: {content}}}, {turn: number}),
   ]
 }
 
-const group = (report, id) =>
-  [...report.capabilities, ...report.violations].find((candidate) => candidate.id === id)
+const firstLevel = (report: Report) => {
+  const level = report.levels[0]
+  if (!level) throw new Error("expected at least one round")
+  return level
+}
+
+const group = (report: Report, id: string): GroupResult => {
+  const found = [...report.capabilities, ...report.violations].find((candidate) => candidate.id === id)
+  if (!found) throw new Error(`no such group: ${id}`)
+  return found
+}
 
 describe("aggregate", () => {
   // The two kinds read the same answers in opposite directions, and the whole report depends on it:
@@ -42,7 +61,7 @@ describe("aggregate", () => {
   // A question that returned undefined would otherwise count as a quiet NO, turning a broken
   // evaluator into a clean-looking report rather than an error.
   it("refuses an answer that is not a boolean", () => {
-    expect(() => aggregate({a: true, b: undefined}, "capability")).toThrow(/non-boolean/)
+    expect(() => aggregate({a: true, b: undefined as unknown as boolean}, "capability")).toThrow(/non-boolean/)
   })
 })
 
@@ -269,13 +288,13 @@ describe("answerRubric", () => {
 // an array index - which did not fail, it just answered C4, C7, V4 and V5 about nothing at all. These
 // fixtures are in the shape a real download actually carries.
 describe("compacted log shape", () => {
-  const compactStructure = (currentCell, history) =>
+  const compactStructure = (currentCell: [number, number], history: Array<[[number, number], string[]]>) =>
     toolMessage({
       currentCell,
-      filteredTraversalHistory: history.map(([cell, openMoves]) => ({
+      filteredTraversalHistory: history.map(([cell, openMoves]: [[number, number], string[]]) => ({
         playerName: "Katara",
         cell,
-        openMoves: openMoves.map((move) => [move, "explored"]),
+        openMoves: openMoves.map((move: string) => [move, "explored"]),
       })),
     })
 
@@ -295,10 +314,10 @@ describe("compacted log shape", () => {
 
   it("reads real cell keys and move names, not undefined and array indices", () => {
     const report = answerRubric(compactedLog)
-    const level = report.levels[0]
+    const level = firstLevel(report)
 
     expect([...level.observedExits.keys()]).toEqual(["0,0", "1,0"])
-    expect([...level.observedExits.get("0,0")]).toEqual(["MoveDown"])
+    expect([...(level.observedExits.get("0,0") ?? [])]).toEqual(["MoveDown"])
     expect(level.positions).toEqual(["0,0", "1,0"])
   })
 
@@ -336,12 +355,12 @@ describe("compacted log shape", () => {
       }),
     ]
 
-    expect([...answerRubric(uncompacted).levels[0].observedExits.keys()]).toEqual(["0,0"])
+    expect([...firstLevel(answerRubric(uncompacted)).observedExits.keys()]).toEqual(["0,0"])
   })
 })
 
 describe("C5 resource efficiency", () => {
-  const rules = (cells, decay) =>
+  const rules = (cells: number, decay: number) =>
     toolMessage({suggestedMovesPerTurn: 2, playerUniqueCellsVisited: cells, decayUnitsCharged: decay})
 
   it("uses the settled round-end totals rather than the last mid-round reading", () => {
@@ -374,7 +393,7 @@ describe("C5 resource efficiency", () => {
 })
 
 describe("buildLevels", () => {
-  const round = (game, level, content) => [
+  const round = (game: number, level: number, content: string) => [
     entry(LOG_EVENTS.levelStarted, {startPosition: {x: 1, y: 1}}, {turn: 0}),
     ...turn(0, {tools: ["get_maze_structure"], content}),
   ].map((record) => ({...record, game, level}))
@@ -388,7 +407,7 @@ describe("buildLevels", () => {
     ])
 
     expect(report.levels.map((level) => level.key)).toEqual(["1/1", "2/1"])
-    expect(report.levels[0].startCell).toBe("0,0")
+    expect(firstLevel(report).startCell).toBe("0,0")
   })
 
   it("attributes a turn to the acting agent named in the request", () => {
@@ -406,7 +425,7 @@ describe("buildLevels", () => {
       entry(LOG_EVENTS.response, {payload: {model: "m", message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
     ])
 
-    expect(report.levels[0].turns[0].playerName).toBe("Katara")
+    expect(firstLevel(report).turns[0]?.playerName).toBe("Katara")
   })
 
   it("records the refused move of a turn that was cut short", () => {
@@ -434,7 +453,7 @@ describe("buildLevels", () => {
       }, {turn: 1}),
     ])
 
-    const [first] = report.levels[0].turns
+    const first = at(at(report.levels, 0).turns, 0)
     expect(first.applied).toBe(1)
     expect(first.rejectedMove).toBe("MoveUp")
     expect(first.cells).toEqual(["0,0", "1,0"])

@@ -4,7 +4,9 @@
 
 import { describe, expect, it } from "vitest"
 
-import { createMazeReplay } from "./maze-view.js"
+import {createMazeReplay} from "./maze-view"
+import type {EncodedMaze, Level} from "./types"
+import {query, queryAll, reportWith} from "./test-support";
 
 const REAL_MAZE = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -14,13 +16,19 @@ const REAL_MAZE = {
   dimensions: { numCols: 6, numRows: 4, area: 24 },
 }
 
-const level = ({ encodedMaze = REAL_MAZE, game = 2, lvl = 1 } = {}) => ({
+type LevelOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
+
+const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}): Level => ({
   key: `${game}/${lvl}`,
   game,
   level: lvl,
   encodedMaze,
   startCell: "0,0",
-  destinationCell: { row: 0, col: 5 },
+  startPosition: null,
+  historyWindowRadius: null,
+  // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
+  // [row, col] - through the contract, so a level model never carries the raw form.
+  destinationCell: "0,5",
   endCell: "2,1",
   observedExits: new Map(),
   positions: [],
@@ -41,15 +49,15 @@ const level = ({ encodedMaze = REAL_MAZE, game = 2, lvl = 1 } = {}) => ({
 })
 
 // The view shapes its own data now, so a test hands it the same report the page does.
-const build = (levels) => createMazeReplay({ levels })
+const build = (levels: Level[]) => createMazeReplay(reportWith(...levels))
 
-const range = (node) => node.querySelector("input[type=range]")
-const caption = (node) => node.querySelector(".maze-caption").textContent
-const overlayCircles = (node) => node.querySelectorAll(".maze-overlay circle")
+const range = (node: ParentNode) => query<HTMLInputElement>(node, "input[type=range]")
+const caption = (node: ParentNode) => query(node, ".maze-caption").textContent
+const overlayCircles = (node: ParentNode) => queryAll(node, ".maze-overlay circle")
 
 // Driven through the real input element and a real input event, not by calling the paint function:
 // a scrubber that never repaints on input would pass every assertion made against the function alone.
-const scrubTo = (node, value) => {
+const scrubTo = (node: ParentNode, value: number) => {
   const input = range(node)
   input.value = String(value)
   input.dispatchEvent(new window.Event("input", { bubbles: true }))
@@ -69,7 +77,7 @@ describe("createMazeReplay", () => {
     const node = build([level()])
 
     expect(range(node).value).toBe("3")
-    expect(node.querySelector(".maze-readout").textContent).toBe("3 / 3")
+    expect(query(node, ".maze-readout").textContent).toBe("3 / 3")
   })
 
   it("repaints when the scrubber moves", () => {
@@ -77,7 +85,7 @@ describe("createMazeReplay", () => {
 
     scrubTo(node, 0)
     expect(caption(node)).toMatch(/Start position/)
-    expect(node.querySelector(".maze-readout").textContent).toBe("0 / 3")
+    expect(query(node, ".maze-readout").textContent).toBe("0 / 3")
     // No agent has acted yet, so no position marker is drawn.
     expect(overlayCircles(node)).toHaveLength(0)
 
@@ -94,7 +102,7 @@ describe("createMazeReplay", () => {
     expect(range(node).getAttribute("aria-valuetext")).toMatch(/MoveUp refused/)
 
     // Marked by shape, not hue: two crossed strokes plus their halo, drawn on the wall it hit.
-    const crossStrokes = [...node.querySelectorAll(".maze-overlay line")]
+    const crossStrokes = queryAll(node, ".maze-overlay line")
     expect(crossStrokes).toHaveLength(4)
     expect(crossStrokes.some((line) => line.getAttribute("stroke") === "var(--oracle-rose)")).toBe(true)
 
@@ -106,15 +114,15 @@ describe("createMazeReplay", () => {
     const node = build([level({ encodedMaze: { ...REAL_MAZE, structure: `${REAL_MAZE.structure}0` } })])
 
     expect(node.querySelector("svg.maze-grid")).toBeNull()
-    expect(node.querySelector(".notice-error").textContent).toMatch(/checksum/)
-    expect(node.querySelector(".maze-scrubber").hidden).toBe(true)
+    expect(query(node, ".notice-error").textContent).toMatch(/checksum/)
+    expect(query(node, ".maze-scrubber").hidden).toBe(true)
   })
 
   it("offers a selector only when the log holds more than one round", () => {
     expect(build([level()]).querySelector(".maze-level-select")).toBeNull()
 
     const many = build([level({ game: 1 }), level({ game: 2 })])
-    const select = many.querySelector(".maze-level-select")
+    const select = query<HTMLSelectElement>(many, ".maze-level-select")
     expect(select).not.toBeNull()
     expect([...select.options].map((option) => option.textContent)).toEqual([
       "Level 1 (game 1)",
@@ -124,7 +132,7 @@ describe("createMazeReplay", () => {
 
   it("redraws the grid when another round is selected", () => {
     const node = build([level({ game: 1 }), level({ game: 2, encodedMaze: null })])
-    const select = node.querySelector(".maze-level-select")
+    const select = query<HTMLSelectElement>(node, ".maze-level-select")
 
     expect(node.querySelector("svg.maze-grid")).not.toBeNull()
 
@@ -132,7 +140,7 @@ describe("createMazeReplay", () => {
     select.dispatchEvent(new window.Event("change", { bubbles: true }))
 
     expect(node.querySelector("svg.maze-grid")).toBeNull()
-    expect(node.querySelector(".notice-error").textContent).toMatch(/carries no encoded maze/)
+    expect(query(node, ".notice-error").textContent).toMatch(/carries no encoded maze/)
   })
 
   it("renders nothing for a report with no rounds", () => {

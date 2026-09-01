@@ -1,160 +1,17 @@
 // The maze replay: a decoded grid with the round's traversal scrubbed one turn at a time.
 //
-// Built imperatively rather than as an htl template, matching createReportTabsInput in oracle.js. The
-// scrubber repaints on every input event, and rebuilding a template per frame would discard and
-// recreate the whole grid on each step; here only the overlay is redrawn while the walls stay put.
+// Built imperatively rather than as an htl template. The scrubber repaints on every input event, and
+// rebuilding a template per frame would discard and recreate the whole grid on each step; here only
+// the overlay is redrawn while the walls stay put.
 //
 // It deliberately owns no Observable cell. The page's reactive graph is one state cell, and a slider
 // added to it would rebuild every report section per frame. A plain input listener also sidesteps
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { MOVES, cellKey, classifyTraversalSpeed } from "../contracts/log-contract.js";
-import { mazeFromEncoded } from "../contracts/maze.js";
-import { formatCount } from "./oracle.js";
-
-// --- Model ---
-
-// The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
-// holds adapters and view modules hold DOM - but nothing outside this file uses them, and the split
-// meant reaching into a module about reports for two functions only the maze calls. Pure and
-// document-free, so they stay testable without a DOM.
-
-
-// mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
-// be drawn.
-//
-// The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
-// picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
-// instead of a partial grid, and the view renders the error.
-export function mazeReplayModel(report) {
-  const levels = report?.levels ?? [];
-
-  return levels.map((level) => {
-    const destination = level.destinationCell
-      ? cellKey(level.destinationCell.row, level.destinationCell.col)
-      : null;
-    const built = mazeFromEncoded(level.encodedMaze, {
-      startCell: level.startCell,
-      destinationCell: destination
-    });
-
-    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
-    // level of a log rather than changing when another seat happens to move first.
-    const agents = [];
-    for (const turn of level.turns) {
-      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
-    }
-
-    return {
-      key: level.key,
-      game: level.game,
-      level: level.level,
-      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
-      maze: built.ok ? built.maze : null,
-      error: built.ok ? null : built.error,
-      stats: built.ok ? built.stats : null,
-      startCell: level.startCell,
-      destinationCell: destination,
-      endCell: level.endCell,
-      observedExits: level.observedExits,
-      turns: level.turns,
-      outcome: level.outcome,
-      agents
-    };
-  });
-}
-
-// mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
-//
-// Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
-// means every position it can show is reachable in a test without a browser.
-export function mazeFrameAt(levelModel, turnIndex) {
-  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
-  const visited = new Map();
-
-  if (levelModel.startCell) visited.set(levelModel.startCell, null);
-  for (const turn of played) {
-    for (const cell of turn.cells) visited.set(cell, turn.playerName);
-  }
-
-  const current = played.at(-1);
-  const positions = new Map();
-  for (const turn of played) {
-    if (turn.playerName && turn.cells.length > 0) positions.set(turn.playerName, turn.cells.at(-1));
-  }
-
-  return {
-    // The turns this frame covers. Returned rather than recomputed by the caller: drawFrame needed the
-    // whole level model purely to slice this same range again.
-    played,
-    turnIndex: played.length,
-    totalTurns: levelModel.turns.length,
-    visited,
-    positions,
-    currentCell: current?.cells.at(-1) ?? levelModel.startCell ?? null,
-    // The wall the agent walked into on this turn, if any. Drawn only for the current turn: a rejected
-    // move is an event, not a lasting property of the cell.
-    rejected: current?.rejectedMove ? {cell: current.cells.at(-1), move: current.rejectedMove} : null,
-    turn: current ?? null
-  };
-}
-
-// mazeSummaryRows describes the maze itself and how much of it the round actually used.
-export function mazeSummaryRows(levelModel) {
-  if (!levelModel?.stats) return [];
-
-  const stats = levelModel.stats;
-  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
-  if (levelModel.startCell) walked.add(levelModel.startCell);
-  const outcome = levelModel.outcome ?? {};
-  const agentCells = Number(outcome.playerUniqueCellsVisited);
-  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
-
-  return [
-    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Dead ends", value: formatCount(stats.deadEnds)},
-    {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "Junctions", value: formatCount(stats.junctions)},
-    {
-      field: "Shortest route",
-      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
-    },
-    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
-    {
-      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
-      // one below the cells its path covers. Reporting both stops that gap reading as an error.
-      field: "Credited to agent",
-      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
-    },
-    {
-      field: "Decay charged",
-      value: Number.isFinite(Number(outcome.decayUnitsCharged))
-        ? formatCount(outcome.decayUnitsCharged)
-        : "not recorded"
-    }
-  ];
-}
-
-// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
-// a single aggregate.
-export function levelSummaryRows(report) {
-  return (report?.levels ?? []).map((level) => {
-    const outcome = level.outcome ?? {};
-    const speed = Number(outcome.traversalSpeed);
-
-    return {
-      level: level.level ?? "-",
-      game: level.game ?? "-",
-      outcome: outcome.outcome ?? "unfinished",
-      turns: level.turns.length,
-      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
-      // spellings of the same class in one report read as two different things.
-      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
-      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
-    };
-  });
-}
+import { MOVES, isMove } from "./log-contract"
+import { levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows } from "./maze-model"
+import type { CellKey, Frame, LevelModel, Maze, Move, Report } from "./types"
 
 // --- Drawing constants ---
 
@@ -176,21 +33,25 @@ const AGENT_COLORS = [
 
 // --- Element helpers ---
 
-const createSvgElement = (name, attributes = {}) => {
+const createSvgElement = (name: string, attributes: Record<string, string | number> = {}): SVGElement => {
   const node = document.createElementNS(SVG_NS, name);
   for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, String(value));
   return node;
 };
 
-const createHtmlElement = (name, className, text) => {
+const createHtmlElement = (
+  name: string,
+  className?: string | null,
+  text?: string | null,
+): HTMLElement => {
   const node = document.createElement(name);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
 };
 
-const cellXY = (cell) => {
-  const [row, col] = cell.split(",").map(Number);
+const cellXY = (cell: CellKey): {row: number; col: number; x: number; y: number} => {
+  const [row = 0, col = 0] = cell.split(",").map(Number);
   return {row, col, x: col * CELL, y: row * CELL};
 };
 
@@ -199,25 +60,27 @@ const cellXY = (cell) => {
 // drawWalls renders the static maze once. Every edge a cell has no exit through becomes a line, so
 // interior walls are drawn twice - once from each side - which costs nothing and avoids having to
 // special-case the outer boundary.
-function drawWalls(svg, maze) {
+function drawWalls(svg: SVGElement, maze: Maze): void {
   const walls = createSvgElement("g", {stroke: "var(--oracle-ink)", "stroke-width": 2, "stroke-linecap": "square"});
   for (const [cell, open] of maze.exits) {
     const {x, y} = cellXY(cell);
-    const edges = {
+    const edges: Record<Move, [number, number, number, number]> = {
       MoveUp: [x, y, x + CELL, y],
       MoveDown: [x, y + CELL, x + CELL, y + CELL],
       MoveLeft: [x, y, x, y + CELL],
       MoveRight: [x + CELL, y, x + CELL, y + CELL]
     };
     for (const [move, [x1, y1, x2, y2]] of Object.entries(edges)) {
-      if (!open.has(move)) walls.append(createSvgElement("line", {x1, y1, x2, y2}));
+      if (isMove(move) && !open.has(move)) {
+        walls.append(createSvgElement("line", {x1, y1, x2, y2}));
+      }
     }
   }
   svg.append(walls);
 }
 
 // markerFor draws the fixed points of the round: where it began and where it had to end.
-function drawMarkers(svg, model) {
+function drawMarkers(svg: SVGElement, model: LevelModel): void {
   if (model.destinationCell) {
     const {x, y} = cellXY(model.destinationCell);
     svg.append(
@@ -239,7 +102,7 @@ function drawMarkers(svg, model) {
 
 // drawFrame paints everything that changes as the scrubber moves. Kept in its own group so a repaint
 // removes exactly the previous frame and never the walls beneath it.
-function drawFrame(overlay, frame, colorOf) {
+function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) => string): void {
   overlay.replaceChildren();
 
   // Visited cells are tinted. --oracle-selected is only 1.12:1 against paper so it never signals alone,
@@ -258,11 +121,11 @@ function drawFrame(overlay, frame, colorOf) {
   }
 
   // The path walked so far, per agent, so crossing trails stay tellable apart.
-  const byAgent = new Map();
+  const byAgent = new Map<string, CellKey[]>();
   for (const turn of frame.played) {
     const name = turn.playerName ?? "";
     if (!byAgent.has(name)) byAgent.set(name, []);
-    byAgent.get(name).push(...turn.cells);
+    byAgent.get(name)?.push(...turn.cells);
   }
   for (const [name, cells] of byAgent) {
     if (cells.length < 2) continue;
@@ -286,18 +149,19 @@ function drawFrame(overlay, frame, colorOf) {
   // cell size, and invisible to a red-green colour deficiency. A cross is a different mark from a line
   // at any size, and the paper-coloured halo under it keeps it legible over both the trail and the
   // visited tint.
-  if (frame.rejected?.cell && MOVES[frame.rejected.move]) {
+  if (frame.rejected?.cell && isMove(frame.rejected.move)) {
     const {x, y} = cellXY(frame.rejected.cell);
     const [rowDelta, colDelta] = MOVES[frame.rejected.move];
     const cx = x + CELL / 2 + colDelta * (CELL / 2);
     const cy = y + CELL / 2 + rowDelta * (CELL / 2);
     const arm = 4.5;
-    const strokes = [
+    const strokes: Array<[number, number, number, number]> = [
       [cx - arm, cy - arm, cx + arm, cy + arm],
       [cx - arm, cy + arm, cx + arm, cy - arm]
     ];
 
-    for (const [width, stroke] of [[5, "var(--oracle-paper)"], [2.5, "var(--oracle-rose)"]]) {
+    const layers: Array<[number, string]> = [[5, "var(--oracle-paper)"], [2.5, "var(--oracle-rose)"]];
+    for (const [width, stroke] of layers) {
       for (const [x1, y1, x2, y2] of strokes) {
         overlay.append(
           createSvgElement("line", {x1, y1, x2, y2, stroke, "stroke-width": width, "stroke-linecap": "round"})
@@ -319,10 +183,12 @@ function drawFrame(overlay, frame, colorOf) {
 
 // turnNarrative is the scrubber's spoken label and its caption, so what the grid shows is also stated in
 // words - a colour-coded path is not readable to everyone looking at it.
-function turnNarrative(frame) {
-  if (frame.turnIndex === 0) return "Start position, before the first turn.";
-
+function turnNarrative(frame: Frame): string {
   const turn = frame.turn;
+  // A frame at turn 0 has no turn to narrate; the two conditions are the same fact, but only the
+  // second one tells the checker so.
+  if (frame.turnIndex === 0 || !turn) return "Start position, before the first turn.";
+
   const applied = turn.applied;
   const submitted = turn.moves.length;
   const who = turn.playerName ? `${turn.playerName} ` : "";
@@ -337,7 +203,7 @@ function turnNarrative(frame) {
 
 // --- Summaries ---
 
-function summaryTable(rows, headers) {
+function summaryTable(rows: Array<Record<string, unknown>>, headers: string[]): HTMLElement {
   const table = createHtmlElement("table", "maze-summary-table");
   const head = createHtmlElement("thead");
   const headRow = createHtmlElement("tr");
@@ -358,7 +224,7 @@ function summaryTable(rows, headers) {
 // --- Entry point ---
 
 // createMazeReplay builds the whole section for one report and returns its root node.
-export function createMazeReplay(report) {
+export function createMazeReplay(report: Report): HTMLElement {
   // Takes the report, not a pre-built model: both adapters live in this module, and having the caller
   // run them meant the view's own data shaping was spelled out at every call site.
   const models = mazeReplayModel(report);
@@ -376,7 +242,7 @@ export function createMazeReplay(report) {
   const select = createHtmlElement("select", "maze-level-select");
   select.setAttribute("aria-label", "Level to replay");
   models.forEach((model, index) => {
-    const option = createHtmlElement("option", null, model.label);
+    const option = createHtmlElement("option", null, model.label) as HTMLOptionElement;
     option.value = String(index);
     select.append(option);
   });
@@ -386,7 +252,7 @@ export function createMazeReplay(report) {
   const figure = createHtmlElement("div", "maze-figure");
   const caption = createHtmlElement("p", "maze-caption");
   const scrubberRow = createHtmlElement("div", "maze-scrubber");
-  const range = createHtmlElement("input");
+  const range = createHtmlElement("input") as HTMLInputElement;
   range.type = "range";
   range.className = "maze-range";
   const readout = createHtmlElement("span", "maze-readout");
@@ -395,16 +261,17 @@ export function createMazeReplay(report) {
   const summary = createHtmlElement("div", "maze-summary");
   root.append(figure, caption, scrubberRow, summary);
 
-  let active = models[0];
+  // models is non-empty here: the caller returned early for a report with no rounds.
+  let active: LevelModel = models[0]!;
 
-  const colorOf = (name) => {
+  const colorOf = (name: string): string => {
     const index = active.agents.indexOf(name);
-    return AGENT_COLORS[(index < 0 ? 0 : index) % AGENT_COLORS.length];
+    return AGENT_COLORS[(index < 0 ? 0 : index) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
   };
 
-  let overlay = null;
+  let overlay: SVGElement | null = null;
 
-  const paint = () => {
+  const paint = (): void => {
     const frame = mazeFrameAt(active, Number(range.value));
     if (overlay) drawFrame(overlay, frame, colorOf);
     caption.textContent = turnNarrative(frame);
@@ -412,7 +279,7 @@ export function createMazeReplay(report) {
     range.setAttribute("aria-valuetext", turnNarrative(frame));
   };
 
-  const showLevel = (model) => {
+  const showLevel = (model: LevelModel): void => {
     active = model;
     figure.replaceChildren();
     summary.replaceChildren();
@@ -465,8 +332,11 @@ export function createMazeReplay(report) {
   };
 
   range.addEventListener("input", paint);
-  select.addEventListener("change", () => showLevel(models[Number(select.value)]));
+  select.addEventListener("change", () => {
+    const chosen = models[Number((select as HTMLSelectElement).value)];
+    if (chosen) showLevel(chosen);
+  });
 
-  showLevel(models[0]);
+  showLevel(models[0]!);
   return root;
 }

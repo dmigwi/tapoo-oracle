@@ -6,8 +6,10 @@ import * as Inputs from "@observablehq/inputs"
 import {html} from "htl"
 import {describe, expect, it} from "vitest"
 
-import {analyzeLogText, createInitialReportTabs} from "./oracle.js"
-import {activeReportTab, renderReportSections} from "./report-view.js"
+import {analyzeLogText, createInitialReportTabs} from "./report-tabs"
+import {activeReportTab, renderReportSections} from "./report-view"
+import type {LogEntry, Region, ReportTab, ReportTabsState} from "./types"
+import {query, queryAll, rendered} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
 // those two, and a stub would be testing the stub's shape rather than the one that ships.
@@ -21,7 +23,7 @@ const REAL_MAZE = {
   dimensions: {numCols: 6, numRows: 4, area: 24}
 }
 
-const entry = (payload, details, turn = 0) => ({
+const entry = (payload: string, details?: unknown, turn = 0): LogEntry => ({
   epochMs: 1788000000000 + turn * 1000,
   time: "t",
   turn,
@@ -76,38 +78,39 @@ const logExport = JSON.stringify({
   ]
 })
 
-const loadedTab = () => {
+const loadedTab = (): ReportTab => {
   const result = analyzeLogText(logExport, {label: "gemma4.json"})
   expect(result.ok).toBe(true)
   return {id: "t1", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "gemma4.json", status: "loaded", result}
 }
 
-const stateWith = (...tabs) => ({...createInitialReportTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
-const text = (node) => (node === "" ? "" : node.textContent ?? "")
+const stateWith = (...tabs: ReportTab[]): ReportTabsState =>
+  ({...createInitialReportTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
+const text = (node: Region) => (node === "" ? "" : node.textContent ?? "")
 
 describe("activeReportTab", () => {
   it("finds the tab the state marks active", () => {
-    const first = {id: "a"}
-    const second = {id: "b"}
-    expect(activeReportTab({tabs: [first, second], activeTabId: "b"})).toBe(second)
+    const first = {id: "a"} as ReportTab
+    const second = {id: "b"} as ReportTab
+    expect(activeReportTab({tabs: [first, second], activeTabId: "b"} as ReportTabsState)).toBe(second)
   })
 
   it("falls back to the first tab when the active id names none", () => {
-    const first = {id: "a"}
-    expect(activeReportTab({tabs: [first], activeTabId: "gone"})).toBe(first)
+    const first = {id: "a"} as ReportTab
+    expect(activeReportTab({tabs: [first], activeTabId: "gone"} as ReportTabsState)).toBe(first)
   })
 
   it("survives a state that is not a tabs state at all", () => {
-    expect(activeReportTab(undefined)).toBeUndefined()
-    expect(activeReportTab({})).toBeUndefined()
+    expect(activeReportTab(undefined as unknown as ReportTabsState)).toBeUndefined()
+    expect(activeReportTab({} as ReportTabsState)).toBeUndefined()
   })
 })
 
 describe("renderReportSections", () => {
-  it("returns the four regions the page interpolates, in reading order", () => {
+  it("returns the five regions the page interpolates, in reading order", () => {
     const sections = renderReportSections(ui, stateWith(loadedTab()))
-    expect(Object.keys(sections)).toEqual(["emptyState", "notices", "profile", "detail"])
+    expect(Object.keys(sections)).toEqual(["emptyState", "notices", "methodology", "profile", "detail"])
   })
 
   it("shows the how-to and nothing else before a report is loaded", () => {
@@ -118,6 +121,8 @@ describe("renderReportSections", () => {
     expect(sections.profile).toBe("")
     expect(sections.detail).toBe("")
     expect(sections.notices).toBe("")
+    // Nor five stages of methodology above an empty state asking the reader to paste a URL.
+    expect(sections.methodology).toBe("")
   })
 
   it("drops the how-to once a report is loaded", () => {
@@ -127,10 +132,10 @@ describe("renderReportSections", () => {
 })
 
 describe("profile", () => {
-  const profile = () => renderReportSections(ui, stateWith(loadedTab())).profile
+  const profile = () => rendered(renderReportSections(ui, stateWith(loadedTab())).profile)
 
   it("names the log being analyzed", () => {
-    expect(profile().querySelector(".source-line").textContent).toMatch(/gemma4\.json/)
+    expect(query(profile(), ".source-line").textContent).toMatch(/gemma4\.json/)
   })
 
   it("puts the maze between the source line and the metrics", () => {
@@ -148,29 +153,27 @@ describe("profile", () => {
   it("carries one metric card per headline figure", () => {
     const cards = profile().querySelectorAll(".analysis-strip .metric")
     expect(cards).toHaveLength(4)
-    expect([...cards].map((card) => card.querySelector("span").textContent)).toContain(
+    expect([...cards].map((card) => query(card, "span").textContent)).toContain(
       "Capabilities demonstrated"
     )
   })
 
   it("states what a negative answer means, in the summary", () => {
-    expect(profile().querySelector(".oracle-summary").textContent).toMatch(
+    expect(query(profile(), ".oracle-summary").textContent).toMatch(
       /not that the model is incapable/
     )
   })
 })
 
 describe("detail", () => {
-  const detail = () => renderReportSections(ui, stateWith(loadedTab())).detail
+  const detail = () => rendered(renderReportSections(ui, stateWith(loadedTab())).detail)
 
-  it("leaves the methodology to the page, which owns that static markup", () => {
-    // It moved to index.md because nothing in it is interpolated. Rendering it from here too would
-    // put two copies on the page.
+  it("leaves the methodology to its own region, so the page holds one copy", () => {
     expect(detail().querySelector(".methodology-section")).toBeNull()
   })
 
   it("renders every rubric section the report promises", () => {
-    const headings = [...detail().querySelectorAll("h2")].map((node) => node.textContent)
+    const headings = queryAll(detail(), "h2").map((node) => node.textContent)
     expect(headings).toEqual(
       expect.arrayContaining(["Capabilities", "Violations", "Operational Diagnostics", "Provenance"])
     )
@@ -187,11 +190,11 @@ describe("detail", () => {
 
 describe("notices", () => {
   it("reports a tab that failed to load", () => {
-    const tab = {id: "t1", label: "bad.json", status: "error", error: "404 Not Found"}
+    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
     const sections = renderReportSections(ui, stateWith(tab))
 
-    expect(sections.notices.className).toBe("notice notice-error")
-    expect(sections.notices.textContent).toMatch(/404 Not Found/)
+    expect(rendered(sections.notices).className).toBe("notice notice-error")
+    expect(rendered(sections.notices).textContent).toMatch(/404 Not Found/)
     // A failed load has no report, so nothing downstream may render.
     expect(sections.profile).toBe("")
     expect(sections.detail).toBe("")
@@ -201,13 +204,43 @@ describe("notices", () => {
     const result = analyzeLogText(logExport.replace('"agent-api"', '"human"'), {label: "g.json"})
     const sections = renderReportSections(ui, stateWith({...loadedTab(), result}))
 
-    expect(sections.notices.className).toBe("notice notice-warn")
-    expect(sections.notices.textContent).toMatch(/agent-api/)
+    expect(rendered(sections.notices).className).toBe("notice notice-warn")
+    expect(rendered(sections.notices).textContent).toMatch(/agent-api/)
     // The warning is a caveat on the report, not a replacement for it.
     expect(sections.profile).not.toBe("")
   })
 
   it("says nothing when a report loaded cleanly", () => {
     expect(renderReportSections(ui, stateWith(loadedTab())).notices).toBe("")
+  })
+})
+
+describe("methodology", () => {
+  const sectionsFor = (...tabs: ReportTab[]) => renderReportSections(ui, stateWith(...tabs))
+
+  it("explains how the report was made, once a report exists to explain", () => {
+    const section = rendered(sectionsFor(loadedTab()).methodology)
+
+    expect(section.className).toContain("methodology-section")
+    expect(query(section, ".methodology-title").textContent).toBe("How this report is generated")
+    expect(queryAll(section, ".analysis-pipeline > li")).toHaveLength(5)
+  })
+
+  it("stays collapsed: it is reference material, not the report", () => {
+    expect(rendered(sectionsFor(loadedTab()).methodology).tagName.toLowerCase()).toBe("details")
+    expect(rendered(sectionsFor(loadedTab()).methodology).hasAttribute("open")).toBe(false)
+  })
+
+  it("renders nothing before a report is loaded", () => {
+    // It used to be static markup in index.md, so an untouched page showed five stages describing the
+    // treatment of evidence it did not have yet, directly above an empty state asking for a URL.
+    expect(sectionsFor().methodology).toBe("")
+    expect(renderReportSections(ui, createInitialReportTabs()).methodology).toBe("")
+  })
+
+  it("renders nothing for a tab that failed to load", () => {
+    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
+
+    expect(sectionsFor(tab).methodology).toBe("")
   })
 })

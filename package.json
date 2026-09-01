@@ -1,6 +1,6 @@
 {
   "name": "tapoo-oracle",
-  "version": "0.3.0",
+  "version": "1.1.0",
   "description": "Tapoo's analytics extension: an Observable Framework app that profiles agent-api behavior logs against the Tapoo Agentic Behavior Rubric.",
   "packageManager": "pnpm@11.25.0",
   "devEngines": {
@@ -14,15 +14,16 @@
   "private": true,
   "scripts": {
     "clean": "rimraf src/.observablehq/cache",
-    "build": "trap 'rimraf .tmp/build-root' EXIT; node ./scripts/build.mjs && ORACLE_STRIPPED_BUILD=1 observable build",
-    "dev": "observable preview",
-    "deploy": "trap 'rimraf .tmp/build-root' EXIT; node ./scripts/build.mjs && ORACLE_STRIPPED_BUILD=1 observable deploy",
+    "build": "trap 'rimraf components' EXIT; node ./scripts/build.mjs && ORACLE_STRIPPED_BUILD=1 observable build",
+    "dev": "node ./scripts/build.mjs --watch",
+    "deploy": "trap 'rimraf components' EXIT; node ./scripts/build.mjs && ORACLE_STRIPPED_BUILD=1 observable deploy",
     "observable": "observable",
-    "lint": "eslint src/analysis src/components src/contracts scripts --max-warnings=0",
-    "lint:fix": "eslint src/analysis src/components src/contracts scripts --fix",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "quality": "pnpm run lint && pnpm run test"
+    "quality": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit"
   },
   "dependencies": {
     "@observablehq/framework": "^1.13.4",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@observablehq/inputs": "0.12.0",
+    "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "0.28.2",
     "eslint": "^10.8.1",
@@ -39,6 +41,8 @@
     "htl": "1.0.0",
     "jsdom": "^30.0.1",
     "rimraf": "^5.0.10",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.10"
   },
   "engines": {

@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  cellFromGridPoint,
-  decodeEncodedMaze,
-  fnv1a64Checksum,
-  mazeFromEncoded,
-  shortestPathLength,
-} from "./maze.js"
+import {cellFromGridPoint, decodeEncodedMaze, fnv1a64Checksum, mazeFromEncoded, shortestPathLength} from "./maze"
+import {expectErr, expectOk} from "./test-support";
 
 // The exact maze block from a real Tapoo export (v2.5.1, 6x4). Using the shipped bytes rather than a
 // hand-built grid is the point: a fabricated fixture would prove the decoder self-consistent while
@@ -38,8 +33,8 @@ describe("decodeEncodedMaze", () => {
 
     expect(decoded.ok).toBe(true)
     // (2R+1) rows of (2C+1) tokens, the layout Tapoo's renderCellStep of 2 produces.
-    expect(decoded.grid).toHaveLength(9)
-    expect(new Set(decoded.grid.map((row) => row.length))).toEqual(new Set([13]))
+    expect(expectOk(decoded).grid).toHaveLength(9)
+    expect(new Set(expectOk(decoded).grid.map((row: string[]) => row.length))).toEqual(new Set([13]))
   })
 
   it.each([
@@ -51,7 +46,7 @@ describe("decodeEncodedMaze", () => {
     const decoded = decodeEncodedMaze(encoded)
 
     expect(decoded.ok).toBe(false)
-    expect(decoded.error).toMatch(expected)
+    expect(expectErr(decoded).error).toMatch(expected)
   })
 })
 
@@ -60,7 +55,7 @@ describe("mazeFromEncoded", () => {
 
   it("recovers one exit set per logical cell", () => {
     expect(built.ok).toBe(true)
-    expect(built.maze.exits.size).toBe(24)
+    expect(expectOk(built).maze.exits.size).toBe(24)
   })
 
   it.each([
@@ -70,11 +65,11 @@ describe("mazeFromEncoded", () => {
     ["1,5", ["MoveDown", "MoveLeft"]],
     ["2,5", ["MoveUp", "MoveDown"]],
   ])("reads the exits of %s", (cell, expected) => {
-    expect([...built.maze.exits.get(cell)].sort()).toEqual([...expected].sort())
+    expect([...(expectOk(built).maze.exits.get(cell) ?? [])].sort()).toEqual([...expected].sort())
   })
 
   it("classifies every cell and finds the route", () => {
-    expect(built.stats).toMatchObject({
+    expect(expectOk(built).stats).toMatchObject({
       rows: 4,
       cols: 6,
       cells: 24,
@@ -89,12 +84,12 @@ describe("mazeFromEncoded", () => {
     const built = mazeFromEncoded({ ...REAL_MAZE, dimensions: { numRows: 9, numCols: 9 } })
 
     expect(built.ok).toBe(false)
-    expect(built.error).toMatch(/does not match its 9x9 dimensions/)
+    expect(expectErr(built).error).toMatch(/does not match its 9x9 dimensions/)
   })
 })
 
 describe("shortestPathLength", () => {
-  const { maze } = mazeFromEncoded(REAL_MAZE)
+  const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
 
   it("is zero between a cell and itself", () => {
     expect(shortestPathLength(maze, START, START)).toBe(0)
@@ -116,6 +111,6 @@ describe("cellFromGridPoint", () => {
 
   it("returns null for a point that is not one", () => {
     expect(cellFromGridPoint(undefined)).toBeNull()
-    expect(cellFromGridPoint({ x: "left", y: 1 })).toBeNull()
+    expect(cellFromGridPoint({x: "left", y: 1} as unknown as {x: number; y: number})).toBeNull()
   })
 })

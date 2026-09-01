@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows } from "./maze-view.js"
+import {levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows} from "./maze-model"
+import type {EncodedMaze, Level, Outcome, Turn} from "./types"
+import {at, must, reportWith} from "./test-support";
 
-const REAL_MAZE = {
+const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
   structure_checksum: "0x74af82cb14470b9d",
   structure:
@@ -11,13 +13,19 @@ const REAL_MAZE = {
 }
 
 // A three-turn round through the real maze: two clean turns, then one whose second move hits a wall.
-const level = ({ encodedMaze = REAL_MAZE, turns, outcome } = {}) => ({
+type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null}
+
+const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): Level => ({
   key: "2/1",
   game: 2,
   level: 1,
   encodedMaze,
   startCell: "0,0",
-  destinationCell: { row: 0, col: 5 },
+  startPosition: null,
+  historyWindowRadius: null,
+  // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
+  // [row, col] - through the contract, so a level model never carries the raw form.
+  destinationCell: "0,5",
   endCell: "2,0",
   observedExits: new Map(),
   positions: [],
@@ -42,14 +50,15 @@ const level = ({ encodedMaze = REAL_MAZE, turns, outcome } = {}) => ({
   },
 })
 
-const modelFor = (overrides) => mazeReplayModel({ levels: [level(overrides)] })[0]
+const modelFor = (overrides: LevelOverrides = {}) =>
+  must(mazeReplayModel(reportWith(level(overrides)))[0], "a model for the round")
 
 describe("mazeReplayModel", () => {
   it("decodes the maze and lists the seats that acted", () => {
     const model = modelFor()
 
     expect(model.error).toBeNull()
-    expect(model.maze.exits.size).toBe(24)
+    expect(must(model.maze, "a decoded maze").exits.size).toBe(24)
     expect(model.agents).toEqual(["Katara"])
     expect(model.destinationCell).toBe("0,5")
   })
@@ -114,7 +123,8 @@ describe("mazeFrameAt", () => {
 })
 
 describe("mazeSummaryRows", () => {
-  const value = (rows, field) => rows.find((row) => row.field === field)?.value
+  const value = (rows: {field: string; value: string}[], field: string) =>
+    rows.find((row) => row.field === field)?.value
 
   it("describes the maze and how much of it was entered", () => {
     const rows = mazeSummaryRows(modelFor())
@@ -144,14 +154,14 @@ describe("levelSummaryRows", () => {
   it("classifies speed itself rather than echoing the log's spelling", () => {
     // The log writes "navigator"; classifyTraversalSpeed writes "Navigator". Two spellings of one class
     // in a single report read as two different things.
-    expect(levelSummaryRows({ levels: [level()] })).toEqual([
+    expect(levelSummaryRows(reportWith(level()))).toEqual([
       { level: 1, game: 2, outcome: "won", turns: 3, speed: "1.0000", class: "Navigator" },
     ])
   })
 
   it("says so when a round recorded no speed", () => {
-    const rows = levelSummaryRows({ levels: [level({ outcome: { outcome: "lost" } })] })
+    const rows = levelSummaryRows(reportWith(level({outcome: {outcome: "lost"}})))
 
-    expect(rows[0]).toMatchObject({ outcome: "lost", speed: "not recorded", class: "not recorded" })
+    expect(at(rows, 0)).toMatchObject({ outcome: "lost", speed: "not recorded", class: "not recorded" })
   })
 })

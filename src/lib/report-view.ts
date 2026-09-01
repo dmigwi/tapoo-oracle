@@ -1,26 +1,26 @@
 // The page's view layer, lifted out of src/index.md.
 //
 // Everything here used to live in a fenced js block in the markdown, where it was neither linted nor
-// testable: src/index.md is not in eslint's file list and vitest cannot import a markdown fence. Two
-// of the comments below record bugs that reached the page for exactly that reason.
+// testable: src/index.md is not in eslint's file list and vitest cannot import a markdown fence.
 //
 // Inputs and html arrive as arguments rather than imports. Both are Observable Framework globals in
 // markdown, and pulling them in here would mean either an "npm:" specifier that only the framework's
 // bundler resolves, or a bare import of htl, which is not a direct dependency. Passing them keeps
 // this a plain module that node, vitest and eslint can all read.
 
+import { createMazeReplay } from "./maze-view";
 import {
-  createInitialReportTabs,
   diagnosticTableData,
-  enableRowSelection,
   groupResultTone,
-  prepareRubricTable,
-  rubricQuestionRows,
   narrativeSummary,
   profileCards,
-  provenanceTableData
-} from "./oracle.js";
-import {createMazeReplay} from "./maze-view.js";
+  provenanceTableData,
+  rubricQuestionRows,
+} from "./report-adapters";
+import { createInitialReportTabs } from "./report-tabs";
+import { enableRowSelection, prepareRubricTable } from "./rubric-table";
+import type { Analysis, GroupKind, Region, ReportTab, ReportTabsState, ReportUi, TapooLog } from "./types";
+
 
 // --- Shared tables ---
 
@@ -40,12 +40,12 @@ import {createMazeReplay} from "./maze-view.js";
 // which is rose. Only the YES rows are coloured - a capability answering NO means the behavior was
 // not observed in this sample, never that the model cannot do it, and painting that red would state
 // the one thing this report exists to avoid saying.
-function rubricTable({Inputs, html}, rows, kind) {
+function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string>>, kind: GroupKind): Element {
   return prepareRubricTable(enableRowSelection(Inputs.table(rows, {
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
     format: {
-      groupResult: (value) => {
+      groupResult: (value: string) => {
         const tone = groupResultTone(kind, value)
         return tone ? html`<span class=${tone}>${value}</span>` : value
       }
@@ -55,7 +55,7 @@ function rubricTable({Inputs, html}, rows, kind) {
   })));
 }
 
-function diagnosticsTable({Inputs}, report) {
+function diagnosticsTable({Inputs}: ReportUi, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
   const data = diagnosticTableData(report);
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
@@ -65,7 +65,7 @@ function diagnosticsTable({Inputs}, report) {
   }));
 }
 
-function provenanceTable({Inputs}, source, report) {
+function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
   const data = provenanceTableData(source, report);
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
@@ -78,14 +78,14 @@ function provenanceTable({Inputs}, source, report) {
 
 // The tab the rest of the page is about. The state can arrive before the input has produced one, so
 // the shape is normalized rather than assumed.
-export function activeReportTab(tabsState) {
+export function activeReportTab(tabsState: ReportTabsState | undefined): ReportTab | undefined {
   const state = tabsState?.tabs ? tabsState : createInitialReportTabs();
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
 }
 
 // --- Page sections, in reading order ---
 
-function emptyState({html}, tab) {
+function emptyState({html}: ReportUi, tab: ReportTab | undefined): Region {
   if (tab?.status === "loaded" || tab?.status === "error") return "";
   return html`<section class="notice empty-report-state">
       <strong>Load an online JSON report URL</strong>
@@ -116,7 +116,7 @@ function emptyState({html}, tab) {
     </section>`;
 }
 
-function notices({html}, tab) {
+function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
   const result = tab?.result;
   if (tab?.status === "error") {
     return html`<section class="notice notice-error">
@@ -133,9 +133,9 @@ function notices({html}, tab) {
   return "";
 }
 
-function profile({html}, tab) {
+function profile({html}: ReportUi, tab: ReportTab | undefined): Region {
   const result = tab?.result;
-  if (!result?.ok) return "";
+  if (!tab || !result?.ok) return "";
   return html`<div class="report-region">
       <section class="events-section">
         <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
@@ -158,7 +158,79 @@ function profile({html}, tab) {
 
 // detail is the evidence itself: the rubric tables, the diagnostics, and the provenance of the log
 // they were read from.
-function detail(ui, result) {
+// How this report is generated.
+//
+// Reference material, so it is collapsed, and it sits directly under the share panel because a reader
+// deciding whether to trust a profile - or whether to pass its link on - asks how it was made before
+// they read its verdicts.
+//
+// It was static markup in index.md for a while, on the grounds that it interpolates nothing. That was
+// true and still wrong: a page with no report loaded showed five stages of methodology above an empty
+// state telling the reader to paste a URL, explaining the treatment of evidence that does not exist
+// yet. It renders here so it appears with the thing it describes.
+function methodology({html}: ReportUi, result: Analysis | undefined): Region {
+  if (!result?.ok) return "";
+  return html`<details class="events-section methodology-section">
+      <summary>
+        <span class="methodology-title" role="heading" aria-level="2">How this report is generated</span>
+        <span class="methodology-preview">Five stages from the active URL to an evidence-based profile.</span>
+      </summary>
+      <div class="methodology-content">
+        <p class="methodology-intro">
+          Tapoo Oracle fetches the active tab's JSON URL and analyzes it entirely in this browser.
+          It does not persist the fetched log, infer missing fields, or assign a combined
+          intelligence score.
+        </p>
+        <ol class="analysis-pipeline">
+          <li>
+            <h3>Fetch the active tab's URL</h3>
+            <p>
+              Each tab owns one online JSON file URL. Loading that tab fetches the current URL;
+              editing the URL clears the previous result so stale analysis is not shown as current
+              evidence.
+            </p>
+          </li>
+          <li>
+            <h3>Validate the Tapoo log contract</h3>
+            <p>
+              The input must be valid JSON with the Tapoo export identity, an <code>entries</code>
+              array, and readable log entries. A non-<code>agent-api</code> mode, missing build
+              version, or skipped malformed entries produces a visible warning instead of being
+              silently ignored.
+            </p>
+          </li>
+          <li>
+            <h3>Build evidence from recorded events</h3>
+            <p>
+              The rubric engine reads the validated entries in their recorded order and derives
+              only contract-defined facts. Missing evidence answers <strong>NO</strong>, meaning the
+              behavior was not observed in this sample, not that the model is incapable of it.
+            </p>
+          </li>
+          <li>
+            <h3>Answer and aggregate the rubric</h3>
+            <p>
+              Every rubric question returns <strong>YES</strong> or <strong>NO</strong>. A capability
+              is demonstrated only when every question in its group is YES. A violation is confirmed
+              when any question in its group is YES. The report keeps fractions such as
+              <code>2/3</code> visible so partial evidence is not hidden by the group verdict. Each
+              exact question and its answer are displayed directly in the report below.
+            </p>
+          </li>
+          <li>
+            <h3>Present the profile with its boundaries</h3>
+            <p>
+              Capability and violation totals remain separate. Operational failures that may come
+              from provider infrastructure are reported as diagnostics, while build, model, player,
+              and log metadata are retained as provenance for the analyzed sample.
+            </p>
+          </li>
+        </ol>
+      </div>
+    </details>`;
+}
+
+function detail(ui: ReportUi, result: Analysis | undefined): Region {
   if (!result?.ok) return "";
   const {html} = ui;
   return html`<div class="report-region">
@@ -194,11 +266,15 @@ function detail(ui, result) {
 // One call per render, returning the four regions the page interpolates. Returning an object rather
 // than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
 // reading order stays visible in the markdown rather than being buried in this file.
-export function renderReportSections(ui, tabsState) {
+export function renderReportSections(
+  ui: ReportUi,
+  tabsState: ReportTabsState | undefined,
+): {emptyState: Region; notices: Region; methodology: Region; profile: Region; detail: Region} {
   const tab = activeReportTab(tabsState);
   return {
     emptyState: emptyState(ui, tab),
     notices: notices(ui, tab),
+    methodology: methodology(ui, tab?.result),
     profile: profile(ui, tab),
     detail: detail(ui, tab?.result)
   };

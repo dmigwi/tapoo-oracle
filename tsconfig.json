@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+
+    // Matches the option Observable Framework hardcodes when it transpiles a .ts module
+    // (getTransformOptions in dist/javascript/module.js), so a type-only import that would break the
+    // browser bundle is a compile error here rather than a 404 at runtime.
+    "verbatimModuleSyntax": true,
+
+    // Nothing is emitted: Framework transpiles for dev and esbuild bundles for the build. tsc's only
+    // job in this project is to say yes or no.
+    "noEmit": true,
+
+    // Import specifiers are extensionless. Observable never resolves them - scripts/build.mjs bundles
+    // this graph with esbuild before Observable sees it, in dev as well as in build - so the resolver
+    // that has to agree with this option is esbuild's, and it resolves them.
+    "allowImportingTsExtensions": false,
+
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+
+  // Checked by tsconfig.node.json instead: it reads the markdown pages off disk, and node's globals
+  // have no business being visible to the browser modules beside it.
+  "exclude": ["src/lib/markdown-fences.test.ts"]
+}

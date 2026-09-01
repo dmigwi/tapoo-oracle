@@ -2,7 +2,7 @@ PNPM := pnpm
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install audit agentic-analysis lint test coverage quality ci dev build deploy clean observable
+.PHONY: help install audit agentic-analysis typecheck lint test coverage quality ci dev build deploy clean observable
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -18,6 +18,9 @@ agentic-analysis: ## Answer the rubric for exported Tapoo logs; usage: make agen
 		( echo 'Set LOGS to one or more exported logs, e.g. make agentic-analysis LOGS="a.json b.json"' >&2; exit 1 )
 	node ./scripts/agentic-analysis.mjs $(LOGS)
 
+typecheck: ## Type-check the app and the tooling. Nothing is emitted.
+	CI=true $(PNPM) --config.confirmModulesPurge=false run typecheck
+
 lint: ## Run eslint over the app and tooling sources.
 	CI=true $(PNPM) --config.confirmModulesPurge=false run lint
 
@@ -27,21 +30,23 @@ test: ## Run the test suite.
 coverage: ## Run the test suite with coverage.
 	CI=true $(PNPM) --config.confirmModulesPurge=false run coverage
 
-quality: ## Run lint and tests.
+quality: ## Run the type check, lint and tests.
+	$(MAKE) typecheck
 	$(MAKE) lint
 	$(MAKE) test
 
 ci: ## Run the local equivalent of the CI pipeline.
 	$(MAKE) install
 	$(MAKE) audit
+	$(MAKE) typecheck
 	$(MAKE) lint
 	$(MAKE) test
 	$(MAKE) build
 
-dev: ## Start the local preview server.
+dev: ## Bundle the app and start the local preview server, rebuilding as sources change.
 	$(PNPM) dev
 
-build: ## Strip sources, build the static site into ./public, then clean up.
+build: ## Bundle the app, build the static site into ./public, then clean up.
 	$(PNPM) build
 
 deploy: ## Deploy the app to Observable.
