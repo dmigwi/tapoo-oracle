@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { decodeReportPayload, encodeReportPayload } from "./oracle.js"
+import { decodeReportPayload, encodeReportPayload } from "./log-contract.js"
 
 // The known-good log, and the shape the encoding is tuned for: a long prefix plus two hex runs.
 const gistUrl =

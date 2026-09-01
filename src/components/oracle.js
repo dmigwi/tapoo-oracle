@@ -10,7 +10,12 @@
 // signal that the contract does not define. A plausible-looking number with no basis in the log is
 // worse than an absent one, because it still reads as evidence.
 
-import { parseTapooLogExport } from "../analysis/log-contract.js";
+import {
+  decodeReportPayload as decodeReportPayloadContract,
+  encodeReportPayload,
+  loadTapooLogFromUrl,
+  parseTapooLogText,
+} from "../contracts/log-contract.js";
 import { answerRubric } from "../analysis/rubric-engine.js";
 
 // --- Analyzing a log ---
@@ -19,115 +24,21 @@ import { answerRubric } from "../analysis/rubric-engine.js";
 // discriminated result instead of throwing, because every failure here is a person's input mistake
 // that the page has to explain, not an exceptional condition.
 export function analyzeLogText(text, {label = "online log", sourceUrl} = {}) {
-  const trimmed = String(text ?? "").trim();
-  if (!trimmed) {
-    return {ok: false, error: "Load a Tapoo agent-api log from an online JSON URL to begin."};
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (error) {
-    return {ok: false, error: `Not valid JSON: ${error.message}`};
-  }
-
-  const result = parseTapooLogExport(parsed);
+  const result = parseTapooLogText(text, {sourceUrl});
   if (!result.ok) {
     return {ok: false, error: result.error};
   }
 
+  return buildReportAnalysis(result.source, result.warnings, label);
+}
+
+function buildReportAnalysis(source, warnings, label) {
   return {
     ok: true,
-    source: sourceUrl ? {...result.value, sourceUrl} : result.value,
-    warnings: result.warnings,
-    report: answerRubric(result.value.entries, {label})
+    source,
+    warnings,
+    report: answerRubric(source.entries, {label})
   };
-}
-
-// --- Online JSON URLs ---
-
-export function validateOnlineJsonUrl(value) {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) {
-    return {ok: false, error: "Enter an online JSON file URL."};
-  }
-
-  let url;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    return {ok: false, error: "Enter a valid URL."};
-  }
-
-  if (!["http:", "https:"].includes(url.protocol)) {
-    return {ok: false, error: "Use an online http:// or https:// JSON URL."};
-  }
-
-  return {ok: true, url: url.href};
-}
-
-// --- Share payload format ---
-
-// Prefixes worth dropping, longest match first. This is a compression table and never an allowlist:
-// validateOnlineJsonUrl remains the only gate on what may be loaded, so a URL on any other host
-// encodes and decodes exactly the same way - it just has less in common with the table and so
-// compresses less. The two generic entries mean every http(s) URL matches something.
-const REPORT_PAYLOAD_PREFIXES = [
-  "https://gist.githubusercontent.com/",
-  "https://raw.githubusercontent.com/",
-  "https://",
-  "http://",
-]
-
-// Marks a packed hex run inside the byte stream. 0x01 cannot occur in the text of a URL - control
-// characters are percent-encoded by URL normalization long before they reach here - so no escaping
-// is needed to tell a marker apart from content.
-const REPORT_PAYLOAD_HEX_MARKER = 0x01
-
-// Below this a run costs more in framing than it saves. 16 hex characters pack to 8 bytes plus 2 of
-// framing; shorter runs are left as text.
-const REPORT_PAYLOAD_HEX_MIN = 16
-
-// Two trailing bytes over the rest of the token, so a link altered in transit is caught rather than
-// decoded into a different, valid-looking address.
-//
-// Without it, truncation is only caught when it lands inside a packed hex run: a cut that lands in
-// the filename leaves a perfectly valid URL pointing at something that was never shared, and the
-// reader is told the log could not be retrieved - the wrong remedy for a broken link. Two bytes are
-// free here in practice, since base64 rounds to groups of three.
-function reportPayloadIntegrityBytes(bytes) {
-  let hash = 0x811c9dc5
-  for (const byte of bytes) {
-    hash ^= byte
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-
-  const folded = ((hash >>> 16) ^ (hash & 0xffff)) & 0xffff
-  return [folded >>> 8, folded & 0xff]
-}
-
-function base64UrlFromBytes(bytes) {
-  let binary = ""
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")
-}
-
-function bytesFromBase64Url(token) {
-  const padded = token.replaceAll("-", "+").replaceAll("_", "/")
-  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4))
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
-}
-
-// Packable only when the whole segment is lowercase hex of even length: an odd length cannot be
-// halved into bytes, and uppercase would not survive the round trip byte-for-byte.
-function isPackableHexSegment(segment) {
-  return (
-    segment.length >= REPORT_PAYLOAD_HEX_MIN &&
-    segment.length % 2 === 0 &&
-    /^[0-9a-f]+$/.test(segment)
-  )
 }
 
 // --- Report routes and links ---
@@ -199,17 +110,6 @@ export function reportPayloadFromHash(hash) {
   return REPORT_PAYLOAD_FRAGMENT_PATTERN.exec(String(hash ?? ""))?.[1] ?? null
 }
 
-// --- Why a link failed ---
-
-// Two outcomes, because a reader has exactly two situations to be in: either the link named no report
-// at all, or it named one and did not survive the trip. Every way a token can fail past that point -
-// characters that were never base64url, a run that overshoots the token, a checksum that no longer
-// matches, a prefix this build does not know - is the same event to the person holding it, and the
-// same remedy. Splitting them further only asks the reader to care which byte went wrong.
-const LINK_UNNAMED = "This link does not name a report."
-
-const LINK_ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
-
 // elideToken keeps both ends of an opaque token. The head is what a reader matches at a glance against
 // the link they were sent; the tail is where truncation and transcription damage actually shows up. A
 // tail alone reads as random text, which is the one thing this label must not do.
@@ -226,123 +126,8 @@ const damagedLinkLabel = (token) => {
   return location?.origin ? reportRouteFor(elided, location) : `/${REPORT_ROUTE}/${elided}`
 }
 
-// rejectedLink pairs a reason with the link it is about, kept as separate values rather than joined
-// into one sentence: the view marks the link up as code, which it cannot do once the two are one
-// string. An unnamed token - the empty case - carries no link, since there is nothing to point at.
-//
-// The link belongs in the message and never in the address bar: the token is opaque and this one does
-// not decode, so a /r/<token> address built from it would resolve to nothing while still looking usable.
-const rejectedLink = (reason, token) => ({
-  ok: false,
-  error: reason,
-  link: token ? damagedLinkLabel(token) : null
-})
-
-// --- Encoding and decoding a link ---
-
-// encodeReportPayload turns a log URL into the token a shared link carries.
-//
-// Recoverable by design - this compacts and obscures, it does not conceal, and nothing shown to a
-// reader should suggest otherwise. What it buys is that the log address is no longer sitting in the
-// page as a URL to be read, copied or crawled out of a screenshot.
-//
-// Two savings, in order: the prefix, and any long hex run. A content-addressed URL spends most of
-// its length on hex that is really half as many bytes - the sample gist URL carries a 32-character
-// id and a 40-character revision - and base64 costs 33%, so dropping the prefix alone would produce
-// a token longer than the URL it replaced.
-export function encodeReportPayload(value) {
-  const validation = validateOnlineJsonUrl(value)
-  if (!validation.ok) {
-    return validation
-  }
-
-  const index = REPORT_PAYLOAD_PREFIXES.findIndex((prefix) => validation.url.startsWith(prefix))
-  const encoder = new TextEncoder()
-  const bytes = [index]
-
-  validation.url.slice(REPORT_PAYLOAD_PREFIXES[index].length).split("/").forEach((segment, position) => {
-    if (position > 0) {
-      bytes.push(...encoder.encode("/"))
-    }
-
-    if (!isPackableHexSegment(segment)) {
-      bytes.push(...encoder.encode(segment))
-      return
-    }
-
-    bytes.push(REPORT_PAYLOAD_HEX_MARKER, segment.length / 2)
-    for (let at = 0; at < segment.length; at += 2) {
-      bytes.push(Number.parseInt(segment.slice(at, at + 2), 16))
-    }
-  })
-
-  return {ok: true, payload: base64UrlFromBytes(Uint8Array.from([...bytes, ...reportPayloadIntegrityBytes(bytes)]))}
-}
-
-// decodeReportPayload reverses it, answering in the same shape validateOnlineJsonUrl uses so callers
-// handle one result type.
-//
-// The rebuilt URL is passed back through validateOnlineJsonUrl rather than trusted: a token arrives
-// from whatever pasted the link, and a hand-edited one must not be able to produce something the
-// loader would have refused had it been typed into the form.
-export function decodeReportPayload(value) {
-  const token = String(value ?? "").trim()
-  if (!token) {
-    return rejectedLink(LINK_UNNAMED, "")
-  }
-
-  let framed
-  try {
-    framed = bytesFromBase64Url(token)
-  } catch {
-    return rejectedLink(LINK_ALTERED, token)
-  }
-
-  const bytes = framed.subarray(0, framed.length - 2)
-  const [high, low] = reportPayloadIntegrityBytes(bytes)
-  if (framed[framed.length - 2] !== high || framed[framed.length - 1] !== low) {
-    return rejectedLink(LINK_ALTERED, token)
-  }
-
-  const prefix = REPORT_PAYLOAD_PREFIXES[bytes[0]]
-  if (prefix === undefined) {
-    return rejectedLink(LINK_ALTERED, token)
-  }
-
-  const decoder = new TextDecoder()
-  let rest = ""
-  let literalFrom = 1
-
-  for (let at = 1; at < bytes.length; at += 1) {
-    if (bytes[at] !== REPORT_PAYLOAD_HEX_MARKER) {
-      continue
-    }
-
-    const count = bytes[at + 1]
-    // A run claiming more bytes than the token holds is a truncated link, not a shorter URL.
-    if (count === undefined || at + 2 + count > bytes.length) {
-      return rejectedLink(LINK_ALTERED, token)
-    }
-
-    rest += decoder.decode(bytes.subarray(literalFrom, at))
-    rest += [...bytes.subarray(at + 2, at + 2 + count)]
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("")
-    at += 1 + count
-    literalFrom = at + 1
-  }
-
-  // A token has to carry an address beyond its prefix. This replaces a "framed.length < 4" byte-count
-  // check that approximated the same thing: without either, a four-character token decodes to a bare
-  // "https://gist.githubusercontent.com/" - no path, no file - which is a syntactically valid URL, so
-  // it passes validation and the app goes and fetches a host root. Saying it in terms of the address
-  // states the rule the byte count was standing in for.
-  const address = rest + decoder.decode(bytes.subarray(literalFrom))
-  if (!address) {
-    return rejectedLink(LINK_ALTERED, token)
-  }
-
-  return validateOnlineJsonUrl(prefix + address)
+function decodeReportPayload(value) {
+  return decodeReportPayloadContract(value, {linkLabel: damagedLinkLabel})
 }
 
 // --- Report tabs ---
@@ -428,112 +213,61 @@ export function deleteReportTab(state, tabId, createId = reportTabId) {
 
 // --- Loading a report ---
 
-async function fetchReportText(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
-  }
-  return response.text();
-}
+const fetchOptions = (fetchText) => (fetchText ? {fetchText} : undefined);
 
-// fetchFailureMessage turns what fetch throws into something a reader can act on.
-//
-// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
-// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This
-// is the one failure where a link that works for whoever shared it can fail for whoever opens it.
-export function fetchFailureMessage(error) {
-  const message = error?.message ?? String(error)
-  if (error instanceof TypeError) {
-    return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`
-  }
-
-  return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`
-}
-
-export async function loadNewReportTabFromUrl(state, fetchText = fetchReportText) {
+export async function loadNewReportTabFromUrl(state, fetchText) {
   const tabId = state.pendingTabId ?? reportTabId();
-  const validation = validateOnlineJsonUrl(state.draftUrl);
-  if (!validation.ok) {
+  const loaded = await loadTapooLogFromUrl(state.draftUrl, fetchOptions(fetchText));
+  if (!loaded.ok && !loaded.url) {
     return {
       ...state,
       isAdding: true,
       draftStatus: "error",
-      draftError: validation.error,
+      draftError: loaded.error,
     };
   }
 
-  const label = reportTabLabelFromUrl(validation.url, state.tabs.length);
+  const label = reportTabLabelFromUrl(loaded.url ?? state.draftUrl, state.tabs.length);
   const baseTab = {
     id: tabId,
-    url: validation.url,
+    url: loaded.url ?? state.draftUrl,
     label,
-    loadedUrl: validation.url,
+    loadedUrl: loaded.url,
   };
 
-  try {
-    const text = await fetchText(validation.url);
-    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
-    const tab = result.ok
-      ? {...baseTab, status: "loaded", result, error: undefined}
-      : {...baseTab, status: "error", result, error: result.error};
-    return {
-      ...state,
-      tabs: [...state.tabs, tab],
-      activeTabId: tab.id,
-      isAdding: false,
-      draftUrl: "",
-      draftStatus: "empty",
-      draftError: undefined,
-      pendingTabId: undefined,
-    };
-  } catch (error) {
-    const tab = {
-      ...baseTab,
-      status: "error",
-      error: fetchFailureMessage(error),
-      result: undefined,
-    };
-    return {
-      ...state,
-      tabs: [...state.tabs, tab],
-      activeTabId: tab.id,
-      isAdding: false,
-      draftUrl: "",
-      draftStatus: "empty",
-      draftError: undefined,
-      pendingTabId: undefined,
-    };
-  }
+  const result = loaded.ok ? buildReportAnalysis(loaded.source, loaded.warnings, label) : undefined;
+  const tab = loaded.ok
+    ? {...baseTab, status: "loaded", result, error: undefined}
+    : {...baseTab, status: "error", result, error: loaded.error};
+  return {
+    ...state,
+    tabs: [...state.tabs, tab],
+    activeTabId: tab.id,
+    isAdding: false,
+    draftUrl: "",
+    draftStatus: "empty",
+    draftError: undefined,
+    pendingTabId: undefined,
+  };
 }
 
-export async function loadReportTabFromUrl(state, tabId, fetchText = fetchReportText) {
+export async function loadReportTabFromUrl(state, tabId, fetchText) {
   const tab = state.tabs.find((candidate) => candidate.id === tabId);
-  const validation = validateOnlineJsonUrl(tab?.url);
-  if (!validation.ok) {
+  const loaded = await loadTapooLogFromUrl(tab?.url, fetchOptions(fetchText));
+  if (!loaded.ok && !loaded.url) {
     return updateReportTab(state, tabId, {
       status: "error",
-      error: validation.error,
+      error: loaded.error,
       result: undefined,
       loadedUrl: undefined,
     });
   }
 
-  const label = reportTabLabelFromUrl(validation.url, state.tabs.findIndex((candidate) => candidate.id === tabId));
-  try {
-    const text = await fetchText(validation.url);
-    const result = analyzeLogText(text, {label, sourceUrl: validation.url});
-    return updateReportTab(state, tabId, result.ok
-      ? {status: "loaded", label, result, loadedUrl: validation.url, error: undefined}
-      : {status: "error", label, result, loadedUrl: validation.url, error: result.error});
-  } catch (error) {
-    return updateReportTab(state, tabId, {
-      status: "error",
-      label,
-      error: fetchFailureMessage(error),
-      result: undefined,
-      loadedUrl: validation.url,
-    });
-  }
+  const label = reportTabLabelFromUrl(loaded.url, state.tabs.findIndex((candidate) => candidate.id === tabId));
+  const result = loaded.ok ? buildReportAnalysis(loaded.source, loaded.warnings, label) : undefined;
+  return updateReportTab(state, tabId, loaded.ok
+    ? {status: "loaded", label, result, loadedUrl: loaded.url, error: undefined}
+    : {status: "error", label, result, loadedUrl: loaded.url, error: loaded.error});
 }
 
 // --- Report adapters ---
@@ -862,7 +596,7 @@ function createShareControl(url) {
   return button
 }
 
-export function createReportTabsInput({fetchText = fetchReportText} = {}) {
+export function createReportTabsInput({fetchText} = {}) {
   let state = createInitialReportTabs();
   const root = document.createElement("section");
   root.className = "report-workspace";

@@ -17,8 +17,8 @@ import {
   provenanceTableData,
   reportTabLabelFromUrl,
   trimReportTabLabel,
-  validateOnlineJsonUrl,
 } from "./oracle.js"
+import { validateOnlineJsonUrl } from "../contracts/log-contract.js"
 
 const fixtureUrl =
   "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c/raw/" +

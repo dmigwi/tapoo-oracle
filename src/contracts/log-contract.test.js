@@ -9,7 +9,9 @@ import {
   cellKey,
   classifyTraversalSpeed,
   parseTapooLogExport,
+  loadTapooLogFromUrl,
   stepFrom,
+  validateOnlineJsonUrl,
 } from "./log-contract.js"
 
 const entry = (over = {}) => ({
@@ -165,5 +167,50 @@ describe("parseTapooLogExport", () => {
     expect(result.ok).toBe(true)
     expect(result.value.entries).toHaveLength(1)
     expect(result.warnings).toEqual([])
+  })
+})
+
+describe("validateOnlineJsonUrl", () => {
+  it("accepts online URLs only", () => {
+    expect(validateOnlineJsonUrl("https://example.com/report.json")).toEqual({
+      ok: true,
+      url: "https://example.com/report.json",
+    })
+    expect(validateOnlineJsonUrl("file:///tmp/report.json")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("http:// or https://"),
+    })
+  })
+})
+
+describe("loadTapooLogFromUrl", () => {
+  it("downloads and validates the Tapoo log behind a URL", async () => {
+    const text = JSON.stringify(envelope())
+    const result = await loadTapooLogFromUrl("https://example.com/report.json", {
+      fetchText: async (url) => {
+        expect(url).toBe("https://example.com/report.json")
+        return text
+      },
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      url: "https://example.com/report.json",
+      source: {name: LOG_ENVELOPE_NAME, mode: AGENT_API_MODE, sourceUrl: "https://example.com/report.json"},
+      warnings: [],
+    })
+    expect(result.source.entries).toHaveLength(1)
+  })
+
+  it("attaches the validated URL when the downloaded JSON is not a Tapoo log", async () => {
+    const result = await loadTapooLogFromUrl("https://example.com/report.json", {
+      fetchText: async () => JSON.stringify({name: "other", entries: []}),
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      url: "https://example.com/report.json",
+      error: expect.stringContaining("Not a Tapoo log export"),
+    })
   })
 })

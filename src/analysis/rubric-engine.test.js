@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { LOG_EVENTS } from "./log-contract.js"
+import { LOG_EVENTS } from "../contracts/log-contract.js"
 import { CAPABILITIES, VIOLATIONS, aggregate, answerRubric, parsePrediction } from "./rubric-engine.js"
 
 // A log is a sequence of entries, and every question below is answered from what those entries do or

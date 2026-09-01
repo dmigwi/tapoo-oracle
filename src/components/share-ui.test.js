@@ -7,12 +7,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import {
   appBasePath,
   createReportTabsInput,
-  fetchFailureMessage,
-  encodeReportPayload,
   reportPayloadFromHash,
   reportPayloadFromPath,
   shareLinkFor,
 } from "./oracle.js"
+import { encodeReportPayload, fetchFailureMessage } from "../contracts/log-contract.js"
 
 const gistUrl =
   "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c" +

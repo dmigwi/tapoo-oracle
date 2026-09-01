@@ -24,8 +24,8 @@ import {
   cellKey,
   classifyTraversalSpeed,
   stepFrom,
-} from "./log-contract.js"
-import { cellFromGridPoint } from "./maze.js"
+} from "../contracts/log-contract.js"
+import { cellFromGridPoint } from "../contracts/maze.js"
 
 // --- Reading a log entry ---
 

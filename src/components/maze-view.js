@@ -9,8 +9,8 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { MOVES, cellKey, classifyTraversalSpeed } from "../analysis/log-contract.js";
-import { mazeFromEncoded } from "../analysis/maze.js";
+import { MOVES, cellKey, classifyTraversalSpeed } from "../contracts/log-contract.js";
+import { mazeFromEncoded } from "../contracts/maze.js";
 import { formatCount } from "./oracle.js";
 
 // --- Model ---
