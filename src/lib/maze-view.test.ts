@@ -147,3 +147,67 @@ describe("createMazeReplay", () => {
     expect(build([]).querySelector("svg")).toBeNull()
   })
 })
+
+describe("start and destination markers", () => {
+  // Both were drawn with a helper that takes an element name and an attribute bag, so naming one
+  // element and passing another's attributes type-checks, renders, and is invisible: a <rect> given
+  // cx/cy/r ignores all three and defaults to 0x0. It is in the DOM and zero pixels on screen, so
+  // asserting the node exists proves nothing. These assert the geometry.
+  const markers = (node: ParentNode) =>
+    queryAll<SVGRectElement>(node, "svg.maze-grid > rect")
+      .map((rect) => ({
+        width: Number(rect.getAttribute("width")),
+        height: Number(rect.getAttribute("height")),
+        fill: rect.getAttribute("fill"),
+      }))
+
+  it("draws both markers at a size a reader can see", () => {
+    const drawn = markers(build([level()]))
+
+    expect(drawn).toHaveLength(2)
+    for (const marker of drawn) {
+      expect(marker.width).toBeGreaterThan(0)
+      expect(marker.height).toBeGreaterThan(0)
+    }
+  })
+
+  it("tells them apart by size, not only by colour", () => {
+    // Rose against muted is the one pairing a red-green colour deficiency cannot separate, and the two
+    // marks mean opposite things on the same grid.
+    const [first, second] = markers(build([level()]))
+
+    expect(first?.width).not.toBe(second?.width)
+  })
+
+  it("paints the landmarks above the trail, not under it", () => {
+    // SVG has no z-index - paint order is document order. The start cell is in frame.visited from
+    // frame 0 by construction and the visited tint is a full-cell opaque rect, so markers drawn before
+    // the overlay were buried at every frame while looking perfectly correct in the DOM.
+    const svg = query(build([level()]), "svg.maze-grid")
+    const children = [...svg.children]
+    const overlay = children.findIndex((child) => child.classList.contains("maze-overlay"))
+    const firstMarker = children.findIndex((child) => child.tagName === "rect")
+
+    expect(overlay).toBeGreaterThanOrEqual(0)
+    expect(firstMarker).toBeGreaterThan(overlay)
+  })
+
+  it("keeps the start marker visible on the frame that covers its cell", () => {
+    // Frame 0 already tints the start cell. This is the case that was broken.
+    const node = build([level()])
+    scrubTo(node, 0)
+    const svg = query(node, "svg.maze-grid")
+    const children = [...svg.children]
+    const overlay = children.findIndex((child) => child.classList.contains("maze-overlay"))
+
+    expect(queryAll<SVGRectElement>(svg, ":scope > rect")).toHaveLength(2)
+    expect(children.findIndex((child) => child.tagName === "rect")).toBeGreaterThan(overlay)
+  })
+
+  it("draws neither when the round records no start or destination", () => {
+    const bare = {...level(), startCell: null, destinationCell: null}
+
+    expect(markers(build([bare]))).toHaveLength(0)
+  })
+})
+

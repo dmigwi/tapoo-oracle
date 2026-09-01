@@ -81,19 +81,27 @@ function drawWalls(svg: SVGElement, maze: Maze): void {
 
 // markerFor draws the fixed points of the round: where it began and where it had to end.
 function drawMarkers(svg: SVGElement, model: LevelModel): void {
+  if (model.startCell) {
+    const {x, y} = cellXY(model.startCell);
+    // Deliberately smaller than the destination square rather than the same mark in another colour.
+    // The two sit on the same grid and mean opposite things, and rose against muted is the one pairing
+    // a red-green colour deficiency cannot separate - so the size difference, not the fill, is what
+    // says which is which. Same reasoning as the rejected-move cross further down this file.
+    const inset = 11;
+    svg.append(
+      createSvgElement("rect", {
+        x: x + inset, y: y + inset, width: CELL - inset * 2, height: CELL - inset * 2,
+        fill: "var(--oracle-muted)", stroke: "var(--oracle-muted)", "stroke-width": 2
+      })
+    );
+  }
+
   if (model.destinationCell) {
     const {x, y} = cellXY(model.destinationCell);
     svg.append(
       createSvgElement("rect", {
-        x: x + 6, y: y + 6, width: CELL - 12, height: CELL - 12,
-        fill: "none", stroke: "var(--oracle-rose)", "stroke-width": 2
+        x: x + 6, y: y + 6, width: CELL - 12, height: CELL - 12, fill: "var(--oracle-rose)", stroke: "var(--oracle-rose)", "stroke-width": 2
       })
-    );
-  }
-  if (model.startCell) {
-    const {x, y} = cellXY(model.startCell);
-    svg.append(
-      createSvgElement("circle", {cx: x + CELL / 2, cy: y + CELL / 2, r: 3, fill: "var(--oracle-muted)"})
     );
   }
 }
@@ -114,8 +122,7 @@ function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) =>
     const {x, y} = cellXY(cell);
     overlay.append(
       createSvgElement("rect", {
-        x: x + 1, y: y + 1, width: CELL - 2, height: CELL - 2,
-        fill: "var(--oracle-selected)", opacity: 0.85
+        x: x + 1, y: y + 1, width: CELL - 2, height: CELL - 2, fill: "var(--oracle-selected)", opacity: 1.0
       })
     );
   }
@@ -327,9 +334,19 @@ export function createMazeReplay(report: Report): HTMLElement {
       "aria-label": `${model.maze.rows} by ${model.maze.cols} maze with the traversal drawn on it`
     });
     drawWalls(svg, model.maze);
-    drawMarkers(svg, model);
     overlay = createSvgElement("g", {class: "maze-overlay"});
     svg.append(overlay);
+    // Markers last, so they paint above the overlay rather than under it.
+    //
+    // SVG has no z-index; paint order is document order. With the markers drawn before the overlay the
+    // start marker was invisible at every frame: the start cell is in frame.visited from frame 0 by
+    // construction, and the visited tint is a full-cell opaque rect, so it buried a mark that was being
+    // drawn correctly the whole time. The destination only escaped because the agent has not reached it
+    // yet - it would have gone the same way on the winning frame.
+    //
+    // Start and destination are the two fixed landmarks on the grid. They are what the trail is read
+    // against, so nothing the trail draws should be able to hide them.
+    drawMarkers(svg, model);
     figure.append(svg);
 
     range.min = "0";
