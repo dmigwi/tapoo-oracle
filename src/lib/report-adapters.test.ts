@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
-import {diagnosticRows, diagnosticTableData, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
 import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, ReportTabsState, TapooLog} from "./types"
@@ -365,6 +365,69 @@ describe("warningHeadline", () => {
     const noVersion = analyzeLogText(JSON.stringify({...fixture, version: undefined}))
     expect(expectOk(noVersion).warnings.every((w) => w.impact === "incomplete")).toBe(true)
     expect(warningHeadline(expectOk(noVersion).warnings)).toBe("This report is missing important parts.")
+  })
+})
+
+describe("modelOutputRows", () => {
+  // What the provider said about its own work, normalized across two API shapes that report
+  // overlapping but different things. Not scored - it is context for reading the verdicts.
+  const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
+    ...expectOk(analyzeLogText(fixtureText, {label: "fixture"})).report,
+    output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
+      cachedPromptTokens: null, durationNs: null, finishReasons: [], ...output},
+  })
+
+  const valueOf = (report: Report, field: string) =>
+    modelOutputRows(report).find((row) => row.field === field)?.value
+
+  it("gives a total and a per-response average, since a total only says how long the run was", () => {
+    const report = reportWithOutput({responses: 4, promptTokens: 4000, completionTokens: 400})
+
+    expect(valueOf(report, "Prompt tokens")).toBe("4,000 (1,000 per response)")
+    expect(valueOf(report, "Completion tokens")).toBe("400 (100 per response)")
+  })
+
+  it("omits what a provider did not report, rather than printing a column of 'not recorded'", () => {
+    // Ollama reports no reasoning or cached-token counts; OpenAI reports no duration.
+    const ollama = reportWithOutput({responses: 2, promptTokens: 100, completionTokens: 20, durationNs: 4e9})
+
+    expect(valueOf(ollama, "Reasoning tokens")).toBeUndefined()
+    expect(valueOf(ollama, "Cached prompt tokens")).toBeUndefined()
+    expect(valueOf(ollama, "Model time")).toBeDefined()
+  })
+
+  it("reads a long run the way a person would say it", () => {
+    // One real log spent 19,174 seconds, which is five and a third hours and reads as neither.
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 19_174e9}), "Model time"))
+      .toBe("5h 20m (5h 20m per response)")
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 154e9}), "Model time"))
+      .toBe("2m 34s (2m 34s per response)")
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 4.83e9}), "Model time"))
+      .toBe("4.83s (4.83s per response)")
+  })
+
+  it("names every finish reason with its count, including the rare one", () => {
+    // "length" appearing at all means the model was cut off mid-answer, and that is worth seeing even
+    // when it happened three times in 719.
+    const report = reportWithOutput({responses: 719, finishReasons: [["tool_calls", 359], ["stop", 357], ["length", 3]]})
+
+    expect(valueOf(report, "Finish reasons")).toBe("tool_calls (359), stop (357), length (3)")
+  })
+
+  it("still says how many responses there were when nothing else was reported", () => {
+    expect(modelOutputRows(reportWithOutput({responses: 1}))).toEqual([{field: "Responses", value: "1"}])
+  })
+})
+
+describe("provenance names the setup a verdict depends on", () => {
+  it("reports the API provider and the reasoning effort", () => {
+    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
+    const value = (field: string) =>
+      provenanceRows(result.source, result.report).find((row) => row.field === field)?.value
+
+    // This fixture predates both fields, which is exactly the case that must not print "undefined".
+    expect(value("API provider")).toBe("not recorded")
+    expect(value("Reasoning effort")).toBe("not recorded")
   })
 })
 

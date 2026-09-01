@@ -15,6 +15,7 @@ import {
   narrativeSummary,
   profileCards,
   provenanceTableData,
+  modelOutputRows,
   rubricQuestionRows,
   warningHeadline,
 } from "./report-adapters";
@@ -251,6 +252,17 @@ function detail(ui: ReportUi, result: Analysis | undefined): Region {
         <h2>Operational Diagnostics</h2>
         <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
         ${diagnosticsTable(ui, result.report)}
+      </section>
+      <section class="events-section">
+        <h2>Model Output</h2>
+        <p class="section-note">What the provider reported about the model's own work. Not scored: a model given ten times the prompt and a model that spent its budget reasoning are doing different tasks, and that is context for the verdicts above rather than a verdict itself.</p>
+        ${ui.Inputs.table(modelOutputRows(result.report), {
+          columns: ["field", "value"],
+          header: {field: "MEASURE", value: "VALUE"},
+          sort: false,
+          rows: modelOutputRows(result.report).length,
+          layout: "auto"
+        })}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>

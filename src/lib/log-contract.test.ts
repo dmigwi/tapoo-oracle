@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {AGENT_API_MODE, DECLARED_TOOLS, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, stepFrom} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, stepFrom} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
 import {at, expectErr, expectOk, messagesOf} from "./test-support";
@@ -303,6 +303,173 @@ describe("the encoded maze payload", () => {
 
     expect(warnings).toHaveLength(1)
     expect(at(warnings, 0).message).toMatch(/^Game 6 level 55 /)
+  })
+})
+
+describe("reading the model's message from a provider response", () => {
+  // Tapoo logs the provider's response body verbatim, and its three adapters
+  // (frontend/app/agent/providers.ts) agree on nothing structural. Reading only Ollama's shape is what
+  // made a real 1,459-entry OpenAI log analyze to zero predictions and zero turns, with the replay
+  // scrubber reading "0 / 0" under a maze that drew correctly - an empty response legitimately
+  // happens, so 719 of them in a row failed silently. Anthropic would have failed identically.
+  it("reads Ollama: a message with thinking and tool_calls", () => {
+    expect(assistantMessage({
+      message: {role: "assistant", content: '{"moves":["MoveUp"]}', thinking: "considering",
+        tool_calls: [{function: {name: "get_maze_structure", arguments: "{}"}}]},
+    })).toEqual({content: '{"moves":["MoveUp"]}', toolNames: ["get_maze_structure"], reasoning: "considering"})
+  })
+
+  it("reads OpenAI: a message nested under the first choice, reasoning under its own name", () => {
+    expect(assistantMessage({
+      choices: [{finish_reason: "stop", message: {role: "assistant", content: '{"moves":["MoveDown"]}',
+        reasoning_content: "considering", tool_calls: [{function: {name: "get_prediction_rules"}}]}}],
+    })).toEqual({content: '{"moves":["MoveDown"]}', toolNames: ["get_prediction_rules"], reasoning: "considering"})
+  })
+
+  it("reads Anthropic: typed content blocks, with no message or choices at all", () => {
+    // The shape that would otherwise have counted as an empty response for a whole log.
+    expect(assistantMessage({
+      role: "assistant",
+      content: [
+        {type: "thinking", thinking: "considering", signature: "sig"},
+        {type: "text", text: '{"moves":["MoveLeft"]}'},
+        {type: "tool_use", id: "call_1", name: "get_last_prediction_outcome", input: {}},
+      ],
+    })).toEqual({content: '{"moves":["MoveLeft"]}', toolNames: ["get_last_prediction_outcome"], reasoning: "considering"})
+  })
+
+  it("joins Anthropic blocks rather than taking the first", () => {
+    // One reply can be spread across several text blocks, and taking the first would truncate the
+    // prediction to whatever fitted in it.
+    expect(assistantMessage({content: [
+      {type: "text", text: '{"moves":'}, {type: "text", text: '["MoveUp"]}'},
+      {type: "thinking", thinking: "a"}, {type: "thinking", thinking: "b"},
+    ]})).toEqual({content: '{"moves":["MoveUp"]}', toolNames: [], reasoning: "ab"})
+  })
+
+  it("scores only the first choice", () => {
+    // Tapoo asks for one completion. Scoring a second would credit the agent with a prediction it was
+    // never judged on.
+    expect(assistantMessage({choices: [{message: {content: "first"}}, {message: {content: "second"}}]})?.content)
+      .toBe("first")
+  })
+
+  it("tells the providers apart by shape, not by a label beside the body", () => {
+    // The log records `api` and `endpoint` too, but a body that looks like a response is better
+    // evidence about that body than a label written next to it.
+    expect(assistantMessage({message: {content: "a"}, choices: [{message: {content: "b"}}]})?.content).toBe("a")
+  })
+
+  it("reports a tool-only response as having no content, not as empty", () => {
+    // Every provider sends these while the agent is gathering context: real responses, no prediction.
+    const message = assistantMessage({choices: [{finish_reason: "tool_calls",
+      message: {content: "", tool_calls: [{function: {name: "get_maze_structure"}}]}}]})
+
+    expect(message).toEqual({content: "", toolNames: ["get_maze_structure"], reasoning: null})
+  })
+
+  it("says nothing when there is no message to read", () => {
+    for (const payload of [null, undefined, {}, {choices: []}, {choices: [{}]}, {message: "text"}, "x", 7]) {
+      expect(assistantMessage(payload)).toBeNull()
+    }
+  })
+})
+
+describe("what the provider reported about its own work", () => {
+  it("reads Ollama's counts and duration", () => {
+    expect(responseUsage({prompt_eval_count: 3234, eval_count: 35, total_duration: 1_100_956_836, done_reason: "stop"}))
+      .toEqual({promptTokens: 3234, completionTokens: 35, reasoningTokens: null,
+        cachedPromptTokens: null, durationNs: 1_100_956_836, finishReason: "stop"})
+  })
+
+  it("reads OpenAI's usage block, including the two a reasoning model adds", () => {
+    expect(responseUsage({
+      usage: {prompt_tokens: 3250, completion_tokens: 20, total_tokens: 3270,
+        completion_tokens_details: {reasoning_tokens: 18}, prompt_tokens_details: {cached_tokens: 2304}},
+      choices: [{finish_reason: "stop", message: {content: "x"}}],
+    })).toEqual({promptTokens: 3250, completionTokens: 20, reasoningTokens: 18,
+      cachedPromptTokens: 2304, durationNs: null, finishReason: "stop"})
+  })
+
+  it("reads Anthropic's usage: output_tokens is the completion side, thinking included", () => {
+    // Tapoo's adapter reads output_tokens alone and notes it already covers extended thinking, so the
+    // two are not added together - that would double-count the thinking against the completion budget.
+    expect(responseUsage({
+      role: "assistant", stop_reason: "end_turn",
+      usage: {input_tokens: 3100, output_tokens: 240, cache_read_input_tokens: 2048},
+    })).toEqual({promptTokens: 3100, completionTokens: 240, reasoningTokens: null,
+      cachedPromptTokens: 2048, durationNs: null, finishReason: "end_turn"})
+  })
+
+  it("reads each provider's own name for how the model stopped", () => {
+    expect(responseUsage({done_reason: "stop"}).finishReason).toBe("stop")
+    expect(responseUsage({choices: [{finish_reason: "length"}]}).finishReason).toBe("length")
+    expect(responseUsage({stop_reason: "max_tokens"}).finishReason).toBe("max_tokens")
+  })
+
+  it("says null, not zero, for what a provider did not report", () => {
+    // The distinction matters downstream: zero reasoning tokens is a finding, and "this API does not
+    // count them" is not. A row is only shown for the second.
+    const usage = responseUsage({prompt_eval_count: 10, eval_count: 2})
+
+    expect(usage.reasoningTokens).toBeNull()
+    expect(usage.durationNs).toBeNull()
+  })
+
+  it("survives a payload that reports nothing at all", () => {
+    for (const payload of [null, undefined, {}, "x", {usage: "no"}, {choices: []}]) {
+      expect(responseUsage(payload)).toEqual({promptTokens: null, completionTokens: null,
+        reasoningTokens: null, cachedPromptTokens: null, durationNs: null, finishReason: null})
+    }
+  })
+})
+
+describe("a response this analyzer cannot read", () => {
+  // The check that was missing when it mattered. A 1,459-entry log analyzed to zero predictions and
+  // zero turns because every response was in a provider shape the contract did not know - and each one
+  // was silently counted as an "empty response", which legitimately happens.
+  //
+  // The signal is precise rather than heuristic: across 1,744 responses in the real Ollama and OpenAI
+  // logs, not one has an unreadable shape, while the 49 blank ones all carry a readable message with
+  // no text. So one unreadable body means a gap in this file, and it is worth saying immediately.
+  const response = (payload: unknown) => entry({payload: LOG_EVENTS.response, details: {payload}})
+
+  it("says so, and says what it costs the verdicts", () => {
+    const result = parseTapooLogExport(envelope({entries: [
+      response({message: {content: '{"moves":["MoveUp"]}'}}),
+      response({unknown_provider: {text: "hello"}}),
+    ]}))
+    const warning = at(expectOk(result).warnings, 0)
+
+    expect(warning.impact).toBe("inaccurate")
+    expect(warning.message).toMatch(/1 of 2 model responses could not be read/)
+    // The reader has to know a NO may be an artefact rather than a finding.
+    expect(warning.message).toMatch(/answered NO may only mean the evidence for it was unreadable/)
+  })
+
+  it("says plainly when nothing at all was scored", () => {
+    const result = parseTapooLogExport(envelope({entries: [response({choices: "not a list"})]}))
+
+    expect(at(expectOk(result).warnings, 0).message).toMatch(/No prediction in this log was scored/)
+  })
+
+  it("stays quiet for a response that is readable but blank", () => {
+    // A model stopping early is not a contract gap. Both real logs contain these - 46 and 3 of them -
+    // and warning about them would cry wolf on every long run.
+    const result = parseTapooLogExport(envelope({entries: [
+      response({message: {content: ""}, done_reason: "length"}),
+      response({choices: [{finish_reason: "length", message: {content: ""}}]}),
+    ]}))
+
+    expect(expectOk(result).warnings).toEqual([])
+  })
+
+  it("stays quiet for a tool-only response", () => {
+    const result = parseTapooLogExport(envelope({entries: [
+      response({message: {content: "", tool_calls: [{function: {name: "get_maze_structure"}}]}}),
+    ]}))
+
+    expect(expectOk(result).warnings).toEqual([])
   })
 })
 

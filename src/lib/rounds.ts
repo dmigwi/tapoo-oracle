@@ -79,12 +79,43 @@ function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
 // crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
 // exits from one maze must never leak into another.
 export function buildLevels(entries: LogEntry[]): Level[] {
+  // An entry that does not name its round belongs to the round in progress.
+  //
+  // Reading `entry.game ?? 0` per entry instead filed every such entry under a fabricated round "0/0".
+  // On a log that stamps game and level only on its round boundaries, that split one real round in two:
+  // a round holding the encoded maze and no turns, and a phantom round holding all the turns and no
+  // maze. The reader saw a replay whose scrubber ran 0 to 0 and a Turns column reading zero, on a log
+  // with hundreds of them.
+  //
+  // Entries are in recorded order, so the round in progress is whatever the last entry to name one
+  // said. Anything before the first such entry is held back and joins the round that opens after it -
+  // it cannot belong to an earlier one, because there is none.
   const groups = new Map<string, LogEntry[]>()
+  const beforeFirstRound: LogEntry[] = []
+  let game: number | null = null
+  let level: number | null = null
+
   for (const entry of entries) {
-    const key = `${entry.game ?? 0}/${entry.level ?? 0}`
+    if (typeof entry.game === "number") game = entry.game
+    if (typeof entry.level === "number") level = entry.level
+
+    if (game === null && level === null) {
+      beforeFirstRound.push(entry)
+      continue
+    }
+
+    const key = `${game ?? 0}/${level ?? 0}`
     const group = groups.get(key) ?? []
+    if (group.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
+      group.push(...beforeFirstRound.splice(0))
+    }
     group.push(entry)
     groups.set(key, group)
+  }
+
+  // A log that never names a round at all: one round, everything in it, as before.
+  if (beforeFirstRound.length > 0) {
+    groups.set("0/0", beforeFirstRound)
   }
 
   return [...groups.entries()].map(([key, groupEntries]) => {

@@ -174,6 +174,23 @@ export type Context = {
   label: string;
   model: string | null;
   player: string | null;
+  /** Distinct API providers the requests went to, in first-seen order. Sets rather than single values
+   * because a log is a sequence of requests and nothing stops two of them naming different providers -
+   * reporting only the last would quietly hide that. */
+  apis: Set<string>;
+  /** Distinct reasoning-effort settings the requests carried, in first-seen order. */
+  reasoningEfforts: Set<string>;
+  /** Running totals of what the model produced. Accumulated rather than kept per response: the report
+   * describes a sample, and 719 individual token counts are not a summary of anything. */
+  output: {
+    responses: number;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    reasoningTokens: number | null;
+    cachedPromptTokens: number | null;
+    durationNs: number | null;
+    finishReasons: Map<string, number>;
+  };
   exits: Map<CellKey, Set<string>>;
   positions: CellKey[];
   timeline: TimelineEvent[];
@@ -271,6 +288,12 @@ export type Report = {
   label: string;
   model: string | null;
   player: string | null;
+  /** The API providers the sample was produced against, and the reasoning effort asked of the model.
+   * Both belong to provenance: the same model answers differently through a different provider or at a
+   * different effort, so a verdict is only comparable to another taken under the same two. */
+  apis: string[];
+  reasoningEfforts: string[];
+  output: ModelOutput;
   predictions: number;
   rounds: number;
   traversalSpeed: number | null;
@@ -284,6 +307,48 @@ export type Report = {
     tokenExhaustions: number;
   };
   levels: Level[];
+};
+
+/** One model response, normalized across the three provider wire shapes.
+ *
+ * The oracle reads logs from all three, and they agree on nothing structurally: Ollama puts the
+ * message at `message`, OpenAI at `choices[0].message`, and Anthropic has neither - its content is a
+ * top-level array of typed blocks, with tool calls as `tool_use` entries rather than a `tool_calls`
+ * list. Normalizing here is what keeps that from being three shapes every reader has to know. */
+export type AssistantMessage = {
+  /** Concatenated text. Anthropic can spread one reply across several text blocks. */
+  content: string | null;
+  /** Tool names requested, in order. */
+  toolNames: string[];
+  /** The model's own thinking, where the provider reports it: Ollama's `thinking`, OpenAI's
+   * `reasoning_content`, Anthropic's `thinking` blocks. */
+  reasoning: string | null;
+};
+
+/** What a provider reported about one response, normalized across API shapes.
+ *
+ * Every field is nullable because the two providers report different subsets: Ollama gives a duration
+ * and no reasoning-token count, OpenAI the reverse. A null means "this provider did not say", which is
+ * a different claim from zero and is displayed differently. */
+export type ResponseUsage = {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  reasoningTokens: number | null;
+  cachedPromptTokens: number | null;
+  durationNs: number | null;
+  finishReason: string | null;
+};
+
+/** The model's own output across the sample: what it was fed, what it produced, and how it stopped. */
+export type ModelOutput = {
+  responses: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  reasoningTokens: number | null;
+  cachedPromptTokens: number | null;
+  durationNs: number | null;
+  /** Finish reasons and their counts, in first-seen order. */
+  finishReasons: Array<[string, number]>;
 };
 
 export type Analysis = Result<{source: TapooLog; warnings: LogWarning[]; report: Report}>;

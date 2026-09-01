@@ -15,6 +15,8 @@
 import type {
   EncodedMaze,
   LogWarning,
+  AssistantMessage,
+  ResponseUsage,
   LogEntry,
   LogParseResult,
   LogTextResult,
@@ -48,6 +50,134 @@ export {
   movesFromLogged,
   stepFrom,
 } from "./geometry";
+
+// --- Reading a provider response ---
+
+// assistantMessage reads one model response, whichever of the three providers produced it.
+//
+// Tapoo logs the provider's response body verbatim, so the shape belongs to the provider. Its own
+// adapters (frontend/app/agent/providers.ts) define all three, and they agree on nothing structural:
+//
+//   Ollama     {message: {content, thinking, tool_calls}}                 - verified against real logs
+//   OpenAI     {choices: [{message: {content, reasoning_content, tool_calls}}]}  - verified
+//   Anthropic  {content: [{type: "text"|"thinking"|"tool_use", ...}]}     - from the adapter only
+//
+// The Anthropic branch is written from Tapoo's adapter and covered by tests built from it, but no
+// Anthropic log has ever been run through it. It is kept rather than dropped because the alternative
+// is worse than an unverified reader: without it an Anthropic log returns null here, and null now
+// raises a warning that says the responses could not be read (see unreadableResponseWarnings) instead
+// of failing silently the way the OpenAI shape did.
+//
+// Reading only Ollama's shape is what made a whole log analyze to nothing: every OpenAI response has
+// no `message` at the root, so each counted as empty - zero predictions, zero turns, and a replay
+// scrubber reading "0 / 0" under a maze that drew correctly. Anthropic would have failed the same way
+// for the same reason, so all three are read here rather than two.
+//
+// Providers are told apart by shape, not by the `api` field or the endpoint URL. Both are recorded in
+// the log and either would work, but a body that looks like a response is better evidence about that
+// body than a label written beside it.
+export function assistantMessage(payload: unknown): AssistantMessage | null {
+  const body = asRecordOrEmpty(payload);
+
+  // Ollama, then OpenAI: both wrap a single message object.
+  const wrapped =
+    isRecord(body.message)
+      ? body.message
+      : (() => {
+          const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+          // Only the first choice. Tapoo asks for one completion, and scoring a second would credit
+          // the agent with a prediction it was never judged on.
+          const message = asRecordOrEmpty(choice).message;
+          return isRecord(message) ? message : null;
+        })();
+
+  if (wrapped) {
+    return {
+      content: typeof wrapped.content === "string" ? wrapped.content : null,
+      toolNames: toolNamesOf(wrapped.tool_calls),
+      // `thinking` is Ollama's name and `reasoning_content` is OpenAI's for the same thing.
+      reasoning:
+        typeof wrapped.thinking === "string"
+          ? wrapped.thinking
+          : typeof wrapped.reasoning_content === "string"
+            ? wrapped.reasoning_content
+            : null,
+    };
+  }
+
+  // Anthropic: typed content blocks, no wrapper. Text and thinking can each arrive in several blocks,
+  // so both are concatenated rather than taken from the first.
+  if (!Array.isArray(body.content)) {
+    return null;
+  }
+
+  let content = "";
+  let reasoning = "";
+  const toolNames: string[] = [];
+
+  for (const block of body.content as unknown[]) {
+    const record = asRecordOrEmpty(block);
+    if (record.type === "text" && typeof record.text === "string") content += record.text;
+    else if (record.type === "thinking" && typeof record.thinking === "string") reasoning += record.thinking;
+    else if (record.type === "tool_use" && typeof record.name === "string") toolNames.push(record.name);
+  }
+
+  return {
+    content: content === "" ? null : content,
+    toolNames,
+    reasoning: reasoning === "" ? null : reasoning,
+  };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object";
+
+const asRecordOrEmpty = (value: unknown): Record<string, unknown> =>
+  isRecord(value) ? value : {};
+
+// Ollama and OpenAI both use OpenAI's tool-call shape: a list of {function: {name}}.
+function toolNamesOf(calls: unknown): string[] {
+  if (!Array.isArray(calls)) return [];
+  return (calls as unknown[])
+    .map((call) => asRecordOrEmpty(asRecordOrEmpty(call).function).name)
+    .filter((name): name is string => typeof name === "string" && name !== "");
+}
+
+// responseUsage reads what the provider reported about its own work, from either API shape.
+//
+// The two report overlapping but different things, so every field is nullable and a null means "this
+// provider did not say" rather than zero. Ollama counts tokens at the payload root and times the whole
+// call; OpenAI nests counts under `usage` and adds the two that matter most for a reasoning model -
+// how many of the completion tokens were spent thinking, and how much of the prompt was served from
+// cache rather than re-read.
+export function responseUsage(payload: unknown): ResponseUsage {
+  const body = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+  const record = (value: unknown): Record<string, unknown> =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  const usage = record(body.usage);
+  const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+
+  const firstString = (...values: unknown[]): string | null => {
+    for (const value of values) if (typeof value === "string" && value !== "") return value;
+    return null;
+  };
+
+  return {
+    // Ollama counts at the payload root; OpenAI and Anthropic nest under `usage` with different names.
+    promptTokens: num(body.prompt_eval_count) ?? num(usage.prompt_tokens) ?? num(usage.input_tokens),
+    // Anthropic's output_tokens already includes its extended-thinking tokens, which is why they are
+    // not added on top - doing so would double-count the thinking against the completion budget.
+    completionTokens: num(body.eval_count) ?? num(usage.completion_tokens) ?? num(usage.output_tokens),
+    reasoningTokens: num(record(usage.completion_tokens_details).reasoning_tokens),
+    cachedPromptTokens:
+      num(record(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
+    durationNs: num(body.total_duration),
+    // Ollama's done_reason, OpenAI's per-choice finish_reason, Anthropic's stop_reason.
+    finishReason: firstString(body.done_reason, record(choice).finish_reason, body.stop_reason),
+  };
+}
 
 // --- Validating an export ---
 
@@ -135,6 +265,7 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
   // turn starts and ends. Every later reader indexes into this instead of walking the array again.
   const index = indexLog(entries);
 
+  warnings.push(...unreadableResponseWarnings(entries));
   warnings.push(...encodedMazeWarnings(entries));
 
   // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
@@ -165,6 +296,45 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
 // parseTapooLogText is the raw JSON ingress point shared by the app and non-UI callers. Its successful
 // output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
 // downloadedAt, and readable entries.
+// unreadableResponseWarnings reports responses whose body this contract could not read at all.
+//
+// This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
+// predictions and zero turns because every response was written in a provider shape the contract did
+// not know, and nothing said so: each one was counted as an "empty response", which is a thing that
+// legitimately happens, and 719 of them in a row looked no different from 719 quiet failures.
+//
+// The signal is precise rather than heuristic. Across every real log to hand - Ollama and OpenAI,
+// 1,744 responses - not one has an unreadable *shape*; the 49 blank ones all have a readable message
+// holding no text, which is a model stopping early and not a contract gap. So a single unreadable body
+// means a shape this file does not handle, and that is worth saying on the first occurrence.
+//
+// Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
+// but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
+function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
+  const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
+  const unreadable = responses.filter((entry) => {
+    const details = entry.details;
+    const payload = details !== null && typeof details === "object" && "payload" in details
+      ? details.payload
+      : null;
+    return assistantMessage(payload) === null;
+  }).length;
+
+  if (unreadable === 0) {
+    return [];
+  }
+
+  const all = unreadable === responses.length;
+  return [{
+    impact: "inaccurate",
+    message:
+      `${unreadable} of ${responses.length} model ${responses.length === 1 ? "response" : "responses"} ` +
+      `could not be read: the body is not in a shape this analyzer recognises. ` +
+      `${all ? "No prediction in this log was scored" : "Those turns were not scored"}, so a capability ` +
+      "answered NO may only mean the evidence for it was unreadable.",
+  }];
+}
+
 // encodedMazeWarnings validates the encoded maze each level-started entry should carry.
 //
 // This belongs with the rest of the contract validation rather than downstream in the view: whether a
