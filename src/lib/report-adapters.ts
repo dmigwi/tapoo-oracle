@@ -3,7 +3,26 @@
 // Nothing here invents a number. Every value traces to a rubric answer or to a field the log states
 // outright, which is why the adapters are pure and testable without a DOM.
 
-import type { GroupKind, GroupResult, Report, TapooLog } from "./types"
+import type { LogWarning, GroupKind, GroupResult, Report, TapooLog } from "./types"
+
+// warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
+//
+// A warning is only shown when it costs the reader something, so the banner says what that cost is
+// rather than asking them to work it out from a list. "Read with care" was the old heading and it did
+// not do that: it is a tone, not a finding, and a reader cannot tell from it whether a verdict below
+// is wrong or whether the report is merely missing its provenance.
+//
+// The two impacts are reported together when both are present, because they are different harms and
+// collapsing them would understate one of them.
+export function warningHeadline(warnings: LogWarning[]): string | null {
+  const inaccurate = warnings.some((warning) => warning.impact === "inaccurate")
+  const incomplete = warnings.some((warning) => warning.impact === "incomplete")
+
+  if (inaccurate && incomplete) return "This report may be inaccurate and is missing important parts."
+  if (inaccurate) return "This report may be inaccurate."
+  if (incomplete) return "This report is missing important parts."
+  return null
+}
 
 export function formatCount(value: number | string): string {
   return Number(value).toLocaleString("en-US");

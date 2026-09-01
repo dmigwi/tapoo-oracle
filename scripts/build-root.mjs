@@ -9,7 +9,10 @@
 // able to open it is worth more than keeping the tree tidy. It is generated, gitignored, and removed
 // and rebuilt from scratch on every run: nothing here is a source file, and anything left in it by
 // hand is deleted on the next build.
-export const STAGED_ROOT = "components"
+//
+// Named for what it is rather than what it holds, and matching STAGED_ROOT so the directory on disk
+// and the identifier in the code are the same word.
+export const STAGED_ROOT = "staged"
 
 // STRIPPED_BUILD_ENV is set by the build, deploy and dev scripts in package.json. It is the signal
 // that scripts/build.mjs has already run and staged the bundle - see the guard in

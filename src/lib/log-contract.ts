@@ -13,163 +13,41 @@
 // how to read.
 
 import type {
-  CellKey,
+  EncodedMaze,
+  LogWarning,
   LogEntry,
   LogParseResult,
   LogTextResult,
-  Move,
   TapooLog,
 } from "./types";
 
 import {asTrimmedText} from "./untrusted";
+import {indexLog} from "./log-index";
+import {mazeFromEncoded} from "./maze";
 
-// --- Export identity ---
+export {
+  AGENT_API_MODE,
+  DECLARED_TOOLS,
+  EVENT_CLASSES,
+  KNOWN_EVENTS,
+  LOG_CONTRACT_VERSION,
+  LOG_ENVELOPE_NAME,
+  LOG_EVENTS,
+  LOG_LEVELS,
+  levelClassOf,
+} from "./log-events";
+import {AGENT_API_MODE, LOG_ENVELOPE_NAME, LOG_EVENTS, LOG_LEVELS} from "./log-events";
 
-// LOG_CONTRACT_VERSION is the version of the *log shape*, not of Tapoo. It is independent of the
-// APP_VERSION stamped into an export, because the log shape changes far less often than the app:
-// tying consumers to the app version would reject logs on every unrelated patch release.
-export const LOG_CONTRACT_VERSION = 1;
-
-// LOG_ENVELOPE_NAME is the constant tapooDownloadLogs writes to the envelope's `name` field. It is
-// what distinguishes a Tapoo log from any other JSON a user might paste into an analyzer.
-export const LOG_ENVELOPE_NAME = "tapoo";
-
-// AGENT_API_MODE is the only control mode that produces these logs. tapooDownloadLogs returns early
-// for anything else, so an export naming a different mode did not come from an agent round.
-export const AGENT_API_MODE = "agent-api";
-
-// LOG_LEVELS mirrors the LogLevel union in frontend/app/types.ts.
-export const LOG_LEVELS = new Set<string>(["error", "info", "warn"]);
-
-// --- What a log says ---
-
-// LOG_EVENTS is the payload sentence vocabulary the analyzer branches on. These strings are the
-// stable identity of an event - the payload field is prose, but it is *fixed* prose, and matching it
-// exactly is how an entry's meaning is recovered.
-//
-// Naming them here rather than inlining the literals is what makes a producer-side wording change a
-// one-line fix instead of a silent behavioral drift spread across the analyzer, where a stale
-// literal simply stops matching and quietly answers every dependent question "no".
-export const LOG_EVENTS = {
-  levelStarted: "Agent level started.",
-  request: "Agent request.",
-  response: "Agent response.",
-  levelWon: "Agent level won.",
-  levelLost: "Agent level lost.",
-  duplicateToolWarningIgnored: "Agent kept re-requesting already-called tools after being told so.",
-  hallucinatedTool: "Agent requested an unknown or hallucinated tool.",
-  tokenCapExhausted: "Agent exhausted the token cap without returning a prediction.",
-  providerHttpFailure: "Provider HTTP response failed.",
-  requestFailed: "Request failed before a valid response.",
-} as const;
-
-// DECLARED_TOOLS are the context tools Tapoo declares to an agent. C3 asks one question per tool, in
-// this order, so the order is part of the contract rather than an implementation detail.
-export const DECLARED_TOOLS = [
-  "get_maze_structure",
-  "get_prediction_rules",
-  "get_last_prediction_outcome",
-] as const;
-
-// --- Maze geometry ---
-
-// MOVES maps each accepted move command to its [row, col] delta. The four keys are also the complete
-// set of valid commands, which is what C1.Q3 checks against.
-export const MOVES: Record<Move, readonly [number, number]> = {
-  MoveUp: [-1, 0],
-  MoveDown: [1, 0],
-  MoveLeft: [0, -1],
-  MoveRight: [0, 1],
-};
-
-// isMove narrows a string out of a log to a command the maze can actually apply.
-//
-// This guard is why stepFrom can take a Move rather than a string. A log's openMoves field is prose
-// from a model's turn, so it can name anything; before, the one caller that did not check
-// (availableContextDisregard) reached MOVES[move] with an unrecognized name, destructured undefined,
-// and threw out of the whole report.
-export const isMove = (value: unknown): value is Move =>
-  typeof value === "string" && Object.hasOwn(MOVES, value);
-
-// Cells are Map/Set keys, so they travel as "row,col" strings rather than arrays, which compare by
-// identity and would make every lookup miss.
-export const cellKey = (row: number, col: number): CellKey => `${row},${col}`;
-
-// cellFromLogged reads either shape a logged cell arrives in.
-//
-// A downloaded log compacts every get_maze_structure result before writing it, turning {row, col}
-// into [row, col]. Both shapes are real, so this is the one place that decides which is which -
-// every field carrying a logged cell goes through here. Handling it per-caller is what previously
-// produced "undefined,undefined" keys: one reader was taught the compact form and another, reading a
-// different field, was not.
-// The parameter is `unknown`, not LoggedCell: every caller reads this straight out of parsed JSON,
-// where the value is whatever the producer wrote. Taking the narrow type would only move the cast to
-// each call site - and a cast at a call site is a claim about untrusted data that nothing checked.
-export function cellFromLogged(cell: unknown): CellKey | null {
-  if (Array.isArray(cell)) {
-    const [row, col] = cell as unknown[];
-    return typeof row === "number" && typeof col === "number" ? cellKey(row, col) : null;
-  }
-
-  if (cell !== null && typeof cell === "object" && "row" in cell && "col" in cell) {
-    const {row, col} = cell;
-    return typeof row === "number" && typeof col === "number" ? cellKey(row, col) : null;
-  }
-
-  return null;
-}
-
-// movesFromLogged returns the move names a cell's exits allow, from either logged shape: the
-// uncompacted object keyed by move name, or the compacted [move, visitStatus] pairs. Reading the
-// compacted form with Object.keys yields array indices - "0", "1" - which match no move command, so
-// every exit check silently failed.
-// `unknown` for the same reason as cellFromLogged: the value comes straight from a parsed log.
-export function movesFromLogged(openMoves: unknown): Set<string> {
-  if (Array.isArray(openMoves)) {
-    return new Set(
-      (openMoves as unknown[])
-        .map((entry) => (Array.isArray(entry) ? (entry as unknown[])[0] : entry))
-        .filter((name): name is string => typeof name === "string" && name.length > 0),
-    );
-  }
-
-  return new Set(Object.keys(openMoves ?? {}));
-}
-
-// stepFrom resolves the cell reached by applying one move command to a "row,col" key.
-export function stepFrom(key: CellKey, move: Move): CellKey {
-  const [row, col] = key.split(",").map(Number);
-  const [rowDelta, colDelta] = MOVES[move];
-  // A key that does not parse is a programming error, not log data: every key this receives was
-  // built by cellKey.
-  if (row === undefined || col === undefined || Number.isNaN(row) || Number.isNaN(col)) {
-    throw new Error(`not a cell key: ${key}`);
-  }
-
-  return cellKey(row + rowDelta, col + colDelta);
-}
-
-// --- Traversal speed ---
-
-// The thresholds from the rubric's Agent-Scoped Traversal Speed section. Reached through
-// classifyTraversalSpeed rather than exported: the classification is the contract, not the table.
-const TRAVERSAL_SPEED_CLASSES = {
-  backtracker: "Backtracker",
-  navigator: "Navigator",
-  trailblazer: "Trailblazer",
-} as const;
-
-// classifyTraversalSpeed applies the rubric's three-way split. A non-positive or non-finite speed
-// resolves to Backtracker rather than defaulting upward - the rubric is explicit that a missing
-// denominator must never produce a Trailblazer result.
-export function classifyTraversalSpeed(speed: unknown): string {
-  const value = Number(speed);
-  if (!Number.isFinite(value) || value < 1.0) {
-    return TRAVERSAL_SPEED_CLASSES.backtracker;
-  }
-
-  return value > 1.0 ? TRAVERSAL_SPEED_CLASSES.trailblazer : TRAVERSAL_SPEED_CLASSES.navigator;
-}
+// Re-exported: every caller of these is reading the log contract, and that is still where they look.
+export {
+  MOVES,
+  cellFromLogged,
+  cellKey,
+  classifyTraversalSpeed,
+  isMove,
+  movesFromLogged,
+  stepFrom,
+} from "./geometry";
 
 // --- Validating an export ---
 
@@ -213,15 +91,23 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     return {ok: false, error: "Tapoo log export is missing its `entries` array."};
   }
 
-  const warnings: string[] = [];
+  const warnings: LogWarning[] = [];
   if (envelope.mode !== AGENT_API_MODE) {
-    warnings.push(
-      `Export mode is ${JSON.stringify(envelope.mode)}, not "${AGENT_API_MODE}". The behavior rubric only describes agent-api rounds.`,
-    );
+    // Inaccurate rather than incomplete: every question is written for an agent-api round, so answering
+    // them about some other mode produces verdicts, not correct ones.
+    warnings.push({
+      impact: "inaccurate",
+      message: `Export mode is ${JSON.stringify(envelope.mode)}, not "${AGENT_API_MODE}". The behavior rubric only describes agent-api rounds.`,
+    });
   }
 
   if (typeof envelope.version !== "string") {
-    warnings.push("Export carries no Tapoo version; results cannot be attributed to a build.");
+    // Incomplete, not inaccurate: every verdict still stands, but the report cannot say which build
+    // produced the behavior it describes, which is half of what makes it citable.
+    warnings.push({
+      impact: "incomplete",
+      message: "Export carries no Tapoo version; results cannot be attributed to a build.",
+    });
   }
 
   const entries = envelope.entries.filter(isLogEntry);
@@ -230,16 +116,39 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     // Unreadable entries are stand-ins written by storage-logs.ts when a record fails to decode.
     // They are dropped rather than fatal: the surrounding round is still worth analyzing, but the
     // count has to surface, because it bounds how complete any "not observed" answer really is.
-    warnings.push(
-      skipped === 1
-        ? "1 entry did not match the log entry shape and was skipped."
-        : `${skipped} entries did not match the log entry shape and were skipped.`,
-    );
+    warnings.push({
+      // Inaccurate: the rubric answers NO on absent evidence, so evidence that was dropped rather than
+      // never recorded can turn a YES into a NO without anything else looking wrong.
+      impact: "inaccurate",
+      message:
+        skipped === 1
+          ? "1 entry did not match the log entry shape and was skipped."
+          : `${skipped} entries did not match the log entry shape and were skipped.`,
+    });
   }
 
   if (entries.length === 0) {
     return {ok: false, error: "Tapoo log export contains no readable entries."};
   }
+
+  // The same pass that validated the entries describes them: what the log contains, and where each
+  // turn starts and ends. Every later reader indexes into this instead of walking the array again.
+  const index = indexLog(entries);
+
+  warnings.push(...encodedMazeWarnings(entries));
+
+  // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
+  //
+  // These warnings reach the reader under "Read with care", which is for caveats about the *log* - a
+  // non-agent-api mode, a missing build version, entries that did not decode - things that genuinely
+  // bound how much the verdicts are worth. An event the rubric has no question for is a gap in this
+  // code, and a level contradicting its own payload is a bug in the producer. Neither is something a
+  // reader can act on, and showing them there asks someone to distrust a report over an unimplemented
+  // feature.
+  //
+  // The right home for "this event is not scored" is a fact question that scores it. Until there is
+  // one, both stay available on the index for tests and for whoever adds that question - which is how
+  // the two unscored events in a real glm-5.1 log were found in the first place.
 
   const log: TapooLog = {
     name: envelope.name,
@@ -247,6 +156,7 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     mode: typeof envelope.mode === "string" ? envelope.mode : null,
     downloadedAt: typeof envelope.downloadedAt === "string" ? envelope.downloadedAt : null,
     entries,
+    index,
   };
 
   return {ok: true, value: log, warnings};
@@ -255,6 +165,54 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
 // parseTapooLogText is the raw JSON ingress point shared by the app and non-UI callers. Its successful
 // output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
 // downloadedAt, and readable entries.
+// encodedMazeWarnings validates the encoded maze each level-started entry should carry.
+//
+// This belongs with the rest of the contract validation rather than downstream in the view: whether a
+// payload in this JSON is present and well-formed is the same question as whether the envelope has a
+// mode or an entry has a payload, and it is answered once, here, on the way in.
+//
+// Validation is also what decides the impact, because it is what knows the difference:
+//
+//   absent  -> incomplete. The log never carried a maze. Nothing is wrong; a section is missing.
+//   invalid -> inaccurate. A payload was provided and it is not what it claims to be - a structure
+//              that fails its own checksum arrived damaged, and "damaged" is a statement about the
+//              data's accuracy, not about how much of it there is.
+//
+// Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
+// from the exits the log's own tool results confirmed.
+function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
+  const warnings: LogWarning[] = [];
+
+  for (const entry of entries) {
+    if (entry.payload !== LOG_EVENTS.levelStarted) continue;
+
+    const details = entry.details;
+    const maze = details !== null && typeof details === "object" && "maze" in details
+      ? details.maze
+      : null;
+    const round = `Game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
+    const cost = "so it has no traversal replay and no maze statistics";
+
+    if (maze === null || maze === undefined) {
+      warnings.push({
+        impact: "incomplete",
+        message: `${round} carries no encoded maze, ${cost}.`,
+      });
+      continue;
+    }
+
+    const built = mazeFromEncoded(maze as EncodedMaze);
+    if (!built.ok) {
+      warnings.push({
+        impact: "inaccurate",
+        message: `${round} carries an encoded maze that did not decode, ${cost}. ${built.error}`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
   const trimmed = asTrimmedText(text);
   if (!trimmed) {

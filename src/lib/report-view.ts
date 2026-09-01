@@ -16,6 +16,7 @@ import {
   profileCards,
   provenanceTableData,
   rubricQuestionRows,
+  warningHeadline,
 } from "./report-adapters";
 import { createInitialReportTabs } from "./report-tabs";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
@@ -125,9 +126,11 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
     </section>`;
   }
   if (result?.ok && result.warnings.length > 0) {
+    // The headline states the cost in the reader's own terms before the caveats explain it. A person
+    // who reads nothing else should still come away knowing the report below is not to be quoted as-is.
     return html`<section class="notice notice-warn">
-        <strong>Read with care</strong>
-        <ul>${result.warnings.map((warning) => html`<li>${warning}</li>`)}</ul>
+        <strong>${warningHeadline(result.warnings)}</strong>
+        <ul>${result.warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
       </section>`;
   }
   return "";

@@ -715,7 +715,7 @@ td {
   font-weight: 700;
 }
 
-/* The whole row is a click target (enableRowSelection in components/oracle.js), so it has to look
+/* The whole row is a click target (enableRowSelection in src/lib/rubric-table.ts), so it has to look
    like one. The hover lift is the affordance; without it the only hint that a row responds is
    finding out that it does. */
 .events-section tbody tr {

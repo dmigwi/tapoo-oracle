@@ -37,12 +37,57 @@ export type LogEntry = {
   details?: unknown;
 };
 
+// --- Log index ---
+
+/** What a log level says about who is answerable for an entry.
+ *
+ * Tapoo writes the level with that meaning: `warn` is an agent error that carries a penalty, `error`
+ * is a failure outside the agent's control that disabled it, and `info` is everything else. The rubric
+ * already draws this line - endpoint failures are kept out of the violation profile because they can
+ * come from infrastructure rather than reasoning - but it drew it by matching payload sentences. The
+ * level says the same thing, declared by the producer. */
+export type LogClass = "neutral" | "penalised" | "external";
+
+/** Where one turn begins and ends in the entries array, as a half-open range. */
+export type TurnSpan = {turn: number; start: number; end: number};
+
+/** How the turn spans were arrived at.
+ *
+ * "field" means every entry carried a turn number. "unavailable" means at least one did not: logs
+ * written before the turn counter landed infer their boundaries from predictions instead, which
+ * buildContext still does for itself. The index says so rather than guessing, so a caller never reads
+ * spans that were invented. */
+export type TurnSource = "field" | "unavailable";
+
+export type LogSummary = {
+  entries: number;
+  turns: number;
+  levels: Record<LogLevel, number>;
+  /** Count per payload sentence, in the order first seen. */
+  events: Map<string, number>;
+  penalised: number;
+  external: number;
+  firstEpochMs: number | null;
+  lastEpochMs: number | null;
+};
+
+/** What the initial scan of a downloaded log produces, beside the entries themselves. */
+export type LogIndex = {
+  summary: LogSummary;
+  turnSource: TurnSource;
+  /** Ordered by first appearance. Empty when turnSource is "unavailable". */
+  turns: TurnSpan[];
+  byTurn: Map<number, TurnSpan>;
+};
+
 export type TapooLog = {
   name: string;
   version: string | null;
   mode: string | null;
   downloadedAt: string | null;
   entries: LogEntry[];
+  /** Built by the same pass that validates the entries - see indexLog. */
+  index: LogIndex;
   sourceUrl?: string;
 };
 
@@ -54,8 +99,23 @@ export type TapooLog = {
 export type Result<T, E = string> = ({ok: true} & T) | ({ok: false; error: E});
 
 export type UrlResult = Result<{url: string}>;
-export type LogParseResult = Result<{value: TapooLog; warnings: string[]}>;
-export type LogTextResult = Result<{source: TapooLog; warnings: string[]}>;
+/** How a warning bears on the report the reader is about to read.
+ *
+ * Only two, because only two justify interrupting someone. "inaccurate" means a verdict in the report
+ * may be wrong. "incomplete" means the report is missing something it is expected to carry, while what
+ * it does say is still sound.
+ *
+ * A finding that is neither is not a warning. An event the rubric has no question for, or a log level
+ * contradicting its own payload, describes work left to do in this codebase - real, worth fixing, and
+ * nothing a reader can act on. Those live on the log index instead, where whoever fixes them will look.
+ */
+export type WarningImpact = "inaccurate" | "incomplete";
+
+/** A caveat the reader is shown, carrying what it costs them. */
+export type LogWarning = {impact: WarningImpact; message: string};
+
+export type LogParseResult = Result<{value: TapooLog; warnings: LogWarning[]}>;
+export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]}>;
 export type PayloadResult = Result<{payload: string}>;
 
 /** A rejected share link always carries the link it is about, so the view can mark it up.
@@ -226,7 +286,7 @@ export type Report = {
   levels: Level[];
 };
 
-export type Analysis = Result<{source: TapooLog; warnings: string[]; report: Report}>;
+export type Analysis = Result<{source: TapooLog; warnings: LogWarning[]; report: Report}>;
 
 // --- Maze replay ---
 

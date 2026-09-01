@@ -287,9 +287,25 @@ export function createMazeReplay(report: Report): HTMLElement {
     if (!model.maze) {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
       // silently dropping the grid would read as "this round had nothing worth showing".
+      //
+      // Stated as plainly as the warning banner states its own findings. "Maze unavailable" was the
+      // heading here, and it read as a temporary condition - something that might load in a moment -
+      // rather than as a payload that arrived wrong or never arrived at all. The reader is looking at
+      // the space the traversal should occupy, so this is where they learn what is missing from it.
       const notice = createHtmlElement("div", "notice notice-error");
-      notice.append(createHtmlElement("strong", null, "Maze unavailable for this round"));
+      notice.append(
+        createHtmlElement("strong", null, "The encoded maze payload is missing or inaccurate")
+      );
       notice.append(createHtmlElement("span", null, model.error));
+      notice.append(
+        createHtmlElement(
+          "span",
+          null,
+          "Without it this round has no traversal replay and no maze statistics - no shortest route, " +
+            "no dead ends, no count of the cells entered. Every rubric verdict beside it still stands: " +
+            "the questions answer from the exits the log's own tool results confirmed, not from this payload."
+        )
+      );
       notice.append(
         createHtmlElement(
           "span",

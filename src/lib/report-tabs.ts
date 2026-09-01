@@ -6,7 +6,7 @@
 import { loadTapooLogFromUrl } from "./share-link"
 import { parseTapooLogText } from "./log-contract"
 import { answerRubric } from "./report"
-import type { Analysis, ReportTab, ReportTabsState, TapooLog } from "./types"
+import type { Analysis, LogWarning, ReportTab, ReportTabsState, TapooLog } from "./types"
 import {asTrimmedText} from "./untrusted";
 
 
@@ -25,12 +25,14 @@ export function analyzeLogText(
   return buildReportAnalysis(result.source, result.warnings, label);
 }
 
-function buildReportAnalysis(source: TapooLog, warnings: string[], label: string): Analysis {
+function buildReportAnalysis(source: TapooLog, warnings: LogWarning[], label: string): Analysis {
+  const report = answerRubric(source.entries, {label});
+
   return {
     ok: true,
     source,
     warnings,
-    report: answerRubric(source.entries, {label})
+    report
   };
 }
 

@@ -206,6 +206,9 @@ describe("notices", () => {
 
     expect(rendered(sections.notices).className).toBe("notice notice-warn")
     expect(rendered(sections.notices).textContent).toMatch(/agent-api/)
+    // The cost is stated in bold before the caveat explains it: a reader who reads nothing else should
+    // still know the report below is not to be quoted as it stands.
+    expect(query(rendered(sections.notices), "strong").textContent).toBe("This report may be inaccurate.")
     // The warning is a caveat on the report, not a replacement for it.
     expect(sections.profile).not.toBe("")
   })

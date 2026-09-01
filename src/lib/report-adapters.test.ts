@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
-import {diagnosticRows, diagnosticTableData, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows} from "./report-adapters"
+import {diagnosticRows, diagnosticTableData, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
 import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, ReportTabsState, TapooLog} from "./types"
-import {at, expectErr, expectOk, must} from "./test-support";
+import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
 const fixtureUrl =
   "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c/raw/" +
@@ -46,7 +46,12 @@ describe("analyzeLogText", () => {
     const result = analyzeLogText(fixtureText, { label: "fixture" })
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).warnings).toEqual([])
+    // This fixture's level-started entry carries only `agent` and `level` - no maze at all - so the
+    // contract says so. Until the payload was validated, a reader was never told the traversal replay
+    // and every maze statistic were missing rather than merely empty.
+    expect(expectOk(result).warnings).toEqual([
+      {impact: "incomplete", message: expect.stringContaining("carries no encoded maze")},
+    ])
     expect(expectOk(result).report.model).toBe("test-model")
     expect(expectOk(result).report.capabilities).toHaveLength(9)
     expect(expectOk(result).report.violations).toHaveLength(6)
@@ -77,7 +82,7 @@ describe("analyzeLogText", () => {
   it("surfaces contract warnings without refusing the log", () => {
     const result = analyzeLogText(JSON.stringify({ ...fixture, mode: "human" }))
     expect(result.ok).toBe(true)
-    expect(expectOk(result).warnings.join(" ")).toMatch(/not "agent-api"/)
+    expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
   })
 
   it("retains the source URL when one is provided", () => {
@@ -322,3 +327,44 @@ describe("groupResultTone", () => {
     expect(groupResultTone("capability", "NO (0/1) YES")).toBeNull()
   })
 })
+
+describe("warningHeadline", () => {
+  // A warning is only shown when it costs the reader something, so the banner names that cost instead
+  // of asking them to infer it. The old heading was "Read with care", which is a tone rather than a
+  // finding - a reader could not tell from it whether a verdict below was wrong or whether the report
+  // was merely missing its provenance.
+  const inaccurate = {impact: "inaccurate", message: "x"} as const
+  const incomplete = {impact: "incomplete", message: "y"} as const
+
+  it("says a verdict may be wrong when one may be", () => {
+    expect(warningHeadline([inaccurate])).toBe("This report may be inaccurate.")
+  })
+
+  it("says what is missing when nothing is wrong, only absent", () => {
+    expect(warningHeadline([incomplete])).toBe("This report is missing important parts.")
+  })
+
+  it("reports both harms rather than collapsing them into the louder one", () => {
+    expect(warningHeadline([incomplete, inaccurate]))
+      .toBe("This report may be inaccurate and is missing important parts.")
+  })
+
+  it("says nothing when there is nothing to say", () => {
+    expect(warningHeadline([])).toBeNull()
+  })
+
+  it("classifies the caveats a real log produces", () => {
+    // A non-agent-api round is answered by questions written for a different mode, so the verdicts may
+    // be wrong; a missing build version leaves every verdict standing but unattributable.
+    // The fixture also carries no maze, which is its own incomplete finding - hence `toContain`.
+    const wrongMode = analyzeLogText(JSON.stringify({...fixture, mode: "human"}))
+    expect(expectOk(wrongMode).warnings.map((w) => w.impact)).toContain("inaccurate")
+    expect(warningHeadline(expectOk(wrongMode).warnings))
+      .toBe("This report may be inaccurate and is missing important parts.")
+
+    const noVersion = analyzeLogText(JSON.stringify({...fixture, version: undefined}))
+    expect(expectOk(noVersion).warnings.every((w) => w.impact === "incomplete")).toBe(true)
+    expect(warningHeadline(expectOk(noVersion).warnings)).toBe("This report is missing important parts.")
+  })
+})
+

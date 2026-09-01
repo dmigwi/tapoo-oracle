@@ -6,7 +6,7 @@
 // one failure path ended up with no link to name.
 
 import {parseTapooLogText} from "./log-contract";
-import type {DecodedPayload, PayloadResult, TapooLog, UrlResult} from "./types";
+import type {DecodedPayload, LogWarning, PayloadResult, TapooLog, UrlResult} from "./types";
 import {asTrimmedText} from "./untrusted";
 
 // --- Online JSON URLs ---
@@ -61,7 +61,7 @@ export function fetchFailureMessage(error: unknown): string {
  * carries the parsed log and the URL it came from, while a failure carries the URL only when there was
  * one to report - a URL that never validated has none. */
 export type LoadedLog =
-  | {ok: true; source: TapooLog; warnings: string[]; url: string}
+  | {ok: true; source: TapooLog; warnings: LogWarning[]; url: string}
   | {ok: false; error: string; url?: string};
 
 export async function loadTapooLogFromUrl(

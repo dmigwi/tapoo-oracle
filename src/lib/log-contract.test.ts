@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import {AGENT_API_MODE, DECLARED_TOOLS, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, stepFrom} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
-import {expectErr, expectOk} from "./test-support";
+import {at, expectErr, expectOk, messagesOf} from "./test-support";
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
 // a numeric payload, an unknown level - which is exactly the shape parseTapooLogExport is asked to
@@ -112,14 +112,14 @@ describe("parseTapooLogExport", () => {
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).value.version).toBeNull()
-    expect(expectOk(result).warnings.join(" ")).toMatch(/no Tapoo version/)
+    expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/no Tapoo version/)
   })
 
   it("warns when the round was not agent-api, since the rubric describes no other", () => {
     const result = parseTapooLogExport(envelope({mode: "human"}))
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).warnings.join(" ")).toMatch(/not "agent-api"/)
+    expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
   })
 
   it.each([
@@ -133,7 +133,7 @@ describe("parseTapooLogExport", () => {
     const result = parseTapooLogExport(envelope({entries: [entry(), ...bad]}))
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).warnings).toContain(expected)
+    expect(messagesOf(expectOk(result).warnings)).toContain(expected)
     expect(expectOk(result).value.entries).toHaveLength(1)
   })
 
@@ -146,7 +146,7 @@ describe("parseTapooLogExport", () => {
     const result = parseTapooLogExport(envelope({entries: [entry(), entry(over)]}))
 
     expect(expectOk(result).value.entries).toHaveLength(1)
-    expect(expectOk(result).warnings.join(" ")).toMatch(/did not match the log entry shape/)
+    expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/did not match the log entry shape/)
   })
 
   it("keeps an entry that predates the turn, level and game counters", () => {
@@ -210,3 +210,99 @@ describe("loadTapooLogFromUrl", () => {
     })
   })
 })
+
+describe("what reaches the reader as a warning", () => {
+  // The warning banner is headed "Read with care", and it is for caveats about the log: a
+  // non-agent-api mode, a missing build version, entries that did not decode. Those bound how much the
+  // verdicts are worth, and a reader can weigh them.
+  //
+  // Findings about this codebase are a different thing. An event with no rubric question means a
+  // question has not been written yet, and a level contradicting its payload is a bug in the producer.
+  // Neither is something the reader can act on, and both would read as a reason to distrust the report.
+  it("says nothing about an event the rubric has no question for", () => {
+    // Both sentences are real: they appear in a 2,004-entry glm-5.1 log and in no LOG_EVENTS entry.
+    const result = parseTapooLogExport(envelope({entries: [
+      entry(),
+      entry({payload: "Malformed agent prediction response.", log: "warn"}),
+      entry({payload: "Recovered after a connection-error retry.", log: "warn"}),
+    ]}))
+
+    expect(expectOk(result).warnings).toEqual([])
+    // Still readable entries, still analyzed - the events are simply not scored.
+    expect(expectOk(result).value.entries).toHaveLength(3)
+  })
+
+  it("says nothing about a level that contradicts its own payload", () => {
+    const result = parseTapooLogExport(envelope({entries: [entry({log: "warn"})]}))
+
+    expect(expectOk(result).warnings).toEqual([])
+  })
+
+  it("still reports the caveats that are about the log itself", () => {
+    const result = parseTapooLogExport(envelope({mode: "human", version: undefined}))
+    const warnings = messagesOf(expectOk(result).warnings).join(" ")
+
+    expect(warnings).toMatch(/not "agent-api"/)
+    expect(warnings).toMatch(/no Tapoo version/)
+  })
+})
+
+describe("the encoded maze payload", () => {
+  // Validating this is the same kind of question as validating the envelope's mode or an entry's
+  // payload - is what arrived what it claims to be - so it is answered here, on the way in, rather
+  // than discovered later by the view that tried to draw it.
+  //
+  // Validation is also what decides the impact, because it is what knows the difference between a
+  // payload that never came and one that came damaged.
+  const REAL_MAZE = {
+    index_chars: ["|", "---", "-", "   ", " ", "\n"],
+    structure_checksum: "0x74af82cb14470b9d",
+    structure:
+      "01012121012105030343430343050301230303210503034303034305030301030303050343030303030501210303010305034343434343050121212121210",
+    dimensions: {numCols: 6, numRows: 4, area: 24},
+  }
+
+  const started = (details: unknown) =>
+    envelope({entries: [entry({payload: LOG_EVENTS.levelStarted, details})]})
+
+  it("says nothing when the maze arrives intact", () => {
+    expect(expectOk(parseTapooLogExport(started({maze: REAL_MAZE}))).warnings).toEqual([])
+  })
+
+  it("calls an absent maze incomplete: nothing is wrong, a section is missing", () => {
+    const warnings = expectOk(parseTapooLogExport(started({level: 1}))).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).impact).toBe("incomplete")
+    expect(at(warnings, 0).message).toMatch(/carries no encoded maze/)
+    expect(at(warnings, 0).message).toMatch(/no traversal replay and no maze statistics/)
+  })
+
+  it("calls a damaged maze inaccurate: a payload arrived and is not what it claims", () => {
+    // One character changed, so the structure no longer matches the checksum it carries.
+    const damaged = {...REAL_MAZE, structure: `1${REAL_MAZE.structure.slice(1)}`}
+    const warnings = expectOk(parseTapooLogExport(started({maze: damaged}))).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).impact).toBe("inaccurate")
+    expect(at(warnings, 0).message).toMatch(/did not decode/)
+    expect(at(warnings, 0).message).toMatch(/checksum/)
+  })
+
+  it("calls a malformed maze inaccurate too", () => {
+    const warnings = expectOk(parseTapooLogExport(started({maze: {dimensions: {}}}))).warnings
+
+    expect(at(warnings, 0).impact).toBe("inaccurate")
+  })
+
+  it("names the round, so a multi-round log says which one", () => {
+    const warnings = expectOk(parseTapooLogExport(envelope({entries: [
+      entry({payload: LOG_EVENTS.levelStarted, details: {maze: REAL_MAZE}, game: 6, level: 54}),
+      entry({payload: LOG_EVENTS.levelStarted, details: {level: 55}, game: 6, level: 55}),
+    ]}))).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).message).toMatch(/^Game 6 level 55 /)
+  })
+})
+
