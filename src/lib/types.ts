@@ -180,6 +180,11 @@ export type Context = {
   apis: Set<string>;
   /** Distinct reasoning-effort settings the requests carried, in first-seen order. */
   reasoningEfforts: Set<string>;
+  /** The replay record each turn reported, keyed by the turn that *reported* it - which is the turn
+   * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
+   * transition key, so two turns submitting the same move with the same outcome collapse into one
+   * entry; a map keyed by reporting turn cannot lose a turn that way. */
+  replayByReportingTurn: Map<number, Replay>;
   /** Running totals of what the model produced. Accumulated rather than kept per response: the report
    * describes a sample, and 719 individual token counts are not a summary of anything. */
   output: {
@@ -212,11 +217,20 @@ export type Context = {
 
 /** A `get_last_prediction_outcome` payload, as logged. Every field is optional: it is read from
  * arbitrary JSON and two different producers push into the same array. */
+/** One turn's outcome, as get_last_prediction_outcome reported it to the turn after it.
+ *
+ * Logged verbatim - this tool carries no content_checksum, which is Tapoo's marker for a message whose
+ * content was trimmed or compacted - so these are the values Tapoo actually sent, not a reconstruction. */
 export type Replay = {
   lastMoveStatus?: string | null;
   lastSubmittedMoves?: unknown;
   lastAppliedMoveIndex?: number | null;
   chargedMovesCount?: number;
+  /** Where replay began: where the player stood *before* those moves applied. Tapoo's own tool
+   * description warns against substituting currentCell here, which is where replay ended - doing so
+   * makes an applied move look like it never happened. */
+  lastReplayStartCell?: unknown;
+  predictionStatus?: string | null;
 };
 
 /** A round-end entry's details. `traversalSpeed` is a string in every real log (`"1.0000"`), which is
@@ -230,6 +244,9 @@ export type Outcome = {
   playerPosition?: {x?: number; y?: number};
   playerUniqueCellsVisited?: number;
   decayUnitsCharged?: number;
+  /** Turns the round recorded. Used to check that a reading exists for every one of them before the
+   * closing turn's charge is settled by subtraction. */
+  turnCount?: number;
   lastActionResult?: Replay;
 };
 
@@ -241,6 +258,9 @@ export type Turn = {
   applied: number | null;
   cells: CellKey[];
   rejectedMove: string | null;
+  /** Decay units this turn was charged, as Tapoo reported it. Null when no reading covers the turn and
+   * it could not be resolved by subtraction - a cost we could not read, which is not a cost of zero. */
+  decayCharged: number | null;
 };
 
 export type Level = {

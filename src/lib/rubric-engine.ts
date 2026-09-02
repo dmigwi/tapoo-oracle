@@ -132,6 +132,7 @@ export function buildContext(
     player: null,
     apis: new Set(),
     reasoningEfforts: new Set(),
+    replayByReportingTurn: new Map(),
     output: {
       responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, durationNs: null, finishReasons: new Map(),
@@ -245,6 +246,18 @@ export function buildContext(
 
         if ("lastMoveStatus" in payload) {
           noteTool("get_last_prediction_outcome")
+
+          // Keyed by the turn that read it, not by the moves it describes.
+          //
+          // annotateApplied keys the same payload by JSON.stringify of its move list, and a move list
+          // is not unique to a turn: in a real 464-turn log, 502 readings collapse onto 86 distinct
+          // sequences, 30 of which were seen with different lastAppliedMoveIndex values. Last write
+          // wins, so 63 turns ended up with another turn's path, applied count and refused move.
+          //
+          // A turn re-reads the same result on each of its requests, so writing it repeatedly is
+          // idempotent - no turn was ever observed reporting two different values.
+          context.replayByReportingTurn.set(currentTurn, payload)
+
           if (payload.lastMoveStatus !== null) {
             const key = JSON.stringify([
               payload.lastMoveStatus,

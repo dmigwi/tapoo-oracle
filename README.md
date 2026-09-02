@@ -73,6 +73,36 @@ specifiers, which Observable's resolver rejects, so only the bundle written here
 | `make ci` | Run install, audit, lint, tests, and build |
 | `make dev` | Start Observable preview |
 | `make build` | Build the stripped static site into `./public` |
+| `make serve` | Serve `./public` locally, with HTML caching off |
+
+### Serving the build locally
+
+`make serve` runs `serve` over `./public` with `serve.json`, which sends `Cache-Control: no-store` for
+HTML while leaving the content-hashed assets cacheable.
+
+That header is there for one page. A shared report at `/r/<token>` is answered by `404.html`, and
+`serve` sends an `ETag` but no freshness information for it — so a browser applies heuristic caching
+and can reuse a stale copy across reloads without revalidating. That is invisible until the page
+changes, and then it is a share link that keeps failing against a build that has already been fixed.
+Hashed assets keep their default caching, because their names change whenever their contents do.
+
+### Deploying under a path
+
+Set `ORACLE_SITE_BASE` when the site is not served from a domain root — a GitHub Pages project site
+lives under `/<repo>/`:
+
+```
+ORACLE_SITE_BASE=/tapoo-oracle/ pnpm run build
+```
+
+It becomes Observable's `base`, which is written into every page as `<base href>` and is what every
+relative asset reference resolves against. Leaving it unset builds for a domain root.
+
+Getting it wrong is invisible on the app's own page, because the browser is already in the right
+directory. It shows up on a shared report: `/r/<token>` is answered by `404.html` served one segment
+deeper, and with the wrong base every asset on that page resolves outside the site and 404s. The
+redirect still completes — it is inline script that runs before any of them matter — so the link works
+while logging a failure for every asset.
 | `make agentic-analysis LOGS="a.json"` | Run the terminal report |
 
 ## Privacy

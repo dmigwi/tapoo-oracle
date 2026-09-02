@@ -2,7 +2,7 @@ PNPM := pnpm
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install audit agentic-analysis typecheck lint test coverage quality ci dev build deploy clean observable
+.PHONY: help install audit agentic-analysis typecheck lint test coverage quality ci dev build serve deploy clean observable
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,6 +48,9 @@ dev: ## Bundle the app and start the local preview server, rebuilding as sources
 
 build: ## Bundle the app, build the static site into ./public, then clean up.
 	$(PNPM) build
+
+serve: ## Serve ./public the way a static host does, with HTML caching off.
+	$(PNPM) run serve
 
 deploy: ## Deploy the app to Observable.
 	$(PNPM) deploy

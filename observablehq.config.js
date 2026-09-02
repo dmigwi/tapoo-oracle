@@ -1,6 +1,6 @@
 // See https://observablehq.com/framework/config for documentation.
 import packageMetadata from "./package.json" with {type: "json"};
-import {STAGED_ROOT, STRIPPED_BUILD_ENV} from "./scripts/build-root.mjs";
+import {SITE_BASE_ENV, STAGED_ROOT, STRIPPED_BUILD_ENV} from "./scripts/build-root.mjs";
 
 // Every Observable command reads the staged root, never src directly.
 //
@@ -56,21 +56,18 @@ export default {
   // different colour so they are told apart at 16px, where the shapes alone are indistinguishable.
   // src/images/favicon.svg records which Tapoo colour each role maps from.
   head:
-    // First in the head, before any asset reference: a shared report lives at /r/<token>, which a
-    // static host answers with 404.html served *at that path*. Every asset reference in that page is
-    // relative, so they resolve one directory too deep and 404 - meaning nothing that depends on the
-    // framework's own JS can be trusted to run there. This has no dependencies and runs before any of
-    // it.
+    // A shared report lives at /r/<token>, which a static host answers with 404.html served *at that
+    // path*. This turns that into a hop to the app root, carrying the token in the fragment. It has no
+    // dependencies and runs at parse time, so it does not wait on the framework's own JS - which is the
+    // point, because on that page the framework may not have loaded at all.
     //
-    // Ordering alone does not fix the asset paths, and it was tried: with the script moved ahead of the
-    // icon link the browser still issued GET /r/<token>/_file/images/favicon.*.svg and still logged a
-    // 404, because starting a redirect does not cancel resource loads the parser has already queued.
-    // What actually corrects them is the <base> written below - a report route is always exactly one
-    // segment deeper than the app root, so "../" resolves every relative reference on this page back to
-    // where the assets really are, whatever base path the site is deployed under.
+    // It used to also document.write('<base href="../">') to correct the page's asset paths. That never
+    // worked: Observable emits its own <base> from the `base` option above, before any of this, and a
+    // document honours only its first <base href> - so the second was parsed and ignored. The asset
+    // links are emitted ahead of this script too, so even a winning base would have arrived late.
     //
-    // document.write, not appendChild: the base element only governs elements parsed after it, so it
-    // has to land at the parser position rather than at the end of the head.
+    // `base` is what actually fixes them, and it fixes them for every page at every depth rather than
+    // for this one route.
     //
     // Harmless on every other page: the guard only matches a report route, so the app itself never
     // sees it fire.
@@ -78,7 +75,6 @@ export default {
     "var route = /\\/r\\/([A-Za-z0-9_-]+)\\/?$/;" +
     "var match = route.exec(location.pathname);" +
     "if (!match) return;" +
-    'document.write(\'<base href="../">\');' +
     // replace, not assign, so Back leaves the site rather than bouncing through the route again.
     // The fragment carries the same "r=" marker the /r/ path segment does. A bare #<token> is the same
     // shape as an ordinary page anchor, so the app could not tell one from the other; the marker is
@@ -91,6 +87,16 @@ export default {
   // The path to the source root.
   // A stripped build reads the staged copy; preview reads the real source root.
   root: STAGED_ROOT,
+
+  // Where the site is served from. "/" for a domain root, "/<repo>/" for a GitHub Pages project site.
+  //
+  // Observable writes this into every page as <base href>, so it is what every relative asset reference
+  // resolves against. Getting it wrong is invisible on the app's own page - the browser is already in
+  // the right directory - and breaks a shared report, whose 404.html is served one segment deeper.
+  //
+  // Read from the environment rather than hardcoded: the repository does not know where it will be
+  // deployed, and baking one path in would silently break every other target.
+  base: process.env[SITE_BASE_ENV] || "/",
 
   // Some additional configuration options and their defaults:
   style: "oracle.css",

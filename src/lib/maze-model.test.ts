@@ -30,8 +30,8 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): 
   observedExits: new Map(),
   positions: [],
   turns: turns ?? [
-    { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null },
-    { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null },
+    { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+    { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
     {
       turn: 2,
       playerName: "Katara",
@@ -39,7 +39,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): 
       moves: ["MoveRight", "MoveUp"],
       applied: 1,
       cells: ["2,0", "2,1"],
-      rejectedMove: "MoveUp",
+      rejectedMove: "MoveUp", decayCharged: null,
     },
   ],
   outcome: outcome ?? {
@@ -110,8 +110,8 @@ describe("mazeFrameAt", () => {
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null },
-        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null },
+        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
       ],
     })
 
