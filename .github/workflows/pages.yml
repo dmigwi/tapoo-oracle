@@ -30,11 +30,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build the site
-        run: pnpm run build
-
+      # Before the build, not after: this reports the path the site will be served from, and the build
+      # has to know it. A project site lives under /<repo>/, and Observable writes that into every page
+      # as <base href>. With the default "/" every relative asset on a shared report's page - which is
+      # 404.html served one segment deeper, at /r/<token> - resolves outside the site and 404s.
       - name: Configure GitHub Pages
+        id: pages
         uses: actions/configure-pages@v6
+
+      - name: Build the site
+        # base_path is "" for a user or organisation site, which falls back to the domain root.
+        env:
+          ORACLE_SITE_BASE: ${{ steps.pages.outputs.base_path }}
+        run: pnpm run build
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

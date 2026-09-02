@@ -15,7 +15,9 @@ import {
   narrativeSummary,
   profileCards,
   provenanceTableData,
+  modelOutputRows,
   rubricQuestionRows,
+  warningHeadline,
 } from "./report-adapters";
 import { createInitialReportTabs } from "./report-tabs";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
@@ -95,20 +97,19 @@ function emptyState({html}: ReportUi, tab: ReportTab | undefined): Region {
         <li>Each report owns its URL and analysis; deleting a report removes both.</li>
       </ol>
       <div class="gist-help">
-        <strong>Host a local JSON payload with GitHub Gist</strong>
+        <strong>Public or non-sensitive payloads only</strong>
         <ol>
           <li>Open <a href="https://gist.github.com">gist.github.com</a> while signed in to GitHub.
             <ul>
               <li>Or skip the browser upload with the <a href="https://cli.github.com">GitHub CLI</a>, which
-                creates the gist and opens it ready for step 4:
+                creates a secret gist and opens it ready for step 4:
                 <pre><code>gh gist create --desc "Tapoo v2.5.1 output payloads from level 54" --web sample-agent-api-log.json</code></pre>
                 <code>--desc</code> takes the description as its own argument, so it has to come before
-                <code>--web</code>. <code>gh</code> creates secret gists by default, which is the safer of the two
-                choices in step 3; add <code>--public</code> only when the payload is safe to publish.</li>
+                <code>--web</code>. A secret gist is unlisted, not private; anyone with its URL can read it.</li>
             </ul>
           </li>
           <li>Create a new gist, name the file with a <code>.json</code> extension, and paste or drag in the Tapoo log JSON.</li>
-          <li>Create a secret gist for a share-by-link report, or a public gist only when the payload is safe to publish.</li>
+          <li>Do not use Gist for proprietary logs. Use authenticated storage with CORS and short-lived signed URLs instead.</li>
           <li>Open the created gist file's <strong>Raw</strong> view and copy that <code>gist.githubusercontent.com</code> URL.</li>
           <li>Paste the raw URL into <strong>Online JSON file URL</strong>, then select <strong>Load report</strong>.</li>
         </ol>
@@ -125,9 +126,11 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
     </section>`;
   }
   if (result?.ok && result.warnings.length > 0) {
+    // The headline states the cost in the reader's own terms before the caveats explain it. A person
+    // who reads nothing else should still come away knowing the report below is not to be quoted as-is.
     return html`<section class="notice notice-warn">
-        <strong>Read with care</strong>
-        <ul>${result.warnings.map((warning) => html`<li>${warning}</li>`)}</ul>
+        <strong>${warningHeadline(result.warnings)}</strong>
+        <ul>${result.warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
       </section>`;
   }
   return "";
@@ -248,6 +251,17 @@ function detail(ui: ReportUi, result: Analysis | undefined): Region {
         <h2>Operational Diagnostics</h2>
         <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
         ${diagnosticsTable(ui, result.report)}
+      </section>
+      <section class="events-section">
+        <h2>Model Output</h2>
+        <p class="section-note">What the provider reported about the model's own work. Not scored: a model given ten times the prompt and a model that spent its budget reasoning are doing different tasks, and that is context for the verdicts above rather than a verdict itself.</p>
+        ${ui.Inputs.table(modelOutputRows(result.report), {
+          columns: ["field", "value"],
+          header: {field: "MEASURE", value: "VALUE"},
+          sort: false,
+          rows: modelOutputRows(result.report).length,
+          layout: "auto"
+        })}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>

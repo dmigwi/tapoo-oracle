@@ -11,7 +11,7 @@
 //
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
-import {MOVES, cellKey, isMove, stepFrom} from "./log-contract";
+import {MOVES, cellKey, isMove, stepFrom} from "./geometry";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} from "./types";
 
 // --- Rendered grid geometry ---

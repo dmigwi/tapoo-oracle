@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
 import {answerRubric} from "./report"
-import {CAPABILITIES, VIOLATIONS, aggregate, parsePrediction} from "./rubric-engine"
+import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
 import type {GroupResult, LogEntry, LogLevel, Report} from "./types"
 import {at} from "./test-support";
 
@@ -459,3 +459,134 @@ describe("buildLevels", () => {
     expect(first.cells).toEqual(["0,0", "1,0"])
   })
 })
+
+describe("how buildContext decides which turn an entry belongs to", () => {
+  // Three regimes, and the index picks between them. The first is what every current log uses; the
+  // other two exist because older logs are still analyzed rather than refused.
+  it("reads each entry's own turn when the index placed them all", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 1}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 1}),
+    ])
+
+    expect(context.submissions.map((s) => s.turn)).toEqual([0, 1])
+    expect([...context.turnsWithPrediction].sort()).toEqual([0, 1])
+  })
+
+  it("attributes an entry to its own turn, not to whichever request preceded it", () => {
+    // The cursor this replaced only moved on request entries, so anything between two requests
+    // inherited the earlier one's number. Here the response says turn 4 and there is no request for
+    // it - under the old rule the prediction would have been filed under turn 0.
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 4}),
+    ])
+
+    expect(context.submissions.map((s) => s.turn)).toEqual([4])
+  })
+
+  it("still infers boundaries from predictions when no entry carries a turn", () => {
+    // Pre-counter logs. Without this every entry collapses onto turn 0 and the per-turn questions pass
+    // trivially, which is worse than being unable to answer them.
+    const withoutTurns = [
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveLeft"]}'}}}),
+    ].map((logEntry) => {
+      const copy: Partial<LogEntry> = {...logEntry}
+      delete copy.turn
+      return copy as LogEntry
+    })
+
+    expect(buildContext(withoutTurns).submissions.map((s) => s.turn)).toEqual([0, 1, 2])
+  })
+
+  it("trusts the field on a log where only some entries carry a turn", () => {
+    // The index will not place these - its spans have to tile the array - but a turn number that is
+    // present is still better evidence than a cursor counting predictions.
+    const partial: LogEntry[] = [
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 7}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 7}),
+    ]
+    const stripped: Partial<LogEntry> = {...at(partial, 1)}
+    delete stripped.turn
+
+    const context = buildContext([at(partial, 0), stripped as LogEntry])
+    expect(context.submissions.map((s) => s.turn)).toEqual([7])
+  })
+})
+
+describe("an OpenAI-shaped provider response", () => {
+  // End to end through buildContext, not just the reader: the point is that a prediction logged this
+  // way becomes a submission, which is what the turn count, the replay and every per-turn question are
+  // built from.
+  const openAiResponse = (content: string, turn: number): LogEntry =>
+    entry(LOG_EVENTS.response, {payload: {model: "glm-5.3", choices: [{finish_reason: "stop",
+      message: {role: "assistant", content}}]}}, {turn})
+
+  it("becomes a submission, not an empty response", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      openAiResponse('{"moves":["MoveUp"]}', 0),
+    ])
+
+    expect(context.submissions.map((s) => s.moves)).toEqual([["MoveUp"]])
+    expect(context.emptyResponses).toBe(0)
+  })
+
+  it("has its tool calls read from the same place", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [{name: "get_maze_structure"}], messages: []}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {choices: [{finish_reason: "tool_calls", message: {content: "",
+        tool_calls: [{function: {name: "get_maze_structure", arguments: "{}"}}]}}]}}, {turn: 0}),
+    ])
+
+    expect(context.toolCalls).toEqual(["get_maze_structure"])
+    expect(context.emptyResponses).toBe(0)
+  })
+
+  it("names the model from the payload root, as the other shape does", () => {
+    expect(buildContext([openAiResponse('{"moves":["MoveUp"]}', 0)]).model).toBe("glm-5.3")
+  })
+})
+
+describe("an Anthropic-shaped provider response", () => {
+  // Anthropic has no `message` and no `choices` - content is a top-level array of typed blocks, and
+  // tool calls are `tool_use` entries rather than a tool_calls list. Before the contract read all
+  // three shapes, every Anthropic response would have counted as empty, exactly as every OpenAI one
+  // did: zero predictions, zero turns, and a replay scrubber reading "0 / 0".
+  const anthropic = (content: unknown[], turn: number): LogEntry =>
+    entry(LOG_EVENTS.response, {payload: {model: "claude", role: "assistant", content,
+      usage: {input_tokens: 3100, output_tokens: 24}}}, {turn})
+
+  it("becomes a submission, not an empty response", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      anthropic([{type: "thinking", thinking: "considering"},
+        {type: "text", text: '{"moves":["MoveUp"]}'}], 0),
+    ])
+
+    expect(context.submissions.map((s) => s.moves)).toEqual([["MoveUp"]])
+    expect(context.emptyResponses).toBe(0)
+  })
+
+  it("has its tool calls read from tool_use blocks", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [{name: "get_maze_structure"}], messages: []}, {turn: 0}),
+      anthropic([{type: "tool_use", id: "call_1", name: "get_maze_structure", input: {}}], 0),
+    ])
+
+    expect(context.toolCalls).toEqual(["get_maze_structure"])
+    expect(context.emptyResponses).toBe(0)
+  })
+
+  it("counts its tokens into the model output summary", () => {
+    const context = buildContext([anthropic([{type: "text", text: '{"moves":["MoveUp"]}'}], 0)])
+
+    expect(context.output.promptTokens).toBe(3100)
+    expect(context.output.completionTokens).toBe(24)
+  })
+})
+

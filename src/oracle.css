@@ -252,6 +252,14 @@ a[href] {
   flex: 0 0 auto;
 }
 
+.report-share-disclosure {
+  grid-column: 1 / -1;
+  max-width: none;
+  margin: 0;
+  color: var(--oracle-muted);
+  font-size: var(--fs-small);
+}
+
 .report-share-error {
   max-width: 800px;
   margin: 0;
@@ -715,7 +723,7 @@ td {
   font-weight: 700;
 }
 
-/* The whole row is a click target (enableRowSelection in components/oracle.js), so it has to look
+/* The whole row is a click target (enableRowSelection in src/lib/rubric-table.ts), so it has to look
    like one. The hover lift is the affordance; without it the only hint that a row responds is
    finding out that it does. */
 .events-section tbody tr {
@@ -871,6 +879,45 @@ td {
   height: auto;
 }
 
+/* Names each decay colour and counts it, so a two-pixel bar means something without being hovered. */
+.maze-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.4rem calc(var(--maze-thumb) / 2) 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-micro);
+  color: var(--oracle-muted);
+}
+
+.maze-legend[hidden] {
+  display: none;
+}
+
+.maze-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.maze-legend-swatch {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 0.1rem;
+  background: var(--oracle-muted);
+}
+
+.maze-legend-swatch.is-decay-1 { background: var(--oracle-line); }
+.maze-legend-swatch.is-decay-2 { background: var(--oracle-rose); }
+.maze-legend-swatch.is-decay-3 { background: var(--oracle-ink); }
+
+/* The lightest step is barely there against paper on purpose - an ordinary turn should not shout - but
+   a swatch has no height to help it read, so it keeps an outline. */
+.maze-legend-swatch.is-decay-1 {
+  border: 1px solid var(--oracle-muted);
+}
+
 .maze-caption {
   margin: 0.5rem 0 0.75rem;
   color: var(--oracle-muted);
@@ -888,10 +935,195 @@ td {
   display: none;
 }
 
-.maze-range {
+/* The slider and its two bar strips share one column, so a bar sits under the position it describes.
+   --maze-thumb approximates the inset a native range keeps at each end of its track: without it the
+   strips run the full width while the thumb never reaches either edge, and the two drift apart by half
+   a thumb. Imperceptible across 464 bars, about half a bar across 16. */
+.maze-track {
+  --maze-thumb: 0.7rem;
   flex: 1 1 auto;
   min-width: 0;
-  accent-color: var(--oracle-terracotta);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+/* Styled rather than native, so the three layers share one coordinate system.
+   A native range keeps a 2px margin and insets its track by an unknown share of the thumb, so bars
+   aligned to the input's box drifted from the positions they describe. With appearance:none the track
+   is the full width and the thumb travels from --maze-thumb/2 to width - --maze-thumb/2, which is
+   exactly the inset the strips use. */
+.maze-range {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 0;
+  margin: 0;
+  height: var(--maze-thumb);
+  background: transparent;
+  cursor: pointer;
+}
+
+/* The played share, in the same terracotta the trail uses. --progress is set on each paint, and the
+   bar strips read the same figure so all three agree about how far along you are. */
+.maze-range::-webkit-slider-runnable-track {
+  height: 0.2rem;
+  border-radius: 0.2rem;
+  background: linear-gradient(
+    to right,
+    var(--oracle-terracotta) 0 var(--progress, 100%),
+    var(--oracle-line) var(--progress, 100%) 100%
+  );
+}
+
+.maze-range::-moz-range-track {
+  height: 0.2rem;
+  border-radius: 0.2rem;
+  background: linear-gradient(
+    to right,
+    var(--oracle-terracotta) 0 var(--progress, 100%),
+    var(--oracle-line) var(--progress, 100%) 100%
+  );
+}
+
+.maze-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: var(--maze-thumb);
+  height: var(--maze-thumb);
+  margin-top: calc((0.2rem - var(--maze-thumb)) / 2);
+  border: none;
+  border-radius: 50%;
+  background: var(--oracle-terracotta);
+}
+
+.maze-range::-moz-range-thumb {
+  width: var(--maze-thumb);
+  height: var(--maze-thumb);
+  border: none;
+  border-radius: 50%;
+  background: var(--oracle-terracotta);
+}
+
+.maze-range:focus-visible {
+  outline: 2px solid var(--oracle-ink);
+  outline-offset: 2px;
+}
+
+/* Two classes, to outrank a rule this file imports.
+   observablehq:default.css - pulled in by the @import at the top of this file, so it ships inside our
+   own stylesheet - sizes every text-like input, range included:
+       input:not([type]), ..., input[type=range] { width: 240px }
+   That selector is (0,1,1); a bare `.maze-range` is (0,1,0) and loses, so the slider stayed 240px wide
+   while the bar strips filled their container and the two drifted apart by the difference. Scoping to
+   the track makes it (0,2,0) and wins on merit rather than with !important. */
+.maze-track .maze-range {
+  width: 100%;
+}
+
+/* One bar per turn, sharing the strip whatever the count. No gap: at 464 turns a gap would cost more
+   width than the bars themselves. */
+.maze-bars {
+  display: flex;
+  align-items: flex-end;
+  margin: 0 calc(var(--maze-thumb) / 2);
+}
+
+/* The two strips get height in proportion to the range each has to resolve.
+   Batch size runs 1 to 12 in a real round, so the top strip needs the room to tell four moves from
+   six. A turn's decay has only ever been 1 or 2 across every log to hand, so past the first step the
+   bottom strip would be spending height on distinctions its data does not make. */
+.maze-bars-moves {
+  height: 2.75rem;
+}
+
+.maze-bars[hidden] {
+  display: none;
+}
+
+/* Enough height for three steps to be distinguishable, and no more. The moves strip above is nearly
+   twice this because batch size runs to twelve; a charge runs to three, so thirds of 1.5rem are eight
+   pixels apart, which is a difference a reader can see without the strip competing with the maze. */
+.maze-bars-decay {
+  height: 1.5rem;
+  align-items: flex-start;
+}
+
+.maze-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  background: var(--oracle-line);
+}
+
+/* The applied share fills from the bottom, so what is left unfilled is exactly what the agent asked for
+   and did not get. A gradient rather than a nested element keeps this to one node per turn.
+
+   Amber, not the sage this used to be. Every other colour on the page sits between hue 3 and 38 -
+   paper, line, ink, muted, terracotta, rose - and sage is hue 142, the one cool mark in a warm set.
+   It read as borrowed from another design. Amber shares the paper's own hue at a fraction of its
+   lightness, so a filled bar reads as the page's ink rather than as a foreign accent. */
+.maze-bars-moves .maze-bar {
+  background: linear-gradient(
+    to top,
+    var(--oracle-amber) 0 var(--applied, 0%),
+    var(--oracle-line) var(--applied, 0%) 100%
+  );
+}
+
+/* Muted rather than terracotta: the slider directly above is terracotta, and two adjacent rows in the
+   same colour read as one measure split in half. The three warm hues are separated by saturation as
+   much as by hue - amber is vivid, this is quiet, the slider sits between them. */
+/* Tapoo charges a base unit for every turn, two when a move was invalid, three when the response broke
+   the output format.
+
+   Separated by lightness, not by hue. These were line, terracotta and rose - and terracotta against
+   rose is a contrast ratio of 1.17, two muted reds ten degrees apart that are the same colour at bar
+   width. This file already says as much where it explains why a refused move was marked by shape
+   rather than by hue.
+
+   The ramp is 1.42 : 6.41 : 14.55 against paper, adjacent steps 4.51 and 2.27, and the ends 10.23
+   apart. Lightness survives what hue does not: greyscale, a red-green deficiency, and a bar two pixels
+   wide. It also reads in the right order without being learned - a heavier mark is a heavier charge.
+
+   Rose in the middle rather than terracotta, which the slider directly above already uses: a penalty
+   should read as its own mark, not as a piece of the scrubber that slipped a row. */
+.maze-bars-decay .maze-bar {
+  background: var(--oracle-muted);
+}
+
+.maze-bars-decay .maze-bar.is-decay-1 {
+  background: var(--oracle-line);
+}
+
+.maze-bars-decay .maze-bar.is-decay-2 {
+  background: var(--oracle-rose);
+}
+
+.maze-bars-decay .maze-bar.is-decay-3 {
+  background: var(--oracle-ink);
+}
+
+/* A charge nothing reported. Outlined rather than flat: drawing it at zero height would claim the turn
+   was free, when the truth is that its cost was never written down. */
+.maze-bar.is-unknown {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--oracle-line) 0 2px,
+    transparent 2px 4px
+  );
+  opacity: 1;
+}
+
+/* The turn the scrubber is on, so the strips and the slider agree about where you are. */
+.maze-bar.is-current {
+  outline: 1px solid var(--oracle-ink);
+  outline-offset: -1px;
+}
+
+/* Turns the scrubber has not reached, faded the way the slider fades the track ahead of its thumb. The
+   three layers then read as one control: everything left of the thumb has happened, everything right
+   of it has not. */
+.maze-bar.is-future {
+  opacity: 0.28;
 }
 
 .maze-readout {

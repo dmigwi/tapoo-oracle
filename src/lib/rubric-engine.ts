@@ -20,12 +20,16 @@
 import {
   DECLARED_TOOLS,
   LOG_EVENTS,
+  assistantMessage,
+  responseUsage,
   stepFrom,
   cellFromLogged,
   isMove,
   movesFromLogged,
 } from "./log-contract"
+import {indexLog} from "./log-index"
 import type {
+  LogIndex,
   CellKey,
   Context,
   GroupKind,
@@ -100,17 +104,39 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
 
 // buildContext walks the log once and derives everything the questions need. It takes already-parsed
 // entries rather than a path so the same derivation serves a file on disk and a pasted payload.
-export function buildContext(entries: LogEntry[], { label = "log" }: { label?: string } = {}): Context {
-
-  // Logs written before the turn counter landed have no turn field, so turn boundaries are inferred
-  // from predictions instead - exactly one closes each turn. Without this every entry collapses onto
-  // turn 0 and the per-turn questions pass trivially.
-  const hasTurnField = entries.some((entry) => "turn" in entry)
+export function buildContext(
+  entries: LogEntry[],
+  { label = "log", index = indexLog(entries) }: { label?: string; index?: LogIndex } = {},
+): Context {
+  // Which turn an entry belongs to is the index's answer, not a cursor's.
+  //
+  // `turnSource === "field"` means the index placed every entry in a span, so each entry's own turn
+  // number is authoritative and the spans tile the array with no gap or overlap. That is a stronger
+  // guarantee than this loop used to have: it tracked the turn on request entries only, and everything
+  // between two requests inherited whatever the last one set.
+  //
+  // Two weaker cases remain, and neither can be answered by a map:
+  //
+  //   Mixed - some entries carry a turn and some do not. The index will not place those, but the field
+  //   is still the best evidence there is, so the cursor behaviour is kept for them.
+  //
+  //   None - logs written before the turn counter landed. Boundaries come from predictions instead,
+  //   exactly one closing each turn. Without this every entry collapses onto turn 0 and the per-turn
+  //   questions pass trivially.
+  const indexedTurns = index.turnSource === "field"
+  const hasTurnField = indexedTurns || entries.some((entry) => "turn" in entry)
 
   const context: Context = {
     label,
     model: null,
     player: null,
+    apis: new Set(),
+    reasoningEfforts: new Set(),
+    replayByReportingTurn: new Map(),
+    output: {
+      responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
+      cachedPromptTokens: null, durationNs: null, finishReasons: new Map(),
+    },
     exits: new Map(),
     positions: [],
     timeline: [],
@@ -142,9 +168,22 @@ export function buildContext(entries: LogEntry[], { label = "log" }: { label?: s
   for (const entry of entries) {
     const details = asRecord(entry.details)
 
+    // Read from the index's placement of this entry, so a tool result or an outcome is attributed to
+    // the turn it was actually written in rather than to whichever request happened to precede it.
+    if (indexedTurns && typeof entry.turn === "number") {
+      currentTurn = entry.turn
+    }
+
     if (entry.payload === LOG_EVENTS.request) {
-      if (hasTurnField && typeof entry.turn === "number") {
+      if (!indexedTurns && hasTurnField && typeof entry.turn === "number") {
         currentTurn = entry.turn
+      }
+
+      // Read from the request rather than the response: the provider and the effort are what Tapoo
+      // asked for, and a request that never came back still records what was asked.
+      if (typeof details.api === "string" && details.api) context.apis.add(details.api)
+      if (typeof details.reasoning === "string" && details.reasoning) {
+        context.reasoningEfforts.add(details.reasoning)
       }
 
       for (const tool of asArray(details.tools).map(asRecord)) {
@@ -207,6 +246,18 @@ export function buildContext(entries: LogEntry[], { label = "log" }: { label?: s
 
         if ("lastMoveStatus" in payload) {
           noteTool("get_last_prediction_outcome")
+
+          // Keyed by the turn that read it, not by the moves it describes.
+          //
+          // annotateApplied keys the same payload by JSON.stringify of its move list, and a move list
+          // is not unique to a turn: in a real 464-turn log, 502 readings collapse onto 86 distinct
+          // sequences, 30 of which were seen with different lastAppliedMoveIndex values. Last write
+          // wins, so 63 turns ended up with another turn's path, applied count and refused move.
+          //
+          // A turn re-reads the same result on each of its requests, so writing it repeatedly is
+          // idempotent - no turn was ever observed reporting two different values.
+          context.replayByReportingTurn.set(currentTurn, payload)
+
           if (payload.lastMoveStatus !== null) {
             const key = JSON.stringify([
               payload.lastMoveStatus,
@@ -230,25 +281,35 @@ export function buildContext(entries: LogEntry[], { label = "log" }: { label?: s
       const body = asRecord(details.payload)
       context.model = typeof body.model === "string" ? body.model : context.model
 
-      const message = body.message
+      // Counted before the branches below, every one of which can skip the rest of this response. A
+      // response with no usable message still cost tokens and still stopped for a reason, and a
+      // summary that dropped those would understate what the model actually did.
+      const usage = responseUsage(body)
+      const totals = context.output
+      totals.responses += 1
+      for (const field of ["promptTokens", "completionTokens", "reasoningTokens", "cachedPromptTokens", "durationNs"] as const) {
+        const reported = usage[field]
+        if (reported !== null) totals[field] = (totals[field] ?? 0) + reported
+      }
+      if (usage.finishReason !== null) {
+        totals.finishReasons.set(usage.finishReason, (totals.finishReasons.get(usage.finishReason) ?? 0) + 1)
+      }
+
+      const message = assistantMessage(body)
       if (!message) {
         context.emptyResponses += 1
         continue
       }
 
-      const calls = asArray(asRecord(message).tool_calls).map(asRecord)
-      if (calls.length > 0) {
-        context.toolCalls.push(
-          ...calls.map((call) => {
-            const name = asRecord(call.function).name
-            return typeof name === "string" ? name : undefined
-          }),
-        )
+      // Tool names arrive already normalized: Ollama and OpenAI list them under tool_calls, Anthropic
+      // as tool_use content blocks, and the contract reads all three the same way.
+      if (message.toolNames.length > 0) {
+        context.toolCalls.push(...message.toolNames)
         continue
       }
 
-      const content = asRecord(message).content
-      if (typeof content !== "string" || !content.trim()) {
+      const content = message.content
+      if (content === null || !content.trim()) {
         context.emptyResponses += 1
         continue
       }
@@ -263,6 +324,7 @@ export function buildContext(entries: LogEntry[], { label = "log" }: { label?: s
       context.submissions.push(record)
       context.turnsWithPrediction.add(currentTurn)
       context.timeline.push({ kind: "submission", record })
+      // Only the no-turn-field log advances a cursor; an indexed one already knows.
       if (!hasTurnField) {
         currentTurn += 1
       }

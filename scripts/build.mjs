@@ -24,13 +24,13 @@
 //
 // src/ is never modified.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { spawn } from "node:child_process"
 
 import * as esbuild from "esbuild"
 
-import { STAGED_ROOT, STRIPPED_BUILD_ENV } from "./build-root.mjs"
+import { SITE_BASE_ENV, STAGED_ROOT, STRIPPED_BUILD_ENV } from "./build-root.mjs"
 
 const SOURCE_ROOT = "src"
 
@@ -54,6 +54,102 @@ const CONTENT = ["index.md", "404.md", "oracle.css", "images"]
 const STAGED_ASSET_DIRS = ["images"]
 
 const watching = process.argv.includes("--watch")
+
+// --finish runs *after* `observable build`, which is the only time public/404.html exists. The staging
+// half of this script has to run before it, so the two halves are the same file under two flags rather
+// than a second script that would drift from this one's constants.
+const finishing = process.argv.includes("--finish")
+
+// Where Observable writes the built site.
+const OUTPUT_ROOT = "public"
+
+// absolutiseFavicons rewrites every generated favicon reference to a site-absolute URL.
+//
+// A shared report first loads 404.html, which redirects to the app root with the token in #r=. Once
+// the report has loaded, rememberActiveReport() restores /r/<token> with history.replaceState(). That
+// changes the document URL without reloading index.html. Chrome may resolve its deferred favicon only
+// after that history update, turning "./_file/..." into "/r/_file/...". Making the favicon absolute on
+// every page removes the timing dependency: neither redirects nor History API updates can retarget it.
+function absolutiseFavicons() {
+  const prefix = sitePrefix()
+  let rewrites = 0
+
+  for (const page of filesIn(OUTPUT_ROOT).filter((path) => path.endsWith(".html"))) {
+    const html = readFileSync(page, "utf8")
+    const rewritten = html.replace(
+      /(<link\b(?=[^>]*\brel="icon")[^>]*\bhref=")\.\/([^"]*)"/g,
+      (_match, attribute, path) => `${attribute}${prefix}${path}"`,
+    )
+
+    if (rewritten !== html) {
+      writeFileSync(page, rewritten)
+      rewrites += 1
+    }
+
+    if (/<link\b(?=[^>]*\brel="icon")[^>]*\bhref="\.\//.test(rewritten)) {
+      throw new Error(`${page} still has a relative favicon reference after rewriting.`)
+    }
+  }
+
+  console.log(`Rewrote relative favicon references in ${rewrites} generated HTML page${rewrites === 1 ? "" : "s"}\n`)
+}
+
+function sitePrefix() {
+  const base = process.env[SITE_BASE_ENV] || "/"
+  return base.endsWith("/") ? base : `${base}/`
+}
+
+// absolutiseRedirectPage rewrites 404.html's remaining relative asset references to site-absolute ones.
+//
+// This is the one page served at a depth it cannot know. A shared report lives at /r/<token>, and a
+// static host answers it with 404.html *at that path* - so every "./x" on it resolves to "/r/x" and
+// 404s: the favicon, the stylesheet, every module preload.
+//
+// Observable's <base href> is meant to correct that, and on paper it does. This page is the one place
+// that cannot afford to depend on it: the base is emitted by the framework rather than by us, it has to
+// match the deployment path exactly, and a shared link is the one URL a reader arrives at cold, where a
+// broken page is the entire experience. Rewriting the references removes the dependency rather than
+// tuning it, so the page resolves identically at any depth, under any base, on any host.
+//
+// Only this page. Every other one is served from the directory its assets sit in.
+function absolutiseRedirectPage() {
+  const page = join(OUTPUT_ROOT, "404.html")
+  if (!existsSync(page)) {
+    throw new Error(`Expected ${page} after the build. The redirect page is what serves every shared report link.`)
+  }
+
+  const prefix = sitePrefix()
+  const html = readFileSync(page, "utf8")
+
+  // Attributes, and the module specifiers in the page's own inline script. Framework writes
+  //   import {define} from "./_observablehq/client.<hash>.js"
+  // there, and a module specifier resolves against the document base exactly as an attribute does.
+  const rewritten = html
+    .replace(/((?:href|src)=")\.\/([^"]*)"/g, (_match, attribute, path) => `${attribute}${prefix}${path}"`)
+    .replace(/(from\s*")\.\/([^"]*)"/g, (_match, keyword, path) => `${keyword}${prefix}${path}"`)
+    .replace(/(import\(")\.\/([^"]*)"/g, (_match, keyword, path) => `${keyword}${prefix}${path}"`)
+
+  const remaining = (rewritten.match(/"\.\//g) ?? []).length
+  if (remaining > 0) {
+    throw new Error(
+      `${page} still holds ${remaining} relative reference(s) after rewriting. This page is served at ` +
+        "/r/<token>, where anything relative resolves a directory too deep and 404s.",
+    )
+  }
+
+  writeFileSync(page, rewritten)
+  const rewrites = (html.match(/"\.\//g) ?? []).length
+
+  // The favicon is not among these - absolutiseFavicons covers it on every page, because it is the one
+  // asset a History API update can retarget after the document has loaded.
+  console.log(`Rewrote ${rewrites} relative reference${rewrites === 1 ? "" : "s"} in ${page} to ${prefix}\n`)
+}
+
+if (finishing) {
+  absolutiseFavicons()
+  absolutiseRedirectPage()
+  process.exit(0)
+}
 
 function filesIn(directory) {
   const found = []

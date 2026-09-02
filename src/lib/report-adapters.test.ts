@@ -1,35 +1,21 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
-import {diagnosticRows, diagnosticTableData, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows} from "./report-adapters"
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
 import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, ReportTabsState, TapooLog} from "./types"
-import {at, expectErr, expectOk, must} from "./test-support";
+import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
-const fixtureUrl =
-  "https://gist.githubusercontent.com/dmigwi/908ef03ef653fe39581f0756122ffe4c/raw/" +
-  "9495b1c9b5c69f0c4276dd0d9ea1ae638be8db58/sample-agent-api-log.json"
-
+// Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
+// local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
 let fixture: Record<string, unknown>
 let fixtureText: string
 let fixtureReport: Report
 let fixtureSource: TapooLog
 
-beforeAll(async () => {
-  let response
-  try {
-    response = await fetch(fixtureUrl, {signal: AbortSignal.timeout(10_000)})
-  } catch (error) {
-    console.warn(`Remote test fixture is unavailable: ${fixtureUrl}`)
-    throw error
-  }
-
-  if (!response.ok) {
-    console.warn(`Remote test fixture returned ${response.status}: ${fixtureUrl}`)
-    throw new Error(`Could not load test fixture: ${response.status} ${response.statusText}`)
-  }
-
-  fixtureText = await response.text()
+beforeAll(() => {
+  fixtureText = JSON.stringify(fixtureData)
   fixture = JSON.parse(fixtureText) as Record<string, unknown>
 
   const result = analyzeLogText(fixtureText, {label: "fixture"})
@@ -47,7 +33,7 @@ describe("analyzeLogText", () => {
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
-    expect(expectOk(result).report.model).toBe("test-model")
+    expect(expectOk(result).report.model).toBe("gemma4")
     expect(expectOk(result).report.capabilities).toHaveLength(9)
     expect(expectOk(result).report.violations).toHaveLength(6)
   })
@@ -77,7 +63,7 @@ describe("analyzeLogText", () => {
   it("surfaces contract warnings without refusing the log", () => {
     const result = analyzeLogText(JSON.stringify({ ...fixture, mode: "human" }))
     expect(result.ok).toBe(true)
-    expect(expectOk(result).warnings.join(" ")).toMatch(/not "agent-api"/)
+    expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
   })
 
   it("retains the source URL when one is provided", () => {
@@ -215,8 +201,8 @@ describe("report URL tabs", () => {
 describe("presentation", () => {
   it("keeps capabilities and violations as separate fractions", () => {
     const cards = profileCards(fixtureReport)
-    expect(at(cards, 0)).toMatchObject({ label: "Capabilities demonstrated", value: "7/9" })
-    expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "0/6" })
+    expect(at(cards, 0)).toMatchObject({ label: "Capabilities demonstrated", value: "5/9" })
+    expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "2/6" })
 
     // The rubric forbids collapsing the two into one score interval.
     expect(cards.map((card) => card.label)).not.toContain("Score")
@@ -227,9 +213,9 @@ describe("presentation", () => {
     const structural = rows.filter((row) => row.id?.startsWith("C7.") ?? false)
 
     expect(structural).toHaveLength(2)
-    expect(at(structural, 0)).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (1/2)"})
+    expect(at(structural, 0)).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (0/2)"})
     expect(at(structural, 0).question).toMatch(/corridor cells/)
-    expect(at(structural, 1)).toMatchObject({id: "C7.Q2", answer: "YES", groupResult: "NO (1/2)"})
+    expect(at(structural, 1)).toMatchObject({id: "C7.Q2", answer: "NO", groupResult: "NO (0/2)"})
   })
 
   it("provides one definition for every evaluated rubric answer", () => {
@@ -269,7 +255,7 @@ describe("presentation", () => {
 
   it("describes provenance without inventing missing fields", () => {
     const rows = provenanceRows(fixtureSource, fixtureReport)
-    expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.0")
+    expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.1")
 
     const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
@@ -281,16 +267,16 @@ describe("presentation", () => {
     const table = provenanceTableData(fixtureSource, fixtureReport)
     expect(table.rows).toHaveLength(1)
     expect(table.rows[0]).toMatchObject({
-      "Tapoo version": "2.5.0",
-      Model: "test-model",
-      Player: "Blue",
+      "Tapoo version": "2.5.1",
+      Model: "gemma4",
+      Player: "Katara",
     })
   })
 
   it("states what a negative answer does and does not mean", () => {
     const summary = narrativeSummary(fixtureReport)
-    expect(summary).toMatch(/7 of 9 capabilities/)
-    expect(summary).toMatch(/Trailblazer/)
+    expect(summary).toMatch(/5 of 9 capabilities/)
+    expect(summary).toMatch(/Navigator/)
     expect(summary).toMatch(/not that the model is incapable/)
   })
 })
@@ -320,5 +306,106 @@ describe("groupResultTone", () => {
     // "NO (0/1)" contains no YES, but a fraction or label that happened to could otherwise flip the
     // colour of a row that was never confirmed.
     expect(groupResultTone("capability", "NO (0/1) YES")).toBeNull()
+  })
+})
+
+describe("warningHeadline", () => {
+  // A warning is only shown when it costs the reader something, so the banner names that cost instead
+  // of asking them to infer it. The old heading was "Read with care", which is a tone rather than a
+  // finding - a reader could not tell from it whether a verdict below was wrong or whether the report
+  // was merely missing its provenance.
+  const inaccurate = {impact: "inaccurate", message: "x"} as const
+  const incomplete = {impact: "incomplete", message: "y"} as const
+
+  it("says a verdict may be wrong when one may be", () => {
+    expect(warningHeadline([inaccurate])).toBe("This report may be inaccurate.")
+  })
+
+  it("says what is missing when nothing is wrong, only absent", () => {
+    expect(warningHeadline([incomplete])).toBe("This report is missing important parts.")
+  })
+
+  it("reports both harms rather than collapsing them into the louder one", () => {
+    expect(warningHeadline([incomplete, inaccurate]))
+      .toBe("This report may be inaccurate and is missing important parts.")
+  })
+
+  it("says nothing when there is nothing to say", () => {
+    expect(warningHeadline([])).toBeNull()
+  })
+
+  it("classifies the caveats a real log produces", () => {
+    // A non-agent-api round is answered by questions written for a different mode, so the verdicts may
+    // be wrong; a missing build version leaves every verdict standing but unattributable.
+    const wrongMode = analyzeLogText(JSON.stringify({...fixture, mode: "human"}))
+    expect(expectOk(wrongMode).warnings.map((w) => w.impact)).toContain("inaccurate")
+    expect(warningHeadline(expectOk(wrongMode).warnings))
+      .toBe("This report may be inaccurate.")
+
+    const noVersion = analyzeLogText(JSON.stringify({...fixture, version: undefined}))
+    expect(expectOk(noVersion).warnings.every((w) => w.impact === "incomplete")).toBe(true)
+    expect(warningHeadline(expectOk(noVersion).warnings)).toBe("This report is missing important parts.")
+  })
+})
+
+describe("modelOutputRows", () => {
+  // What the provider said about its own work, normalized across two API shapes that report
+  // overlapping but different things. Not scored - it is context for reading the verdicts.
+  const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
+    ...expectOk(analyzeLogText(fixtureText, {label: "fixture"})).report,
+    output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
+      cachedPromptTokens: null, durationNs: null, finishReasons: [], ...output},
+  })
+
+  const valueOf = (report: Report, field: string) =>
+    modelOutputRows(report).find((row) => row.field === field)?.value
+
+  it("gives a total and a per-response average, since a total only says how long the run was", () => {
+    const report = reportWithOutput({responses: 4, promptTokens: 4000, completionTokens: 400})
+
+    expect(valueOf(report, "Prompt tokens")).toBe("4,000 (1,000 per response)")
+    expect(valueOf(report, "Completion tokens")).toBe("400 (100 per response)")
+  })
+
+  it("omits what a provider did not report, rather than printing a column of 'not recorded'", () => {
+    // Ollama reports no reasoning or cached-token counts; OpenAI reports no duration.
+    const ollama = reportWithOutput({responses: 2, promptTokens: 100, completionTokens: 20, durationNs: 4e9})
+
+    expect(valueOf(ollama, "Reasoning tokens")).toBeUndefined()
+    expect(valueOf(ollama, "Cached prompt tokens")).toBeUndefined()
+    expect(valueOf(ollama, "Model time")).toBeDefined()
+  })
+
+  it("reads a long run the way a person would say it", () => {
+    // One real log spent 19,174 seconds, which is five and a third hours and reads as neither.
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 19_174e9}), "Model time"))
+      .toBe("5h 20m (5h 20m per response)")
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 154e9}), "Model time"))
+      .toBe("2m 34s (2m 34s per response)")
+    expect(valueOf(reportWithOutput({responses: 1, durationNs: 4.83e9}), "Model time"))
+      .toBe("4.83s (4.83s per response)")
+  })
+
+  it("names every finish reason with its count, including the rare one", () => {
+    // "length" appearing at all means the model was cut off mid-answer, and that is worth seeing even
+    // when it happened three times in 719.
+    const report = reportWithOutput({responses: 719, finishReasons: [["tool_calls", 359], ["stop", 357], ["length", 3]]})
+
+    expect(valueOf(report, "Finish reasons")).toBe("tool_calls (359), stop (357), length (3)")
+  })
+
+  it("still says how many responses there were when nothing else was reported", () => {
+    expect(modelOutputRows(reportWithOutput({responses: 1}))).toEqual([{field: "Responses", value: "1"}])
+  })
+})
+
+describe("provenance names the setup a verdict depends on", () => {
+  it("reports the API provider and the reasoning effort", () => {
+    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
+    const value = (field: string) =>
+      provenanceRows(result.source, result.report).find((row) => row.field === field)?.value
+
+    expect(value("API provider")).toBe("ollama")
+    expect(value("Reasoning effort")).toBe("max")
   })
 })

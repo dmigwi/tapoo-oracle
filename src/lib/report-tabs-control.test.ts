@@ -213,6 +213,7 @@ describe("createReportTabsInput sharing", () => {
     expect(button.querySelector("svg")).not.toBeNull()
     // Named for what it produces. "Copy" describes the clipboard; the reader wants a link.
     expect(button.textContent).toContain("Share Report Link")
+    expect(query(panel, ".report-share-disclosure").textContent).toMatch(/reversibly contains the source URL/)
     node.remove()
   })
 

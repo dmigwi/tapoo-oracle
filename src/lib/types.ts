@@ -37,12 +37,65 @@ export type LogEntry = {
   details?: unknown;
 };
 
+// --- Log index ---
+
+/** What a log level says about who is answerable for an entry.
+ *
+ * Tapoo writes the level with that meaning: `warn` is an agent error that carries a penalty, `error`
+ * is a failure outside the agent's control that disabled it, and `info` is everything else. The rubric
+ * already draws this line - endpoint failures are kept out of the violation profile because they can
+ * come from infrastructure rather than reasoning - but it drew it by matching payload sentences. The
+ * level says the same thing, declared by the producer. */
+export type LogClass = "neutral" | "penalised" | "external";
+
+/** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
+export type TurnSpan = {
+  game: number | null;
+  level: number | null;
+  turn: number;
+  start: number;
+  end: number;
+};
+
+export type TurnIdentity = Pick<TurnSpan, "game" | "level" | "turn">;
+
+/** How the turn spans were arrived at.
+ *
+ * "field" means every entry carried a turn number. "unavailable" means at least one did not: logs
+ * written before the turn counter landed infer their boundaries from predictions instead, which
+ * buildContext still does for itself. The index says so rather than guessing, so a caller never reads
+ * spans that were invented. */
+export type TurnSource = "field" | "unavailable";
+
+export type LogSummary = {
+  entries: number;
+  turns: number;
+  levels: Record<LogLevel, number>;
+  /** Count per payload sentence, in the order first seen. */
+  events: Map<string, number>;
+  penalised: number;
+  external: number;
+  firstEpochMs: number | null;
+  lastEpochMs: number | null;
+};
+
+/** What the initial scan of a downloaded log produces, beside the entries themselves. */
+export type LogIndex = {
+  summary: LogSummary;
+  turnSource: TurnSource;
+  /** Ordered by first appearance. Empty when turnSource is "unavailable". */
+  turns: TurnSpan[];
+  byTurn: Map<string, TurnSpan>;
+};
+
 export type TapooLog = {
   name: string;
   version: string | null;
   mode: string | null;
   downloadedAt: string | null;
   entries: LogEntry[];
+  /** Built by the same pass that validates the entries - see indexLog. */
+  index: LogIndex;
   sourceUrl?: string;
 };
 
@@ -54,8 +107,23 @@ export type TapooLog = {
 export type Result<T, E = string> = ({ok: true} & T) | ({ok: false; error: E});
 
 export type UrlResult = Result<{url: string}>;
-export type LogParseResult = Result<{value: TapooLog; warnings: string[]}>;
-export type LogTextResult = Result<{source: TapooLog; warnings: string[]}>;
+/** How a warning bears on the report the reader is about to read.
+ *
+ * Only two, because only two justify interrupting someone. "inaccurate" means a verdict in the report
+ * may be wrong. "incomplete" means the report is missing something it is expected to carry, while what
+ * it does say is still sound.
+ *
+ * A finding that is neither is not a warning. An event the rubric has no question for, or a log level
+ * contradicting its own payload, describes work left to do in this codebase - real, worth fixing, and
+ * nothing a reader can act on. Those live on the log index instead, where whoever fixes them will look.
+ */
+export type WarningImpact = "inaccurate" | "incomplete";
+
+/** A caveat the reader is shown, carrying what it costs them. */
+export type LogWarning = {impact: WarningImpact; message: string};
+
+export type LogParseResult = Result<{value: TapooLog; warnings: LogWarning[]}>;
+export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]}>;
 export type PayloadResult = Result<{payload: string}>;
 
 /** A rejected share link always carries the link it is about, so the view can mark it up.
@@ -114,6 +182,28 @@ export type Context = {
   label: string;
   model: string | null;
   player: string | null;
+  /** Distinct API providers the requests went to, in first-seen order. Sets rather than single values
+   * because a log is a sequence of requests and nothing stops two of them naming different providers -
+   * reporting only the last would quietly hide that. */
+  apis: Set<string>;
+  /** Distinct reasoning-effort settings the requests carried, in first-seen order. */
+  reasoningEfforts: Set<string>;
+  /** The replay record each turn reported, keyed by the turn that *reported* it - which is the turn
+   * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
+   * transition key, so two turns submitting the same move with the same outcome collapse into one
+   * entry; a map keyed by reporting turn cannot lose a turn that way. */
+  replayByReportingTurn: Map<number, Replay>;
+  /** Running totals of what the model produced. Accumulated rather than kept per response: the report
+   * describes a sample, and 719 individual token counts are not a summary of anything. */
+  output: {
+    responses: number;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    reasoningTokens: number | null;
+    cachedPromptTokens: number | null;
+    durationNs: number | null;
+    finishReasons: Map<string, number>;
+  };
   exits: Map<CellKey, Set<string>>;
   positions: CellKey[];
   timeline: TimelineEvent[];
@@ -135,11 +225,20 @@ export type Context = {
 
 /** A `get_last_prediction_outcome` payload, as logged. Every field is optional: it is read from
  * arbitrary JSON and two different producers push into the same array. */
+/** One turn's outcome, as get_last_prediction_outcome reported it to the turn after it.
+ *
+ * Logged verbatim - this tool carries no content_checksum, which is Tapoo's marker for a message whose
+ * content was trimmed or compacted - so these are the values Tapoo actually sent, not a reconstruction. */
 export type Replay = {
   lastMoveStatus?: string | null;
   lastSubmittedMoves?: unknown;
   lastAppliedMoveIndex?: number | null;
   chargedMovesCount?: number;
+  /** Where replay began: where the player stood *before* those moves applied. Tapoo's own tool
+   * description warns against substituting currentCell here, which is where replay ended - doing so
+   * makes an applied move look like it never happened. */
+  lastReplayStartCell?: unknown;
+  predictionStatus?: string | null;
 };
 
 /** A round-end entry's details. `traversalSpeed` is a string in every real log (`"1.0000"`), which is
@@ -153,6 +252,9 @@ export type Outcome = {
   playerPosition?: {x?: number; y?: number};
   playerUniqueCellsVisited?: number;
   decayUnitsCharged?: number;
+  /** Turns the round recorded. Used to check that a reading exists for every one of them before the
+   * closing turn's charge is settled by subtraction. */
+  turnCount?: number;
   lastActionResult?: Replay;
 };
 
@@ -164,6 +266,9 @@ export type Turn = {
   applied: number | null;
   cells: CellKey[];
   rejectedMove: string | null;
+  /** Decay units this turn was charged, as Tapoo reported it. Null when no reading covers the turn and
+   * it could not be resolved by subtraction - a cost we could not read, which is not a cost of zero. */
+  decayCharged: number | null;
 };
 
 export type Level = {
@@ -211,6 +316,12 @@ export type Report = {
   label: string;
   model: string | null;
   player: string | null;
+  /** The API providers the sample was produced against, and the reasoning effort asked of the model.
+   * Both belong to provenance: the same model answers differently through a different provider or at a
+   * different effort, so a verdict is only comparable to another taken under the same two. */
+  apis: string[];
+  reasoningEfforts: string[];
+  output: ModelOutput;
   predictions: number;
   rounds: number;
   traversalSpeed: number | null;
@@ -226,7 +337,49 @@ export type Report = {
   levels: Level[];
 };
 
-export type Analysis = Result<{source: TapooLog; warnings: string[]; report: Report}>;
+/** One model response, normalized across the three provider wire shapes.
+ *
+ * The oracle reads logs from all three, and they agree on nothing structurally: Ollama puts the
+ * message at `message`, OpenAI at `choices[0].message`, and Anthropic has neither - its content is a
+ * top-level array of typed blocks, with tool calls as `tool_use` entries rather than a `tool_calls`
+ * list. Normalizing here is what keeps that from being three shapes every reader has to know. */
+export type AssistantMessage = {
+  /** Concatenated text. Anthropic can spread one reply across several text blocks. */
+  content: string | null;
+  /** Tool names requested, in order. */
+  toolNames: string[];
+  /** The model's own thinking, where the provider reports it: Ollama's `thinking`, OpenAI's
+   * `reasoning_content`, Anthropic's `thinking` blocks. */
+  reasoning: string | null;
+};
+
+/** What a provider reported about one response, normalized across API shapes.
+ *
+ * Every field is nullable because the two providers report different subsets: Ollama gives a duration
+ * and no reasoning-token count, OpenAI the reverse. A null means "this provider did not say", which is
+ * a different claim from zero and is displayed differently. */
+export type ResponseUsage = {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  reasoningTokens: number | null;
+  cachedPromptTokens: number | null;
+  durationNs: number | null;
+  finishReason: string | null;
+};
+
+/** The model's own output across the sample: what it was fed, what it produced, and how it stopped. */
+export type ModelOutput = {
+  responses: number;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  reasoningTokens: number | null;
+  cachedPromptTokens: number | null;
+  durationNs: number | null;
+  /** Finish reasons and their counts, in first-seen order. */
+  finishReasons: Array<[string, number]>;
+};
+
+export type Analysis = Result<{source: TapooLog; warnings: LogWarning[]; report: Report}>;
 
 // --- Maze replay ---
 

@@ -308,7 +308,13 @@ function createReportActivePanel(state: ReportTabsState, actions: ReportActions)
       source.className = "report-source-url";
       source.textContent = shareLink;
 
-      panel.append(source, createShareControl(sourceUrl));
+      const disclosure = document.createElement("p");
+      disclosure.className = "report-share-disclosure";
+      disclosure.textContent =
+        "This token reversibly contains the source URL and is sent to the site host. Do not share it " +
+        "when the URL contains access credentials or the report is confidential.";
+
+      panel.append(source, createShareControl(sourceUrl), disclosure);
       content.append(panel);
     }
 

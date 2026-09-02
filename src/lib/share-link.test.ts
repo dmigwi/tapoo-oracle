@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import {afterEach, describe, expect, it, vi} from "vitest"
 
-import {decodeReportPayload, encodeReportPayload} from "./share-link"
+import {decodeReportPayload, encodeReportPayload, fetchOnlineJsonText} from "./share-link"
 import {expectErr, expectOk} from "./test-support";
 
 // The known-good log, and the shape the encoding is tuned for: a long prefix plus two hex runs.
@@ -9,6 +9,43 @@ const gistUrl =
   "/raw/9495b1c9b5c69f0c4276dd0d9ea1ae638be8db58/sample-agent-api-log.json"
 
 const roundTrip = (url: string) => decodeReportPayload(expectOk(encodeReportPayload(url)).payload)
+
+afterEach(() => vi.unstubAllGlobals())
+
+describe("fetchOnlineJsonText", () => {
+  it("omits credentials and referrer data from cross-origin report requests", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(fetchOnlineJsonText("https://example.com/log.json")).resolves.toBe("{}")
+    expect(fetchMock).toHaveBeenCalledWith("https://example.com/log.json", expect.objectContaining({
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: expect.any(AbortSignal),
+    }))
+  })
+
+  it("rejects a report whose declared size exceeds the configured limit", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("too large", {
+      headers: {"content-length": "10"},
+    })))
+
+    await expect(fetchOnlineJsonText("https://example.com/log.json", {maxBytes: 5}))
+      .rejects.toThrow("exceeds the 5 byte")
+  })
+
+  it("stops a streamed report once it exceeds the configured limit", async () => {
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("123456"))
+      },
+    })
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)))
+
+    await expect(fetchOnlineJsonText("https://example.com/log.json", {maxBytes: 5}))
+      .rejects.toThrow("exceeds the 5 byte")
+  })
+})
 
 // Minimal base64url and checksum mirrors, so a test can forge a token the encoder would never emit
 // and still have it pass the integrity check - otherwise a forged token would be rejected for the

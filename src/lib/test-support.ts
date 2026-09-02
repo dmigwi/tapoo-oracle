@@ -1,4 +1,4 @@
-import type {Level, Region, Report} from "./types";
+import type {Level, LogWarning, Region, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -83,6 +83,10 @@ export function reportWith(...levels: Level[]): Report {
     label: "fixture",
     model: null,
     player: null,
+    apis: [],
+    reasoningEfforts: [],
+    output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
+      cachedPromptTokens: null, durationNs: null, finishReasons: []},
     predictions: 0,
     rounds: levels.length,
     traversalSpeed: null,
@@ -92,4 +96,9 @@ export function reportWith(...levels: Level[]): Report {
     diagnostics: {endpointFailures: 0, emptyResponses: 0, unparseableResponses: 0, tokenExhaustions: 0},
     levels,
   };
+}
+
+/** The message text of each warning, for a test asserting on wording rather than on impact. */
+export function messagesOf(warnings: LogWarning[]): string[] {
+  return warnings.map((warning) => warning.message);
 }

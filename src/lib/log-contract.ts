@@ -13,162 +13,170 @@
 // how to read.
 
 import type {
-  CellKey,
+  EncodedMaze,
+  LogWarning,
+  AssistantMessage,
+  ResponseUsage,
   LogEntry,
   LogParseResult,
   LogTextResult,
-  Move,
   TapooLog,
 } from "./types";
 
 import {asTrimmedText} from "./untrusted";
+import {indexLog} from "./log-index";
+import {mazeFromEncoded} from "./maze";
 
-// --- Export identity ---
+export {
+  AGENT_API_MODE,
+  DECLARED_TOOLS,
+  EVENT_CLASSES,
+  KNOWN_EVENTS,
+  LOG_CONTRACT_VERSION,
+  LOG_ENVELOPE_NAME,
+  LOG_EVENTS,
+  LOG_LEVELS,
+  levelClassOf,
+} from "./log-events";
+import {AGENT_API_MODE, LOG_ENVELOPE_NAME, LOG_EVENTS, LOG_LEVELS} from "./log-events";
 
-// LOG_CONTRACT_VERSION is the version of the *log shape*, not of Tapoo. It is independent of the
-// APP_VERSION stamped into an export, because the log shape changes far less often than the app:
-// tying consumers to the app version would reject logs on every unrelated patch release.
-export const LOG_CONTRACT_VERSION = 1;
+// Re-exported: every caller of these is reading the log contract, and that is still where they look.
+export {
+  MOVES,
+  cellFromLogged,
+  cellKey,
+  classifyTraversalSpeed,
+  isMove,
+  movesFromLogged,
+  stepFrom,
+} from "./geometry";
 
-// LOG_ENVELOPE_NAME is the constant tapooDownloadLogs writes to the envelope's `name` field. It is
-// what distinguishes a Tapoo log from any other JSON a user might paste into an analyzer.
-export const LOG_ENVELOPE_NAME = "tapoo";
+// --- Reading a provider response ---
 
-// AGENT_API_MODE is the only control mode that produces these logs. tapooDownloadLogs returns early
-// for anything else, so an export naming a different mode did not come from an agent round.
-export const AGENT_API_MODE = "agent-api";
-
-// LOG_LEVELS mirrors the LogLevel union in frontend/app/types.ts.
-export const LOG_LEVELS = new Set<string>(["error", "info", "warn"]);
-
-// --- What a log says ---
-
-// LOG_EVENTS is the payload sentence vocabulary the analyzer branches on. These strings are the
-// stable identity of an event - the payload field is prose, but it is *fixed* prose, and matching it
-// exactly is how an entry's meaning is recovered.
+// assistantMessage reads one model response, whichever of the three providers produced it.
 //
-// Naming them here rather than inlining the literals is what makes a producer-side wording change a
-// one-line fix instead of a silent behavioral drift spread across the analyzer, where a stale
-// literal simply stops matching and quietly answers every dependent question "no".
-export const LOG_EVENTS = {
-  levelStarted: "Agent level started.",
-  request: "Agent request.",
-  response: "Agent response.",
-  levelWon: "Agent level won.",
-  levelLost: "Agent level lost.",
-  duplicateToolWarningIgnored: "Agent kept re-requesting already-called tools after being told so.",
-  hallucinatedTool: "Agent requested an unknown or hallucinated tool.",
-  tokenCapExhausted: "Agent exhausted the token cap without returning a prediction.",
-  providerHttpFailure: "Provider HTTP response failed.",
-  requestFailed: "Request failed before a valid response.",
-} as const;
-
-// DECLARED_TOOLS are the context tools Tapoo declares to an agent. C3 asks one question per tool, in
-// this order, so the order is part of the contract rather than an implementation detail.
-export const DECLARED_TOOLS = [
-  "get_maze_structure",
-  "get_prediction_rules",
-  "get_last_prediction_outcome",
-] as const;
-
-// --- Maze geometry ---
-
-// MOVES maps each accepted move command to its [row, col] delta. The four keys are also the complete
-// set of valid commands, which is what C1.Q3 checks against.
-export const MOVES: Record<Move, readonly [number, number]> = {
-  MoveUp: [-1, 0],
-  MoveDown: [1, 0],
-  MoveLeft: [0, -1],
-  MoveRight: [0, 1],
-};
-
-// isMove narrows a string out of a log to a command the maze can actually apply.
+// Tapoo logs the provider's response body verbatim, so the shape belongs to the provider. Its own
+// adapters (frontend/app/agent/providers.ts) define all three, and they agree on nothing structural:
 //
-// This guard is why stepFrom can take a Move rather than a string. A log's openMoves field is prose
-// from a model's turn, so it can name anything; before, the one caller that did not check
-// (availableContextDisregard) reached MOVES[move] with an unrecognized name, destructured undefined,
-// and threw out of the whole report.
-export const isMove = (value: unknown): value is Move =>
-  typeof value === "string" && Object.hasOwn(MOVES, value);
-
-// Cells are Map/Set keys, so they travel as "row,col" strings rather than arrays, which compare by
-// identity and would make every lookup miss.
-export const cellKey = (row: number, col: number): CellKey => `${row},${col}`;
-
-// cellFromLogged reads either shape a logged cell arrives in.
+//   Ollama     {message: {content, thinking, tool_calls}}                 - verified against real logs
+//   OpenAI     {choices: [{message: {content, reasoning_content, tool_calls}}]}  - verified
+//   Anthropic  {content: [{type: "text"|"thinking"|"tool_use", ...}]}     - from the adapter only
 //
-// A downloaded log compacts every get_maze_structure result before writing it, turning {row, col}
-// into [row, col]. Both shapes are real, so this is the one place that decides which is which -
-// every field carrying a logged cell goes through here. Handling it per-caller is what previously
-// produced "undefined,undefined" keys: one reader was taught the compact form and another, reading a
-// different field, was not.
-// The parameter is `unknown`, not LoggedCell: every caller reads this straight out of parsed JSON,
-// where the value is whatever the producer wrote. Taking the narrow type would only move the cast to
-// each call site - and a cast at a call site is a claim about untrusted data that nothing checked.
-export function cellFromLogged(cell: unknown): CellKey | null {
-  if (Array.isArray(cell)) {
-    const [row, col] = cell as unknown[];
-    return typeof row === "number" && typeof col === "number" ? cellKey(row, col) : null;
+// The Anthropic branch is written from Tapoo's adapter and covered by tests built from it, but no
+// Anthropic log has ever been run through it. It is kept rather than dropped because the alternative
+// is worse than an unverified reader: without it an Anthropic log returns null here, and null now
+// raises a warning that says the responses could not be read (see unreadableResponseWarnings) instead
+// of failing silently the way the OpenAI shape did.
+//
+// Reading only Ollama's shape is what made a whole log analyze to nothing: every OpenAI response has
+// no `message` at the root, so each counted as empty - zero predictions, zero turns, and a replay
+// scrubber reading "0 / 0" under a maze that drew correctly. Anthropic would have failed the same way
+// for the same reason, so all three are read here rather than two.
+//
+// Providers are told apart by shape, not by the `api` field or the endpoint URL. Both are recorded in
+// the log and either would work, but a body that looks like a response is better evidence about that
+// body than a label written beside it.
+export function assistantMessage(payload: unknown): AssistantMessage | null {
+  const body = asRecordOrEmpty(payload);
+
+  // Ollama, then OpenAI: both wrap a single message object.
+  const wrapped =
+    isRecord(body.message)
+      ? body.message
+      : (() => {
+          const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+          // Only the first choice. Tapoo asks for one completion, and scoring a second would credit
+          // the agent with a prediction it was never judged on.
+          const message = asRecordOrEmpty(choice).message;
+          return isRecord(message) ? message : null;
+        })();
+
+  if (wrapped) {
+    return {
+      content: typeof wrapped.content === "string" ? wrapped.content : null,
+      toolNames: toolNamesOf(wrapped.tool_calls),
+      // `thinking` is Ollama's name and `reasoning_content` is OpenAI's for the same thing.
+      reasoning:
+        typeof wrapped.thinking === "string"
+          ? wrapped.thinking
+          : typeof wrapped.reasoning_content === "string"
+            ? wrapped.reasoning_content
+            : null,
+    };
   }
 
-  if (cell !== null && typeof cell === "object" && "row" in cell && "col" in cell) {
-    const {row, col} = cell;
-    return typeof row === "number" && typeof col === "number" ? cellKey(row, col) : null;
+  // Anthropic: typed content blocks, no wrapper. Text and thinking can each arrive in several blocks,
+  // so both are concatenated rather than taken from the first.
+  if (!Array.isArray(body.content)) {
+    return null;
   }
 
-  return null;
+  let content = "";
+  let reasoning = "";
+  const toolNames: string[] = [];
+
+  for (const block of body.content as unknown[]) {
+    const record = asRecordOrEmpty(block);
+    if (record.type === "text" && typeof record.text === "string") content += record.text;
+    else if (record.type === "thinking" && typeof record.thinking === "string") reasoning += record.thinking;
+    else if (record.type === "tool_use" && typeof record.name === "string") toolNames.push(record.name);
+  }
+
+  return {
+    content: content === "" ? null : content,
+    toolNames,
+    reasoning: reasoning === "" ? null : reasoning,
+  };
 }
 
-// movesFromLogged returns the move names a cell's exits allow, from either logged shape: the
-// uncompacted object keyed by move name, or the compacted [move, visitStatus] pairs. Reading the
-// compacted form with Object.keys yields array indices - "0", "1" - which match no move command, so
-// every exit check silently failed.
-// `unknown` for the same reason as cellFromLogged: the value comes straight from a parsed log.
-export function movesFromLogged(openMoves: unknown): Set<string> {
-  if (Array.isArray(openMoves)) {
-    return new Set(
-      (openMoves as unknown[])
-        .map((entry) => (Array.isArray(entry) ? (entry as unknown[])[0] : entry))
-        .filter((name): name is string => typeof name === "string" && name.length > 0),
-    );
-  }
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object";
 
-  return new Set(Object.keys(openMoves ?? {}));
+const asRecordOrEmpty = (value: unknown): Record<string, unknown> =>
+  isRecord(value) ? value : {};
+
+// Ollama and OpenAI both use OpenAI's tool-call shape: a list of {function: {name}}.
+function toolNamesOf(calls: unknown): string[] {
+  if (!Array.isArray(calls)) return [];
+  return (calls as unknown[])
+    .map((call) => asRecordOrEmpty(asRecordOrEmpty(call).function).name)
+    .filter((name): name is string => typeof name === "string" && name !== "");
 }
 
-// stepFrom resolves the cell reached by applying one move command to a "row,col" key.
-export function stepFrom(key: CellKey, move: Move): CellKey {
-  const [row, col] = key.split(",").map(Number);
-  const [rowDelta, colDelta] = MOVES[move];
-  // A key that does not parse is a programming error, not log data: every key this receives was
-  // built by cellKey.
-  if (row === undefined || col === undefined || Number.isNaN(row) || Number.isNaN(col)) {
-    throw new Error(`not a cell key: ${key}`);
-  }
+// responseUsage reads what the provider reported about its own work, from either API shape.
+//
+// The two report overlapping but different things, so every field is nullable and a null means "this
+// provider did not say" rather than zero. Ollama counts tokens at the payload root and times the whole
+// call; OpenAI nests counts under `usage` and adds the two that matter most for a reasoning model -
+// how many of the completion tokens were spent thinking, and how much of the prompt was served from
+// cache rather than re-read.
+export function responseUsage(payload: unknown): ResponseUsage {
+  const body = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+  const record = (value: unknown): Record<string, unknown> =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
-  return cellKey(row + rowDelta, col + colDelta);
-}
+  const usage = record(body.usage);
+  const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
 
-// --- Traversal speed ---
+  const firstString = (...values: unknown[]): string | null => {
+    for (const value of values) if (typeof value === "string" && value !== "") return value;
+    return null;
+  };
 
-// The thresholds from the rubric's Agent-Scoped Traversal Speed section. Reached through
-// classifyTraversalSpeed rather than exported: the classification is the contract, not the table.
-const TRAVERSAL_SPEED_CLASSES = {
-  backtracker: "Backtracker",
-  navigator: "Navigator",
-  trailblazer: "Trailblazer",
-} as const;
-
-// classifyTraversalSpeed applies the rubric's three-way split. A non-positive or non-finite speed
-// resolves to Backtracker rather than defaulting upward - the rubric is explicit that a missing
-// denominator must never produce a Trailblazer result.
-export function classifyTraversalSpeed(speed: unknown): string {
-  const value = Number(speed);
-  if (!Number.isFinite(value) || value < 1.0) {
-    return TRAVERSAL_SPEED_CLASSES.backtracker;
-  }
-
-  return value > 1.0 ? TRAVERSAL_SPEED_CLASSES.trailblazer : TRAVERSAL_SPEED_CLASSES.navigator;
+  return {
+    // Ollama counts at the payload root; OpenAI and Anthropic nest under `usage` with different names.
+    promptTokens: num(body.prompt_eval_count) ?? num(usage.prompt_tokens) ?? num(usage.input_tokens),
+    // Anthropic's output_tokens already includes its extended-thinking tokens, which is why they are
+    // not added on top - doing so would double-count the thinking against the completion budget.
+    completionTokens: num(body.eval_count) ?? num(usage.completion_tokens) ?? num(usage.output_tokens),
+    reasoningTokens: num(record(usage.completion_tokens_details).reasoning_tokens),
+    cachedPromptTokens:
+      num(record(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
+    durationNs: num(body.total_duration),
+    // Ollama's done_reason, OpenAI's per-choice finish_reason, Anthropic's stop_reason.
+    finishReason: firstString(body.done_reason, record(choice).finish_reason, body.stop_reason),
+  };
 }
 
 // --- Validating an export ---
@@ -213,15 +221,23 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     return {ok: false, error: "Tapoo log export is missing its `entries` array."};
   }
 
-  const warnings: string[] = [];
+  const warnings: LogWarning[] = [];
   if (envelope.mode !== AGENT_API_MODE) {
-    warnings.push(
-      `Export mode is ${JSON.stringify(envelope.mode)}, not "${AGENT_API_MODE}". The behavior rubric only describes agent-api rounds.`,
-    );
+    // Inaccurate rather than incomplete: every question is written for an agent-api round, so answering
+    // them about some other mode produces verdicts, not correct ones.
+    warnings.push({
+      impact: "inaccurate",
+      message: `Export mode is ${JSON.stringify(envelope.mode)}, not "${AGENT_API_MODE}". The behavior rubric only describes agent-api rounds.`,
+    });
   }
 
   if (typeof envelope.version !== "string") {
-    warnings.push("Export carries no Tapoo version; results cannot be attributed to a build.");
+    // Incomplete, not inaccurate: every verdict still stands, but the report cannot say which build
+    // produced the behavior it describes, which is half of what makes it citable.
+    warnings.push({
+      impact: "incomplete",
+      message: "Export carries no Tapoo version; results cannot be attributed to a build.",
+    });
   }
 
   const entries = envelope.entries.filter(isLogEntry);
@@ -230,16 +246,40 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     // Unreadable entries are stand-ins written by storage-logs.ts when a record fails to decode.
     // They are dropped rather than fatal: the surrounding round is still worth analyzing, but the
     // count has to surface, because it bounds how complete any "not observed" answer really is.
-    warnings.push(
-      skipped === 1
-        ? "1 entry did not match the log entry shape and was skipped."
-        : `${skipped} entries did not match the log entry shape and were skipped.`,
-    );
+    warnings.push({
+      // Inaccurate: the rubric answers NO on absent evidence, so evidence that was dropped rather than
+      // never recorded can turn a YES into a NO without anything else looking wrong.
+      impact: "inaccurate",
+      message:
+        skipped === 1
+          ? "1 entry did not match the log entry shape and was skipped."
+          : `${skipped} entries did not match the log entry shape and were skipped.`,
+    });
   }
 
   if (entries.length === 0) {
     return {ok: false, error: "Tapoo log export contains no readable entries."};
   }
+
+  // The same pass that validated the entries describes them: what the log contains, and where each
+  // turn starts and ends. Every later reader indexes into this instead of walking the array again.
+  const index = indexLog(entries);
+
+  warnings.push(...unreadableResponseWarnings(entries));
+  warnings.push(...encodedMazeWarnings(entries));
+
+  // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
+  //
+  // These warnings reach the reader under "Read with care", which is for caveats about the *log* - a
+  // non-agent-api mode, a missing build version, entries that did not decode - things that genuinely
+  // bound how much the verdicts are worth. An event the rubric has no question for is a gap in this
+  // code, and a level contradicting its own payload is a bug in the producer. Neither is something a
+  // reader can act on, and showing them there asks someone to distrust a report over an unimplemented
+  // feature.
+  //
+  // The right home for "this event is not scored" is a fact question that scores it. Until there is
+  // one, both stay available on the index for tests and for whoever adds that question - which is how
+  // the two unscored events in a real glm-5.1 log were found in the first place.
 
   const log: TapooLog = {
     name: envelope.name,
@@ -247,6 +287,7 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     mode: typeof envelope.mode === "string" ? envelope.mode : null,
     downloadedAt: typeof envelope.downloadedAt === "string" ? envelope.downloadedAt : null,
     entries,
+    index,
   };
 
   return {ok: true, value: log, warnings};
@@ -255,6 +296,93 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
 // parseTapooLogText is the raw JSON ingress point shared by the app and non-UI callers. Its successful
 // output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
 // downloadedAt, and readable entries.
+// unreadableResponseWarnings reports responses whose body this contract could not read at all.
+//
+// This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
+// predictions and zero turns because every response was written in a provider shape the contract did
+// not know, and nothing said so: each one was counted as an "empty response", which is a thing that
+// legitimately happens, and 719 of them in a row looked no different from 719 quiet failures.
+//
+// The signal is precise rather than heuristic. Across every real log to hand - Ollama and OpenAI,
+// 1,744 responses - not one has an unreadable *shape*; the 49 blank ones all have a readable message
+// holding no text, which is a model stopping early and not a contract gap. So a single unreadable body
+// means a shape this file does not handle, and that is worth saying on the first occurrence.
+//
+// Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
+// but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
+function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
+  const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
+  const unreadable = responses.filter((entry) => {
+    const details = entry.details;
+    const payload = details !== null && typeof details === "object" && "payload" in details
+      ? details.payload
+      : null;
+    return assistantMessage(payload) === null;
+  }).length;
+
+  if (unreadable === 0) {
+    return [];
+  }
+
+  const all = unreadable === responses.length;
+  return [{
+    impact: "inaccurate",
+    message:
+      `${unreadable} of ${responses.length} model ${responses.length === 1 ? "response" : "responses"} ` +
+      `could not be read: the body is not in a shape this analyzer recognises. ` +
+      `${all ? "No prediction in this log was scored" : "Those turns were not scored"}, so a capability ` +
+      "answered NO may only mean the evidence for it was unreadable.",
+  }];
+}
+
+// encodedMazeWarnings validates the encoded maze each level-started entry should carry.
+//
+// This belongs with the rest of the contract validation rather than downstream in the view: whether a
+// payload in this JSON is present and well-formed is the same question as whether the envelope has a
+// mode or an entry has a payload, and it is answered once, here, on the way in.
+//
+// Validation is also what decides the impact, because it is what knows the difference:
+//
+//   absent  -> incomplete. The log never carried a maze. Nothing is wrong; a section is missing.
+//   invalid -> inaccurate. A payload was provided and it is not what it claims to be - a structure
+//              that fails its own checksum arrived damaged, and "damaged" is a statement about the
+//              data's accuracy, not about how much of it there is.
+//
+// Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
+// from the exits the log's own tool results confirmed.
+function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
+  const warnings: LogWarning[] = [];
+
+  for (const entry of entries) {
+    if (entry.payload !== LOG_EVENTS.levelStarted) continue;
+
+    const details = entry.details;
+    const maze = details !== null && typeof details === "object" && "maze" in details
+      ? details.maze
+      : null;
+    const round = `Game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
+    const cost = "so it has no traversal replay and no maze statistics";
+
+    if (maze === null || maze === undefined) {
+      warnings.push({
+        impact: "incomplete",
+        message: `${round} carries no encoded maze, ${cost}.`,
+      });
+      continue;
+    }
+
+    const built = mazeFromEncoded(maze as EncodedMaze);
+    if (!built.ok) {
+      warnings.push({
+        impact: "inaccurate",
+        message: `${round} carries an encoded maze that did not decode, ${cost}. ${built.error}`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
   const trimmed = asTrimmedText(text);
   if (!trimmed) {
