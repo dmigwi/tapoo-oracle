@@ -30,17 +30,64 @@ export function validateOnlineJsonUrl(value: unknown): UrlResult {
     return {ok: false, error: "Use an online http:// or https:// JSON URL."};
   }
 
+  if (url.username || url.password) {
+    return {ok: false, error: "Do not put credentials in the report URL."};
+  }
+
   return {ok: true, url: url.href};
 }
 
 // --- Fetching a log ---
 
-export async function fetchOnlineJsonText(url: string): Promise<string> {
-  const response = await fetch(url);
+const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
+const DEFAULT_MAX_REPORT_BYTES = 25 * 1024 * 1024;
+
+type FetchLimits = {timeoutMs?: number; maxBytes?: number};
+
+export async function fetchOnlineJsonText(
+  url: string,
+  {timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxBytes = DEFAULT_MAX_REPORT_BYTES}: FetchLimits = {},
+): Promise<string> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(timeoutMs),
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText || "HTTP error"}`);
   }
-  return response.text();
+
+  const declaredBytes = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+    throw new Error(`Report exceeds the ${maxBytes} byte download limit`);
+  }
+
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) {
+      throw new Error(`Report exceeds the ${maxBytes} byte download limit`);
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let received = 0;
+
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw new Error(`Report exceeds the ${maxBytes} byte download limit`);
+    }
+    chunks.push(decoder.decode(value, {stream: true}));
+  }
+
+  chunks.push(decoder.decode());
+  return chunks.join("");
 }
 
 // fetchFailureMessage turns what fetch throws into something a reader can act on.
@@ -50,6 +97,9 @@ export async function fetchOnlineJsonText(url: string): Promise<string> {
 // the one failure where a link that works for whoever shared it can fail for whoever opens it.
 export function fetchFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) {
+    return "Could not load the log before the request timed out.";
+  }
   if (error instanceof TypeError) {
     return `Could not reach the log: ${message}. The host may be offline, or may not allow other sites to read it.`;
   }

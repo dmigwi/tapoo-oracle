@@ -48,8 +48,16 @@ export type LogEntry = {
  * level says the same thing, declared by the producer. */
 export type LogClass = "neutral" | "penalised" | "external";
 
-/** Where one turn begins and ends in the entries array, as a half-open range. */
-export type TurnSpan = {turn: number; start: number; end: number};
+/** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
+export type TurnSpan = {
+  game: number | null;
+  level: number | null;
+  turn: number;
+  start: number;
+  end: number;
+};
+
+export type TurnIdentity = Pick<TurnSpan, "game" | "level" | "turn">;
 
 /** How the turn spans were arrived at.
  *
@@ -77,7 +85,7 @@ export type LogIndex = {
   turnSource: TurnSource;
   /** Ordered by first appearance. Empty when turnSource is "unavailable". */
   turns: TurnSpan[];
-  byTurn: Map<number, TurnSpan>;
+  byTurn: Map<string, TurnSpan>;
 };
 
 export type TapooLog = {

@@ -139,18 +139,10 @@ export function buildLevels(entries: LogEntry[]): Level[] {
     const actingAgents = resolveActingAgents(groupEntries)
     const first = groupEntries[0]
 
-    // Tapoo reports each turn's outcome to the *next* turn, so a turn's record is the reading from the
-    // first reporting turn after it. Resolved by a moving cursor rather than `turn + 1`: a turn that
-    // produced no prediction still reports, and a real log has 473 turns against 464 predictions.
-    //
-    // Submissions are in log order, so the cursor only ever moves forward.
-    const reportingTurns = [...context.replayByReportingTurn.keys()].sort((left, right) => left - right)
-    let cursor = 0
-    const recordFor = (turn: number): Replay | null => {
-      while (cursor < reportingTurns.length && (reportingTurns[cursor] ?? 0) <= turn) cursor += 1
-      const at = reportingTurns[cursor]
-      return at === undefined ? null : context.replayByReportingTurn.get(at) ?? null
-    }
+    // Tapoo reports a prediction's outcome on exactly the next turn. A later record must never be used
+    // as a substitute: repeated move sequences could make it look compatible while attributing another
+    // turn's position, charge and applied count to this one.
+    const recordFor = (turn: number): Replay | null => context.replayByReportingTurn.get(turn + 1) ?? null
 
     const turns = context.submissions.map((submission) => {
       // What Tapoo said about this turn, if the next turn reported it. Preferred over the derivation

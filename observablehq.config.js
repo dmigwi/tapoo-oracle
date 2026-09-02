@@ -66,8 +66,9 @@ export default {
     // document honours only its first <base href> - so the second was parsed and ignored. The asset
     // links are emitted ahead of this script too, so even a winning base would have arrived late.
     //
-    // `base` is what actually fixes them, and it fixes them for every page at every depth rather than
-    // for this one route.
+    // `base` handles normal assets. The build additionally makes 404.html references and every favicon
+    // absolute because a fallback page is served at an arbitrary depth and History API can defer
+    // favicon resolution until after the address changes.
     //
     // Harmless on every other page: the guard only matches a report route, so the app itself never
     // sees it fire.

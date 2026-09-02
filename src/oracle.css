@@ -252,6 +252,14 @@ a[href] {
   flex: 0 0 auto;
 }
 
+.report-share-disclosure {
+  grid-column: 1 / -1;
+  max-width: none;
+  margin: 0;
+  color: var(--oracle-muted);
+  font-size: var(--fs-small);
+}
+
 .report-share-error {
   max-width: 800px;
   margin: 0;
@@ -1175,4 +1183,3 @@ td {
   font-size: var(--fs-micro);
   overflow-wrap: anywhere;
 }
-

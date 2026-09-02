@@ -177,6 +177,13 @@ describe("validateOnlineJsonUrl", () => {
       error: expect.stringContaining("http:// or https://"),
     })
   })
+
+  it("rejects credentials embedded in a URL", () => {
+    expect(validateOnlineJsonUrl("https://reader:secret@example.com/report.json")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("credentials"),
+    })
+  })
 })
 
 describe("loadTapooLogFromUrl", () => {
@@ -472,4 +479,3 @@ describe("a response this analyzer cannot read", () => {
     expect(expectOk(result).warnings).toEqual([])
   })
 })
-

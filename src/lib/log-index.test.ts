@@ -47,26 +47,29 @@ describe("turn spans", () => {
     const entries = round(5)
     const index = indexLog(entries)
 
-    expect(entriesForTurn(entries, index, 2).map((e) => e.payload))
+    expect(entriesForTurn(entries, index, {game: 2, level: 1, turn: 2}).map((e) => e.payload))
       .toEqual([LOG_EVENTS.request, LOG_EVENTS.response])
-    expect(entriesForTurn(entries, index, 2).every((e) => e.turn === 2)).toBe(true)
+    expect(entriesForTurn(entries, index, {game: 2, level: 1, turn: 2})
+      .every((e) => e.turn === 2)).toBe(true)
   })
 
   it("says nothing rather than guessing when a turn is not indexed", () => {
     const entries = round(3)
 
-    expect(entriesForTurn(entries, indexLog(entries), 99)).toEqual([])
+    expect(entriesForTurn(entries, indexLog(entries), {game: 2, level: 1, turn: 99})).toEqual([])
   })
 
-  it("widens a span rather than opening a second one for a repeated turn", () => {
-    // No producer writes this; a concatenated log would. Two spans for one turn would leave byTurn
-    // holding one answer and the ordered list holding another.
-    const entries = [entry(LOG_EVENTS.request, {turn: 0}), entry(LOG_EVENTS.request, {turn: 1}),
-      entry(LOG_EVENTS.response, {turn: 0})]
+  it("keeps reset turn numbers separate across rounds", () => {
+    const entries = [
+      entry(LOG_EVENTS.request, {turn: 0}),
+      {...entry(LOG_EVENTS.response, {turn: 0}), game: 3, level: 2},
+    ]
     const index = indexLog(entries)
 
     expect(index.turns).toHaveLength(2)
-    expect(must(index.byTurn.get(0), "turn 0")).toMatchObject({start: 0, end: 3})
+    expect(index.summary.turns).toBe(2)
+    expect(entriesForTurn(entries, index, {game: 2, level: 1, turn: 0})).toEqual([entries[0]])
+    expect(entriesForTurn(entries, index, {game: 3, level: 2, turn: 0})).toEqual([entries[1]])
   })
 
   it("declines to index a log written before the turn counter", () => {

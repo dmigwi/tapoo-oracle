@@ -162,9 +162,16 @@ function buildMovesBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
   for (const [index, bar] of bars.entries()) {
     const turn = model.turns[index];
     if (!turn) continue;
-    const share = turn.moves.length > 0 ? ((turn.applied ?? 0) / turn.moves.length) * 100 : 0;
+    if (turn.applied === null) {
+      bar.classList.add("is-unknown");
+      bar.style.setProperty("--applied", "0%");
+      bar.title = `Turn ${turn.turn}: applied moves not reported`;
+      continue;
+    }
+
+    const share = turn.moves.length > 0 ? (turn.applied / turn.moves.length) * 100 : 0;
     bar.style.setProperty("--applied", `${share}%`);
-    bar.title = `Turn ${turn.turn}: ${turn.applied ?? 0} of ${turn.moves.length} applied`;
+    bar.title = `Turn ${turn.turn}: ${turn.applied} of ${turn.moves.length} applied`;
   }
 
   strip.hidden = bars.length === 0;
@@ -453,6 +460,8 @@ export function createMazeReplay(report: Report): HTMLElement {
     active = model;
     figure.replaceChildren();
     summary.replaceChildren();
+    legend.replaceChildren();
+    legend.hidden = true;
 
     if (!model.maze) {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and

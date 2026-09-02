@@ -258,6 +258,15 @@ describe("the bars beside the scrubber", () => {
     expect(at(bars(build([level()]), "moves"), 2).title).toBe("Turn 2: 1 of 2 applied")
   })
 
+  it("distinguishes an unreported applied count from zero", () => {
+    const unknown = level()
+    unknown.turns[0]!.applied = null
+    const bar = at(bars(build([unknown]), "moves"), 0)
+
+    expect(bar.classList.contains("is-unknown")).toBe(true)
+    expect(bar.title).toBe("Turn 0: applied moves not reported")
+  })
+
   it("separates the bars where there is room, and closes the gap where there is not", () => {
     // At 464 turns a 2px gap would take 463px of an 830px strip and leave each bar under a pixel - a
     // separation that erases what it is meant to separate.
@@ -415,5 +424,18 @@ describe("the decay legend", () => {
 
   it("says nothing when the round reports no charge at all", () => {
     expect(query(build([level()]), ".maze-legend").hidden).toBe(true)
+  })
+
+  it("clears the previous round's legend when the selected maze is invalid", () => {
+    const first = charged(1, 2, 3)
+    const node = build([first, level({game: 3, encodedMaze: null})])
+    const select = query<HTMLSelectElement>(node, ".maze-level-select")
+
+    expect(legend(node)).toHaveLength(3)
+    select.value = "1"
+    select.dispatchEvent(new window.Event("change", {bubbles: true}))
+
+    expect(legend(node)).toEqual([])
+    expect(query(node, ".maze-legend").hidden).toBe(true)
   })
 })

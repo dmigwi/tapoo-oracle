@@ -165,6 +165,20 @@ describe("reading a turn from the outcome Tapoo reported", () => {
     expect(turn.decayCharged).toBeNull()
   })
 
+  it("does not borrow a later matching record when the next turn did not report", () => {
+    const levels = buildLevels(round(
+      prediction(["MoveDown"], 0, {game: 6, level: 54}),
+      prediction(["MoveDown"], 1, {game: 6, level: 54}),
+      outcomeTool(2, {lastReplayStartCell: {row: 5, col: 5}, lastSubmittedMoves: ["MoveDown"],
+        lastAppliedMoveIndex: 0, chargedMovesCount: 2}),
+    ))
+    const turns = at(levels, 0).turns
+
+    expect(at(turns, 0)).toMatchObject({before: null, cells: [], decayCharged: null})
+    expect(at(turns, 0).before).not.toBe("5,5")
+    expect(at(turns, 1)).toMatchObject({before: "5,5", applied: 1, cells: ["5,5", "6,5"], decayCharged: 2})
+  })
+
   it("settles the closing turn's charge from the round total", () => {
     // No turn follows the last one to report it, so the total settles it - and the subtraction covers
     // every reading, not only those that reached a turn, or a turn that made no prediction would hand
@@ -254,4 +268,3 @@ describe("a turn that produced no prediction", () => {
     expect(turns).toHaveLength(3)
   })
 })
-

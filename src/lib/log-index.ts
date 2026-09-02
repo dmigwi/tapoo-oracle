@@ -10,7 +10,7 @@
 // readable and cheap, and a reader should be able to trust it without knowing the rubric.
 
 import {EVENT_CLASSES, KNOWN_EVENTS, levelClassOf} from "./log-events";
-import type {LogEntry, LogIndex, LogSummary, TurnSpan} from "./types";
+import type {LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpan} from "./types";
 
 /** True when every entry carries a turn number.
  *
@@ -23,26 +23,28 @@ const hasTurnNumbers = (entries: LogEntry[]): boolean =>
 
 // turnSpans cuts the entries into half-open ranges, one per turn.
 //
-// Recorded order is turn order, so a span closes when the turn number changes. A turn number that
-// reappears later - which no producer should write, but a concatenated log would - widens the span it
-// already has rather than opening a second one, so `byTurn` can never hold two answers for one turn.
+// Tapoo resets turn numbers for every round, so the complete identity is (game, level, turn). Modern
+// logs stamp all three fields; null preserves the limited identity available in older logs.
+export function turnIdentityKey({game, level, turn}: TurnIdentity): string {
+  return `${game ?? "?"}/${level ?? "?"}/${turn}`;
+}
+
 function turnSpans(entries: LogEntry[]): TurnSpan[] {
   const spans: TurnSpan[] = [];
-  const seen = new Map<number, TurnSpan>();
+  let current: TurnSpan | null = null;
 
   for (const [index, entry] of entries.entries()) {
     const turn = entry.turn;
     if (typeof turn !== "number") continue;
 
-    const existing = seen.get(turn);
-    if (existing) {
-      existing.end = index + 1;
+    const identity = {game: entry.game ?? null, level: entry.level ?? null, turn};
+    if (current && turnIdentityKey(current) === turnIdentityKey(identity)) {
+      current.end = index + 1;
       continue;
     }
 
-    const span: TurnSpan = {turn, start: index, end: index + 1};
-    seen.set(turn, span);
-    spans.push(span);
+    current = {...identity, start: index, end: index + 1};
+    spans.push(current);
   }
 
   return spans;
@@ -84,13 +86,13 @@ export function indexLog(entries: LogEntry[]): LogIndex {
     summary: summarize(entries, turns.length),
     turnSource: indexed ? "field" : "unavailable",
     turns,
-    byTurn: new Map(turns.map((span) => [span.turn, span])),
+    byTurn: new Map(turns.map((span) => [turnIdentityKey(span), span])),
   };
 }
 
 /** The entries belonging to one turn, or an empty list when the index cannot place it. */
-export function entriesForTurn(entries: LogEntry[], index: LogIndex, turn: number): LogEntry[] {
-  const span = index.byTurn.get(turn);
+export function entriesForTurn(entries: LogEntry[], index: LogIndex, identity: TurnIdentity): LogEntry[] {
+  const span = index.byTurn.get(turnIdentityKey(identity));
   return span ? entries.slice(span.start, span.end) : [];
 }
 
