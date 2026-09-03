@@ -1,8 +1,9 @@
 PNPM := pnpm
-
+DOCKER_IMAGE := tapoo-oracle
+DOCKER_VOLUME := tapoo-node-modules
 .DEFAULT_GOAL := help
 
-.PHONY: help install audit agentic-analysis typecheck lint test coverage quality ci dev build serve deploy clean observable
+.PHONY: help install audit agentic-analysis typecheck lint test coverage quality ci dev build serve deploy clean observable docker-build docker-run docker-shell
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -60,3 +61,18 @@ clean: ## Clear the local data loader cache.
 
 observable: ## Run Observable CLI commands; pass ARGS="help" for example.
 	$(PNPM) observable $(ARGS)
+
+docker-build: ## Build development image.
+	docker build -t $(DOCKER_IMAGE) .
+
+docker-run: ## Run project in Colima/Docker.
+	docker run --rm -it \
+		-p 3000:3000 \
+		$(DOCKER_IMAGE)
+
+docker-shell: ## Open a shell inside the development container.
+	docker run --rm -it \
+		-v "$(PWD):/workspace" \
+		-v $(DOCKER_VOLUME):/workspace/node_modules \
+		$(DOCKER_IMAGE) \
+		bash
