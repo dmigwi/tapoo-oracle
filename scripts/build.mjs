@@ -243,10 +243,16 @@ if (!watching) {
 
   // Observable owns the terminal from here. It watches the staged root, so each rebuild esbuild
   // writes triggers its live reload the same way a hand-edited file would.
-  const preview = spawn("observable", ["preview", ...process.argv.slice(2).filter((arg) => arg !== "--watch")], {
-    stdio: "inherit",
-    env: { ...process.env, [STRIPPED_BUILD_ENV]: "1" },
-  })
+  const previewArgs = [
+  "preview",
+  "--host=0.0.0.0",
+  ...process.argv.slice(2).filter((arg) => arg !== "--watch"),
+]
+
+const preview = spawn("observable", previewArgs, {
+  stdio: "inherit",
+  env: { ...process.env, [STRIPPED_BUILD_ENV]: "1" },
+})
 
   const shutdown = async () => {
     await context.dispose()

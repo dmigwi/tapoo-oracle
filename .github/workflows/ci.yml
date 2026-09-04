@@ -32,9 +32,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Audit the dependency graph
-        run: pnpm audit --audit-level=low
-
       - name: Type-check
         run: pnpm run typecheck
 

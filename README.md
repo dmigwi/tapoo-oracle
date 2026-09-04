@@ -1,5 +1,6 @@
 # Tapoo Oracle
 
+[![TypeScript Version](https://img.shields.io/badge/TypeScript-6.0.3+-blue.svg)](http://www.typescriptlang.org/)
 [![CI](https://github.com/dmigwi/tapoo-oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/dmigwi/tapoo-oracle/actions/workflows/ci.yml)
 [![Page Deployment](https://github.com/dmigwi/tapoo-oracle/actions/workflows/pages.yml/badge.svg)](https://github.com/dmigwi/tapoo-oracle/actions/workflows/pages.yml)
 
@@ -59,7 +60,7 @@ validated results for the views. `staged/` is generated and gitignored.
 | Command | Description |
 | --- | --- |
 | `make install` | Install locked dependencies |
-| `make audit` | Run pnpm vulnerability audit |
+| `make audit` | Scan the lockfile for known vulnerabilities via OSV Scanner |
 | `make lint` | Run eslint |
 | `make test` | Run Vitest |
 | `make quality` | Run type checking, lint, and tests |
@@ -69,6 +70,35 @@ validated results for the views. `staged/` is generated and gitignored.
 | `make serve` | Serve `./public`; `/r/*` is rewritten to the app with status 200 |
 | `make deploy` | Build, post-process, and deploy the finished output to Observable |
 | `make agentic-analysis LOGS="a.json"` | Run the terminal report |
+| `make docker-build` | Build the Docker image |
+| `make docker-run` | Build and serve the app in a container on port 3000 |
+| `make docker-shell` | Open an interactive shell inside the container |
+
+## Docker
+
+Requires [Docker](https://docs.docker.com/get-docker/) or a compatible runtime (e.g. [Colima](https://github.com/abiosoft/colima)).
+
+**Build the image:**
+
+```bash
+make docker-build
+```
+
+**Serve on <http://localhost:3000>:**
+
+```bash
+make docker-run
+```
+
+The image runs `pnpm build` at image-build time and serves the pre-built static site. Re-run `make docker-build` after source changes.
+
+**Open an interactive shell:**
+
+```bash
+make docker-shell
+```
+
+The shell mounts the project root and a named `node_modules` volume, so edits on the host are visible inside the container without reinstalling dependencies.
 
 ### Deploying under a path
 
@@ -96,6 +126,7 @@ CORS, short-lived signed access, retention limits, and a deployment whose reques
 
 - Node.js `24`
 - pnpm `11.25.0`
+- [OSV Scanner](https://github.com/google/osv-scanner) — required locally for `make audit` (`brew install osv-scanner`)
 
 ## License
 

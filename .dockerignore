@@ -1,0 +1,26 @@
+# Observable build output and caches
+dist/
+public/
+staged/
+src/.observablehq/cache/
+.tmp/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+package-lock.json
+yarn-error.log
+*.log
+
+# Editor and OS
+.DS_Store
+_DS*
+.vscode/
+.claude/
+
+# Git metadata
+.git/
+.gitignore
+
+# Docker-local files
+Dockerfile
