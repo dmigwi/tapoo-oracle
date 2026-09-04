@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import {levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows} from "./maze-model"
+import {mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
 import type {EncodedMaze, Level, Outcome, Turn} from "./types"
-import {at, must, reportWith} from "./test-support";
+import {must, reportWith} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -122,46 +122,101 @@ describe("mazeFrameAt", () => {
   })
 })
 
-describe("mazeSummaryRows", () => {
-  const value = (rows: {field: string; value: string}[], field: string) =>
-    rows.find((row) => row.field === field)?.value
+const value = (rows: {field: string; value: string}[], field: string) =>
+  rows.find((row) => row.field === field)?.value
 
-  it("describes the maze and how much of it was entered", () => {
-    const rows = mazeSummaryRows(modelFor())
+describe("mazeStructureRows", () => {
+  it("describes the static maze topology", () => {
+    const rows = mazeStructureRows(modelFor())
 
     expect(value(rows, "Maze size")).toBe("4 x 6 (24 cells)")
+    expect(value(rows, "Edges")).toBe("23")
     expect(value(rows, "Dead ends")).toBe("6")
     expect(value(rows, "Corridors")).toBe("14")
-    expect(value(rows, "Junctions")).toBe("4")
-    expect(value(rows, "Shortest route")).toBe("17 moves")
-    // Four distinct cells across the three turns, including the start.
-    expect(value(rows, "Cells entered")).toBe("4 of 24 (17%)")
-  })
-
-  it("reports the agent-credited count separately from the cells walked", () => {
-    // Tapoo credits the start cell to the "Self" pseudo-player, so the agent's own count runs one below
-    // the cells its path covers. Showing both stops that gap being read as an error.
-    expect(value(mazeSummaryRows(modelFor()), "Credited to agent")).toBe("17")
-    expect(value(mazeSummaryRows(modelFor({ outcome: {} })), "Credited to agent")).toBe("not recorded")
+    expect(value(rows, "3-exit junctions (deg3)")).toBe("4")
+    expect(value(rows, "4-exit junctions (deg4)")).toBe("0")
+    expect(value(rows, "Acyclic graph proof")).toBe("Edges = Maze_size - 1 = 23")
+    expect(value(rows, "Handshaking lemma proof")).toBe("Dead ends = deg3 + 2·deg4 + 2 = 6")
   })
 
   it("is empty when there is no maze to describe", () => {
-    expect(mazeSummaryRows(modelFor({ encodedMaze: null }))).toEqual([])
+    expect(mazeStructureRows(modelFor({ encodedMaze: null }))).toEqual([])
   })
 })
 
-describe("levelSummaryRows", () => {
-  it("classifies speed itself rather than echoing the log's spelling", () => {
-    // The log writes "navigator"; classifyTraversalSpeed writes "Navigator". Two spellings of one class
-    // in a single report read as two different things.
-    expect(levelSummaryRows(reportWith(level()))).toEqual([
-      { level: 1, game: 2, outcome: "won", turns: 3, speed: "1.0000", class: "Navigator" },
-    ])
+describe("mazeLevelRows", () => {
+  it("describes the round-level facts that belong to the level as a whole", () => {
+    const rows = mazeLevelRows(modelFor())
+
+    expect(value(rows, "Outcome")).toBe("won")
+    expect(value(rows, "Turns")).toBe("3")
+    expect(value(rows, "Success route")).toBe("17 of 24 (71%)")
+    // Agent-specific rows are no longer in mazeLevelRows.
+    expect(value(rows, "Traversal speed")).toBeUndefined()
+    expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
   })
 
-  it("says so when a round recorded no speed", () => {
-    const rows = levelSummaryRows(reportWith(level({outcome: {outcome: "lost"}})))
-
-    expect(at(rows, 0)).toMatchObject({ outcome: "lost", speed: "not recorded", class: "not recorded" })
+  it("is empty when there is no maze to describe", () => {
+    expect(mazeLevelRows(modelFor({ encodedMaze: null }))).toEqual([])
   })
 })
+
+describe("mazeLevelAgentStats", () => {
+  it("reports traversal speed and cells entered for the single agent", () => {
+    // outcome.agent is absent in the test fixture, so the sole agent inherits the outcome.
+    const stats = mazeLevelAgentStats(modelFor())!
+
+    expect(stats.agents).toEqual(["Katara"])
+    expect(stats.traversalSpeeds).toEqual(["Navigator (1.0000)"])
+    // Katara's turns cover "0,0","1,0","2,0","2,1" — four unique cells.
+    expect(stats.cellsEntered).toEqual(["4 of 24 (17%)"])
+  })
+
+  it("reports not-recorded decay when turns carry no charge", () => {
+    // The test fixture has decayCharged: null on every turn.
+    const stats = mazeLevelAgentStats(modelFor())!
+    expect(stats.decayCharged).toEqual(["not recorded"])
+  })
+
+  it("accumulates per-turn decay per agent", () => {
+    const stats = mazeLevelAgentStats(modelFor({
+      turns: [
+        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+      ],
+    }))!
+
+    expect(stats.decayCharged).toEqual(["3"])
+  })
+
+  it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
+    const stats = mazeLevelAgentStats(modelFor({
+      turns: [
+        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+      ],
+      outcome: {
+        outcome: "won",
+        traversalSpeed: "0.9634",
+        // outcome.agent names Katara as the level winner.
+        agent: {playerName: "Katara"},
+        playerUniqueCellsVisited: 3,
+        decayUnitsCharged: 3,
+      },
+    }))!
+
+    expect(stats.agents).toEqual(["Katara", "Bumi"])
+    // Katara owns the outcome; Bumi does not.
+    expect(stats.traversalSpeeds[0]).toMatch(/0\.9634/)
+    expect(stats.traversalSpeeds[1]).toBe("not recorded")
+    expect(stats.decayCharged).toEqual(["1", "2"])
+    // Katara: "0,0","1,0" → 2 cells. Bumi: "1,0","2,0" → 2 cells (1,0 counted once per agent).
+    expect(stats.cellsEntered[0]).toMatch(/^2 of/)
+    expect(stats.cellsEntered[1]).toMatch(/^2 of/)
+  })
+
+  it("is null when there is no maze to describe", () => {
+    expect(mazeLevelAgentStats(modelFor({ encodedMaze: null }))).toBeNull()
+  })
+})
+

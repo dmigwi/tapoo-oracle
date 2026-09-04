@@ -145,7 +145,10 @@ export type MazeStats = {
   deadEnds: number;
   corridors: number;
   junctions: number;
-  shortestPath: number | null;
+  deg3: number;
+  deg4: number;
+  edges: number;
+  successPath: number | null;
 };
 
 export type EncodedMaze = {

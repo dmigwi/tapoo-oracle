@@ -1135,9 +1135,23 @@ td {
 
 .maze-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1.5rem;
   margin-top: 1.25rem;
+  align-items: start;
+}
+
+.maze-summary-heading {
+  margin: 0 0 0.5rem;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--oracle-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.maze-summary-panel--full {
+  grid-column: 1 / -1;
 }
 
 .maze-summary-table {
@@ -1165,7 +1179,43 @@ td {
   font-size: var(--fs-micro);
 }
 
+/* Per-agent stats: one card per agent, stacked vertically so five seats are as legible as one.
+   A flex row would shrink each card to 20% of the panel width at five agents — unreadable at any
+   realistic viewport. Stacking costs one screenful per agent and keeps every card full-width. */
+.maze-agent-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--oracle-line);
+}
+
+.maze-agent-panel {
+  min-width: 0;
+}
+
+.maze-agent-name {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+  font-size: var(--fs-small);
+  color: var(--oracle-ink);
+}
+
+/* The horizontal metrics table: column headers above, one value row below. Every value cell is
+   monospace — there is no "last" column, the mono rule on td:last-child does not apply here. */
+.maze-agent-table td {
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+}
+
 @media (max-width: 860px) {
+  .maze-summary {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  }
+}
+
+@media (max-width: 540px) {
   .maze-summary {
     grid-template-columns: 1fr;
   }

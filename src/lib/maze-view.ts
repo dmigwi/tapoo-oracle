@@ -10,7 +10,7 @@
 // document is hidden.
 
 import { isMove } from "./log-contract"
-import { levelSummaryRows, mazeFrameAt, mazeReplayModel, mazeSummaryRows } from "./maze-model"
+import { mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
 import { formatCount } from "./report-adapters"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report } from "./types"
 
@@ -354,7 +354,42 @@ function turnNarrative(frame: Frame, model: LevelModel): string {
 
 // --- Summaries ---
 
-function summaryTable(rows: Array<Record<string, unknown>>, headers: string[]): HTMLElement {
+// linkedLabel builds a labelled anchor for summary rows whose field names describe a mathematical
+// concept. The link opens in a new tab so it does not navigate away from the report.
+function linkedLabel(text: string, href: string): HTMLElement {
+  const a = document.createElement("a");
+  a.textContent = text;
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  return a;
+}
+
+// MAZE_SUMMARY_LINKS maps the stable field keys returned by mazeSummaryRows to linked labels for
+// rows whose names describe a mathematical concept worth linking to.
+const MAZE_SUMMARY_LINKS: Record<string, HTMLElement> = {
+  "Acyclic graph proof": linkedLabel(
+    "Acyclic graph proof",
+    "https://en.wikipedia.org/wiki/Tree_(graph_theory)#Equivalent_definitions",
+  ),
+  "Handshaking lemma proof": linkedLabel(
+    "Handshaking lemma proof",
+    "https://en.wikipedia.org/wiki/Handshaking_lemma",
+  ),
+};
+
+// summaryPanel wraps a field/value table in a labelled container, giving each panel a clear heading
+// so the Maze and Level panels are visually distinct but structurally consistent.
+function summaryPanel(heading: string, rows: Array<{field: string; value: string}>): HTMLElement {
+  const panel = createHtmlElement("div", "maze-summary-panel");
+  panel.append(
+    createHtmlElement("h3", "maze-summary-heading", heading),
+    summaryTable(rows, ["Property", "Value"]),
+  );
+  return panel;
+}
+
+function summaryTable(rows: Array<Record<string, string | number | Node>>, headers: string[]): HTMLElement {
   const table = createHtmlElement("table", "maze-summary-table");
   const head = createHtmlElement("thead");
   const headRow = createHtmlElement("tr");
@@ -365,11 +400,55 @@ function summaryTable(rows: Array<Record<string, unknown>>, headers: string[]): 
   const body = createHtmlElement("tbody");
   for (const row of rows) {
     const tr = createHtmlElement("tr");
-    for (const value of Object.values(row)) tr.append(createHtmlElement("td", null, String(value)));
+    const entries = Object.entries(row);
+    for (const [key, value] of entries) {
+      const td = createHtmlElement("td");
+      const linked = key === "field" && typeof value === "string" ? MAZE_SUMMARY_LINKS[value] : undefined;
+      td.append(linked ?? (value instanceof Node ? value : String(value)));
+      tr.append(td);
+    }
     body.append(tr);
   }
   table.append(body);
   return table;
+}
+
+// agentStatsRow builds a vertical stack of per-agent cards. Each card spans the full panel width so
+// five active seats are as legible as one: the card never shrinks to fit beside its neighbours.
+// Within the card, metrics are presented as a single-row horizontal table — column headers on top,
+// values below — so the label and its value share a column rather than a row.
+function agentStatsRow(stats: AgentLevelStats): HTMLElement {
+  const container = createHtmlElement("div", "maze-agent-stats");
+
+  const metrics: Array<{label: string; key: keyof AgentLevelStats}> = [
+    {label: "New cells progress", key: "cellsEntered"},
+    {label: "Decay units charged", key: "decayCharged"},
+    {label: "Traversal speed", key: "traversalSpeeds"},
+  ];
+
+  stats.agents.forEach((agent, i) => {
+    const panel = createHtmlElement("div", "maze-agent-panel");
+    panel.append(createHtmlElement("p", "maze-agent-name", `${agent} \u00b7 Agent Seat ${i + 1}`));
+
+    const table = createHtmlElement("table", "maze-summary-table maze-agent-table");
+    const head = createHtmlElement("thead");
+    const headRow = createHtmlElement("tr");
+    const body = createHtmlElement("tbody");
+    const bodyRow = createHtmlElement("tr");
+
+    for (const {label, key} of metrics) {
+      headRow.append(createHtmlElement("th", null, label));
+      bodyRow.append(createHtmlElement("td", null, stats[key][i] ?? ""));
+    }
+
+    head.append(headRow);
+    body.append(bodyRow);
+    table.append(head, body);
+    panel.append(table);
+    container.append(panel);
+  });
+
+  return container;
 }
 
 // --- Entry point ---
@@ -379,7 +458,6 @@ export function createMazeReplay(report: Report): HTMLElement {
   // Takes the report, not a pre-built model: both adapters live in this module, and having the caller
   // run them meant the view's own data shaping was spelled out at every call site.
   const models = mazeReplayModel(report);
-  const levelSummary = levelSummaryRows(report);
 
   const root = createHtmlElement("section", "maze-replay");
   root.setAttribute("aria-label", "Maze traversal timeline replay");
@@ -531,11 +609,17 @@ export function createMazeReplay(report: Report): HTMLElement {
     decayBars = buildDecayBars(decayStrip, model);
     buildDecayLegend(legend, model, decayStrip.hidden === true);
 
+    const levelPanel = createHtmlElement("div", "maze-summary-panel");
+    levelPanel.append(
+      createHtmlElement("h3", "maze-summary-heading", "Level"),
+      summaryTable(mazeLevelRows(model), ["Property", "Value"]),
+    );
+    const agentStats = mazeLevelAgentStats(model);
+    if (agentStats) levelPanel.append(agentStatsRow(agentStats));
+
     summary.append(
-      summaryTable(mazeSummaryRows(model), ["Maze", "Value"]),
-      levelSummary.length > 0
-        ? summaryTable(levelSummary, ["Level", "Game", "Outcome", "Turns", "Speed", "Class"])
-        : createHtmlElement("div")
+      summaryPanel("Maze", mazeStructureRows(model)),
+      levelPanel,
     );
 
     paint();

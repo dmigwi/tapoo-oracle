@@ -97,58 +97,108 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
   };
 }
 
-// mazeSummaryRows describes the maze itself and how much of it the round actually used.
-export function mazeSummaryRows(levelModel: LevelModel | null | undefined): Array<{field: string; value: string}> {
+type SummaryRow = {field: string; value: string};
+
+// mazeStructureRows describes the static shape of the maze — its topology and the two structural
+// proofs that confirm it is a valid perfect maze. These facts do not change as the round is played.
+export function mazeStructureRows(levelModel: LevelModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
   const stats = levelModel.stats;
-  const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells));
-  if (levelModel.startCell) walked.add(levelModel.startCell);
-  const outcome = levelModel.outcome ?? {};
-  const agentCells = Number(outcome.playerUniqueCellsVisited);
-  const coverage = stats.cells > 0 ? Math.round((walked.size / stats.cells) * 100) : 0;
 
   return [
     {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
+    {field: "Edges", value: formatCount(stats.edges)},
     {field: "Dead ends", value: formatCount(stats.deadEnds)},
     {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "Junctions", value: formatCount(stats.junctions)},
-    {
-      field: "Shortest route",
-      value: stats.shortestPath === null ? "no route found" : `${formatCount(stats.shortestPath)} moves`
-    },
-    {field: "Cells entered", value: `${formatCount(walked.size)} of ${formatCount(stats.cells)} (${coverage}%)`},
-    {
-      // Tapoo credits the start cell to the "Self" pseudo-player, so an agent's own unique-cell count is
-      // one below the cells its path covers. Reporting both stops that gap reading as an error.
-      field: "Credited to agent",
-      value: Number.isFinite(agentCells) ? formatCount(agentCells) : "not recorded"
-    },
-    {
-      field: "Decay charged",
-      value: Number.isFinite(Number(outcome.decayUnitsCharged))
-        ? formatCount(Number(outcome.decayUnitsCharged))
-        : "not recorded"
-    }
+    {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
+    {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
+    {field: "Acyclic graph proof", value: `Edges = Maze_size - 1 = ${formatCount(stats.cells - 1)}`},
+    {field: "Handshaking lemma proof", value: `Dead ends = deg3 + 2·deg4 + 2 = ${formatCount(stats.deg3 + 2 * stats.deg4 + 2)}`},
   ];
 }
 
-// levelSummaryRows gives one row per played round, so a multi-level log reads as a sequence rather than
-// a single aggregate.
-export function levelSummaryRows(report: Report | null | undefined): Array<Record<string, string | number>> {
-  return (report?.levels ?? []).map((level) => {
-    const outcome = level.outcome ?? {};
-    const speed = Number(outcome.traversalSpeed);
+// mazeLevelRows describes the round-level facts that belong to the level as a whole rather than to
+// any one agent: how the level ended, how many turns it ran, and the length of the success route.
+export function mazeLevelRows(levelModel: LevelModel | null | undefined): SummaryRow[] {
+  if (!levelModel?.stats) return [];
 
-    return {
-      level: level.level ?? "-",
-      game: level.game ?? "-",
-      outcome: outcome.outcome ?? "unfinished",
-      turns: level.turns.length,
-      // Classified here rather than read from the log: the log's own class field is lower-cased, and two
-      // spellings of the same class in one report read as two different things.
-      speed: Number.isFinite(speed) ? speed.toFixed(4) : "not recorded",
-      class: Number.isFinite(speed) ? classifyTraversalSpeed(speed) : "not recorded"
-    };
-  });
+  const stats = levelModel.stats;
+  const outcome = levelModel.outcome ?? {};
+  const pathCoverage = Math.round((stats.successPath! / stats.cells) * 100);
+
+  return [
+    {field: "Outcome", value: outcome.outcome ?? "unfinished"},
+    {field: "Turns", value: formatCount(levelModel.turns.length)},
+    {field: "Success route", value: `${formatCount(stats.successPath!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
+  ];
 }
+
+// AgentLevelStats carries the per-agent metrics for a level. Each array is parallel to `agents`:
+// index 0 is the value for agents[0], index 1 for agents[1], and so on.
+export type AgentLevelStats = {
+  agents: string[];
+  traversalSpeeds: string[];
+  decayCharged: string[];
+  cellsEntered: string[];
+};
+
+// mazeLevelAgentStats derives the metrics that belong to each individual agent — traversal speed,
+// decay units charged, and cells entered — from the level's turn log and outcome record.
+//
+// Traversal speed comes from the outcome and is attributed to the agent named in outcome.agent. In a
+// single-agent level the outcome is always that agent's, even when the field is absent from older
+// logs. Per-turn decay and cells entered are accumulated directly from the turn log.
+export function mazeLevelAgentStats(levelModel: LevelModel | null | undefined): AgentLevelStats | null {
+  if (!levelModel?.stats || levelModel.agents.length === 0) return null;
+
+  const stats = levelModel.stats;
+  const outcome = levelModel.outcome ?? {};
+
+  // The agent the outcome record belongs to. In older logs the field may be absent; a single-agent
+  // level still has exactly one owner, so we attribute the outcome to the only agent in that case.
+  const outcomeAgent = outcome.agent?.playerName;
+
+  // Unique cells entered per named agent, accumulated from their turns.
+  const cellsByAgent = new Map<string, Set<CellKey>>();
+  for (const turn of levelModel.turns) {
+    if (!turn.playerName) continue;
+    const existing = cellsByAgent.get(turn.playerName) ?? new Set<CellKey>();
+    for (const cell of turn.cells) existing.add(cell);
+    cellsByAgent.set(turn.playerName, existing);
+  }
+
+  // Decay units charged per named agent, summed from their turns.
+  const decayByAgent = new Map<string, number>();
+  for (const turn of levelModel.turns) {
+    if (!turn.playerName || turn.decayCharged === null) continue;
+    decayByAgent.set(turn.playerName, (decayByAgent.get(turn.playerName) ?? 0) + turn.decayCharged);
+  }
+
+  const traversalSpeeds: string[] = [];
+  const decayCharged: string[] = [];
+  const cellsEntered: string[] = [];
+
+  for (const agent of levelModel.agents) {
+    // Attribute the outcome to this agent if the record names them, or if this is the only agent
+    // and the record does not name anyone (older log format).
+    const ownsOutcome = outcomeAgent === agent || (!outcomeAgent && levelModel.agents.length === 1);
+    const speed = ownsOutcome ? Number(outcome.traversalSpeed) : NaN;
+    traversalSpeeds.push(
+      Number.isFinite(speed) ? `${classifyTraversalSpeed(speed)} (${speed.toFixed(4)})` : "not recorded",
+    );
+
+    const decay = decayByAgent.get(agent);
+    decayCharged.push(decay !== undefined ? formatCount(decay) : "not recorded");
+
+    const cells = cellsByAgent.get(agent);
+    cellsEntered.push(
+      cells
+        ? `${formatCount(cells.size)} of ${formatCount(stats.cells)} (${Math.round((cells.size / stats.cells) * 100)}%)`
+        : "not recorded",
+    );
+  }
+
+  return {agents: levelModel.agents, traversalSpeeds, decayCharged, cellsEntered};
+}
+

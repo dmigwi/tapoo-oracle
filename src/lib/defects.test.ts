@@ -66,7 +66,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
     ])
     const model = must(mazeReplayModel(reportWith(...levels))[0], "a model for the round")
 
-    expect(must(model.stats, "maze stats").shortestPath).not.toBeNull()
+    expect(must(model.stats, "maze stats").successPath).not.toBeNull()
   })
 
   it("reads both shapes through one reader, and rejects anything else", () => {
