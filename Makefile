@@ -12,7 +12,7 @@ install: ## Install the reviewed, locked dependencies.
 	CI=true $(PNPM) install --frozen-lockfile --config.confirmModulesPurge=false
 
 audit: ## Fail if the lockfile has known vulnerabilities.
-	$(PNPM) audit --audit-level=low
+	osv-scanner --lockfile=pnpm-lock.yaml
 
 agentic-analysis: ## Answer the rubric for exported Tapoo logs; usage: make agentic-analysis LOGS="a.json b.json"
 	@test -n "$(LOGS)" || \

@@ -1,5 +1,6 @@
 # Tapoo Oracle
 
+[![TypeScript Version](https://img.shields.io/badge/TypeScript-6.0.3+-blue.svg)](http://www.typescriptlang.org/)
 [![CI](https://github.com/dmigwi/tapoo-oracle/actions/workflows/ci.yml/badge.svg)](https://github.com/dmigwi/tapoo-oracle/actions/workflows/ci.yml)
 [![Page Deployment](https://github.com/dmigwi/tapoo-oracle/actions/workflows/pages.yml/badge.svg)](https://github.com/dmigwi/tapoo-oracle/actions/workflows/pages.yml)
 
@@ -59,7 +60,7 @@ validated results for the views. `staged/` is generated and gitignored.
 | Command | Description |
 | --- | --- |
 | `make install` | Install locked dependencies |
-| `make audit` | Run pnpm vulnerability audit |
+| `make audit` | Scan the lockfile for known vulnerabilities via OSV Scanner |
 | `make lint` | Run eslint |
 | `make test` | Run Vitest |
 | `make quality` | Run type checking, lint, and tests |
@@ -125,6 +126,7 @@ CORS, short-lived signed access, retention limits, and a deployment whose reques
 
 - Node.js `24`
 - pnpm `11.25.0`
+- [OSV Scanner](https://github.com/google/osv-scanner) — required locally for `make audit` (`brew install osv-scanner`)
 
 ## License
 
