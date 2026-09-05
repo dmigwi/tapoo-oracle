@@ -5,7 +5,7 @@ import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, n
 import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, ReportTabsState, TapooLog} from "./types"
-import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
+import {at, expectErr, expectOk, firstRound, messagesOf, must} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
 // local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
@@ -23,7 +23,7 @@ beforeAll(() => {
     throw new Error(`Remote test fixture is not analyzable: ${result.error}`)
   }
 
-  fixtureReport = result.report
+  fixtureReport = firstRound(result)
   fixtureSource = result.source
 })
 
@@ -33,9 +33,12 @@ describe("analyzeLogText", () => {
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
-    expect(expectOk(result).report.model).toBe("gemma4")
-    expect(expectOk(result).report.capabilities).toHaveLength(9)
-    expect(expectOk(result).report.violations).toHaveLength(6)
+    // One report per round, each carrying the full rubric. The fixture is a single-round log, so the
+    // count is 1 - a multi-round log is what the round tabs exist for.
+    expect(expectOk(result).rounds).toHaveLength(1)
+    expect(firstRound(result).model).toBe("gemma4")
+    expect(firstRound(result).capabilities).toHaveLength(9)
+    expect(firstRound(result).violations).toHaveLength(6)
   })
 
   it("explains an empty input rather than failing silently", () => {
@@ -204,8 +207,19 @@ describe("presentation", () => {
     expect(at(cards, 0)).toMatchObject({ label: "Capabilities demonstrated", value: "5/9" })
     expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "2/6" })
 
+    // The groups behind each fraction, on the card that states it - not several words away in prose.
+    expect(at(cards, 0).detail).toMatch(/^C\d/)
+    expect(at(cards, 1).detail).toMatch(/^V\d/)
+    expect(at(cards, 0).detail.split(", ")).toHaveLength(5)
+    expect(at(cards, 1).detail.split(", ")).toHaveLength(2)
+
     // The rubric forbids collapsing the two into one score interval.
     expect(cards.map((card) => card.label)).not.toContain("Score")
+  })
+
+  it("names an empty group rather than leaving the card blank", () => {
+    const none = profileCards({...fixtureReport, capabilities: [], violations: []})
+    expect(none.map((card) => card.detail)).toEqual(["None observed", "None confirmed"])
   })
 
   it("shows every fact question with its answer and group result", () => {
@@ -259,7 +273,7 @@ describe("presentation", () => {
 
     const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
-    const missing = provenanceRows(withoutVersionOk.source, withoutVersionOk.report)
+    const missing = provenanceRows(withoutVersionOk.source, firstRound(withoutVersionOk))
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
@@ -273,11 +287,17 @@ describe("presentation", () => {
     })
   })
 
-  it("states what a negative answer does and does not mean", () => {
+  it("states the profile as a finding, leaving the method to the methodology", () => {
     const summary = narrativeSummary(fixtureReport)
     expect(summary).toMatch(/5 of 9 capabilities/)
     expect(summary).toMatch(/Navigator/)
-    expect(summary).toMatch(/not that the model is incapable/)
+    // Which groups were met now lives on the cards. Repeating the ids here made the reader parse a
+    // sentence to learn what a number beside it already counted.
+    expect(summary).not.toMatch(/\(C\d/)
+    expect(summary).not.toMatch(/Confirmed violations/)
+    // What a NO means is explained once, in "How this report is generated". A summary that repeated
+    // it here would be the third copy on the page.
+    expect(summary).not.toMatch(/not that the model is incapable/)
   })
 })
 
@@ -352,7 +372,7 @@ describe("modelOutputRows", () => {
   // What the provider said about its own work, normalized across two API shapes that report
   // overlapping but different things. Not scored - it is context for reading the verdicts.
   const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
-    ...expectOk(analyzeLogText(fixtureText, {label: "fixture"})).report,
+    ...firstRound(analyzeLogText(fixtureText, {label: "fixture"})),
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, durationNs: null, finishReasons: [], ...output},
   })
@@ -403,7 +423,7 @@ describe("provenance names the setup a verdict depends on", () => {
   it("reports the API provider and the reasoning effort", () => {
     const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
     const value = (field: string) =>
-      provenanceRows(result.source, result.report).find((row) => row.field === field)?.value
+      provenanceRows(result.source, firstRound(result)).find((row) => row.field === field)?.value
 
     expect(value("API provider")).toBe("ollama")
     expect(value("Reasoning effort")).toBe("max")

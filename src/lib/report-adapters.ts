@@ -28,31 +28,56 @@ export function formatCount(value: number | string): string {
   return Number(value).toLocaleString("en-US");
 }
 
-export function profileCards(report: Report): Array<{label: string; value: string; tone: string}> {
+// profileCards: the two fractions, each carrying the groups it counted.
+//
+// The ids used to sit in the summary sentence - "demonstrated 5 of 9 capabilities (C2, C3, C6, C8, C9).
+// Confirmed violations: V2, V4, V5." - which made a reader parse one long sentence to learn which
+// groups a fraction was about, with the answer several words away from the number. A card already
+// states the fraction; the groups behind it belong on the same card, not in prose beside it.
+export function profileCards(
+  report: Report,
+): Array<{label: string; value: string; detail: string; tone: string}> {
   const met = (groups: GroupResult[]): number => groups.filter((group) => group.met).length;
+  const ids = (groups: GroupResult[]): string[] =>
+    groups.filter((group) => group.met).map((group) => group.id);
+
+  const capabilities = ids(report.capabilities);
+  const violations = ids(report.violations);
 
   return [
     {
       label: "Capabilities demonstrated",
       value: `${met(report.capabilities)}/${report.capabilities.length}`,
+      // Named rather than left blank: "None observed" is a finding about this round, and an empty line
+      // under a 0/9 reads as a card that failed to render.
+      detail: capabilities.length ? capabilities.join(", ") : "None observed",
       tone: "teal"
     },
     {
       label: "Violations confirmed",
       value: `${met(report.violations)}/${report.violations.length}`,
+      detail: violations.length ? violations.join(", ") : "None confirmed",
       tone: "rose"
     },
-    {label: "Predictions", value: formatCount(report.predictions), tone: "ink"},
-    {label: "Rounds", value: formatCount(report.rounds), tone: "ink"}
+    // No "Predictions" card: the count only means anything against the turn count it is short of, and
+    // that comparison now lives in the level summary's Turns row, per round, where the scrubber's bars
+    // can be added up to reach the same number. The whole-log figure is still stated in narrativeSummary.
+    //
+    // No "Rounds" card either: a report now covers exactly one round, so the count could only ever say
+    // "1". It existed to warn the reader that the verdicts above were blended across mazes, and the
+    // round tabs above the replay are what removed the need for that warning.
   ];
 }
 
-// narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
-// reliably over-read a negative rubric answer as a claim about the model's ability, which it never
-// is - it says the behavior was not observed in this one sample.
+// narrativeSummary states the run in a sentence: which model, through which provider, at what effort,
+// over how many predictions, and how fast a win came.
+//
+// It used to close by explaining what a NO means. That explanation is the method, not the finding, and
+// it was the third place on the page to say so - the hero lede and the methodology's third stage said
+// it too. It now lives only in "How this report is generated", the section named for exactly that, so
+// the summary reads as a result rather than as a result trailing its own disclaimer.
 export function narrativeSummary(report: Report): string {
-  const capabilities = report.capabilities.filter((group) => group.met).map((group) => group.id);
-  const violations = report.violations.filter((group) => group.met).map((group) => group.id);
+  const capabilities = report.capabilities.filter((group) => group.met).length;
   const speed =
     report.traversalSpeedClass !== null && Number.isFinite(report.traversalSpeed)
       ? `Winning traversal speed ${(report.traversalSpeed as number).toFixed(4)} (${report.traversalSpeedClass}).`
@@ -65,15 +90,12 @@ export function narrativeSummary(report: Report): string {
     report.reasoningEfforts.length > 0 ? `at ${report.reasoningEfforts.join(", ")} reasoning effort` : "",
   ].filter(Boolean).join(" ");
 
+  // Which groups were met is on the cards below, so the sentence keeps only what no card says: who ran
+  // this round, through what, at what effort, over how many predictions, and how fast it finished.
   return [
-    `${report.model ?? "This agent"}${setup ? `, ${setup},` : ""} demonstrated ${capabilities.length} of ${report.capabilities.length} capabilities`,
-    capabilities.length ? `(${capabilities.join(", ")})` : "",
+    `${report.model ?? "This agent"}${setup ? `, ${setup},` : ""} demonstrated ${capabilities} of ${report.capabilities.length} capabilities`,
     `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
-    violations.length
-      ? `Confirmed violations: ${violations.join(", ")}.`
-      : "No violations confirmed.",
     speed,
-    "A negative answer means the behavior was not observed in this sample, not that the model is incapable of it."
   ]
     .filter(Boolean)
     .join(" ");

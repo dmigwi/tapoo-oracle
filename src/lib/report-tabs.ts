@@ -6,6 +6,7 @@
 import { loadTapooLogFromUrl } from "./share-link"
 import { parseTapooLogText } from "./log-contract"
 import { answerRubric } from "./report"
+import { groupEntriesByRound, roundLabel } from "./rounds"
 import type { Analysis, LogWarning, ReportTab, ReportTabsState, TapooLog } from "./types"
 import {asTrimmedText} from "./untrusted";
 
@@ -25,14 +26,29 @@ export function analyzeLogText(
   return buildReportAnalysis(result.source, result.warnings, label);
 }
 
+// One report per round, not one per log.
+//
+// A Tapoo log is a sequence of independent games: a new maze, a new start cell, a fresh decay budget.
+// Aggregating them produced verdicts that belonged to no maze in particular - a capability answered YES
+// because round 3 showed it, printed above round 1's replay - and a "Rounds" count that existed only to
+// admit the report was a blend. Answering the rubric per round costs one extra pass over entries
+// already in memory and makes every verdict on screen a statement about the maze beside it.
 function buildReportAnalysis(source: TapooLog, warnings: LogWarning[], label: string): Analysis {
-  const report = answerRubric(source.entries, {label});
+  const rounds = groupEntriesByRound(source.entries).map(({key, game, level, entries}) => ({
+    key,
+    game,
+    level,
+    label: roundLabel({game, level}),
+    // The round's own label, so a warning or an error raised while answering names the round rather
+    // than the file - the file is already on screen above the tabs.
+    report: answerRubric(entries, {label: `${label} - ${roundLabel({game, level})}`}),
+  }));
 
   return {
     ok: true,
     source,
     warnings,
-    report
+    rounds,
   };
 }
 

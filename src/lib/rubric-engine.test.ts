@@ -262,7 +262,6 @@ describe("answerRubric", () => {
         entry(LOG_EVENTS.levelWon, {outcome: "won", traversalSpeed: "1.5000", agent: {playerName: "Kora"}}),
       ])
 
-      expect(report.rounds).toBe(1)
       expect(report.traversalSpeed).toBe(1.5)
       expect(report.traversalSpeedClass).toBe("Trailblazer")
       expect(report.player).toBe("Kora")

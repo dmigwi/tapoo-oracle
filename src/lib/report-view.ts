@@ -21,7 +21,7 @@ import {
 } from "./report-adapters";
 import { createInitialReportTabs } from "./report-tabs";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
-import type { Analysis, GroupKind, Region, ReportTab, ReportTabsState, ReportUi, TapooLog } from "./types";
+import type { Analysis, GroupKind, Region, Report, ReportTab, ReportTabsState, ReportUi, RoundReport, TapooLog } from "./types";
 
 
 // --- Shared tables ---
@@ -57,7 +57,7 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
   })));
 }
 
-function diagnosticsTable({Inputs}: ReportUi, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
+function diagnosticsTable({Inputs}: ReportUi, report: Report): HTMLElement {
   const data = diagnosticTableData(report);
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
@@ -67,7 +67,7 @@ function diagnosticsTable({Inputs}: ReportUi, report: NonNullable<Analysis & {ok
   }));
 }
 
-function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
+function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): HTMLElement {
   const data = provenanceTableData(source, report);
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
@@ -136,25 +136,73 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
   return "";
 }
 
-function profile({html}: ReportUi, tab: ReportTab | undefined): Region {
+// activeRound picks the round on screen, falling back to the first.
+//
+// The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
+// blanked because a key went stale would be a worse failure than showing round one.
+export function activeRound(tab: ReportTab | undefined, key: string | null): RoundReport | undefined {
   const result = tab?.result;
-  if (!tab || !result?.ok) return "";
+  if (!result?.ok) return undefined;
+  return result.rounds.find((round) => round.key === key) ?? result.rounds[0];
+}
+
+// The round tabs, directly under the source line: which game and level the verdicts below belong to,
+// and how to read another one.
+//
+// Rendered only when there is a choice to make. One round needs no tablist - its identity is stated on
+// the line above instead, where it costs no vertical space and still names the game analyzed.
+function roundTabs(
+  {html}: ReportUi,
+  rounds: RoundReport[],
+  active: RoundReport,
+  select: (key: string) => void,
+): Region {
+  if (rounds.length < 2) return "";
+
+  return html`<div class="round-tabs" role="tablist" aria-label="Game to analyze">
+      ${rounds.map(
+        (round) => html`<button
+          type="button"
+          role="tab"
+          class=${`round-tab${round.key === active.key ? " round-tab-active" : ""}`}
+          aria-selected=${String(round.key === active.key)}
+          onclick=${() => select(round.key)}
+        >${round.label}</button>`,
+      )}
+    </div>`;
+}
+
+function profile(
+  ui: ReportUi,
+  tab: ReportTab | undefined,
+  key: string | null,
+  select: (key: string) => void,
+): Region {
+  const {html} = ui;
+  const result = tab?.result;
+  const round = activeRound(tab, key);
+  if (!tab || !result?.ok || !round) return "";
+  const rounds = result.rounds;
   return html`<div class="report-region">
       <section class="events-section">
         <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
-        ${createMazeReplay(result.report)}
-      </section>
-      <section class="analysis-strip">
-        ${profileCards(result.report).map(
-          (card) => html`<article class=${`metric metric-${card.tone}`}>
-            <span>${card.label}</span>
-            <strong>${card.value}</strong>
-          </article>`
-        )}
+        ${rounds.length < 2
+          ? html`<p class="round-identity">${round.label}</p>`
+          : roundTabs(ui, rounds, round, select)}
+        ${createMazeReplay(round.report)}
       </section>
       <section class="events-section oracle-summary">
         <h2>Behavior Profile</h2>
-        <p>${narrativeSummary(result.report)}</p>
+        <p>${narrativeSummary(round.report)}</p>
+        <span class="analysis-strip">
+        ${profileCards(round.report).map(
+          (card) => html`<article class=${`metric metric-${card.tone}`}>
+            <span>${card.label}</span>
+            <strong>${card.value}</strong>
+            <span class="metric-detail">${card.detail}</span>
+          </article>`
+        )}
+        </span>
       </section>
     </div>`;
 }
@@ -171,6 +219,12 @@ function profile({html}: ReportUi, tab: ReportTab | undefined): Region {
 // true and still wrong: a page with no report loaded showed five stages of methodology above an empty
 // state telling the reader to paste a URL, explaining the treatment of evidence that does not exist
 // yet. It renders here so it appears with the thing it describes.
+//
+// It is also the one home for how the report is made. Three claims used to appear here and twice more
+// elsewhere - that no combined score is produced, that every question answers YES or NO, and what a NO
+// means - once in the hero lede and once in the profile summary. A rule stated three times reads as
+// three separate hedges rather than one method, so the lede and the summary now say what they are for
+// and leave the method to the section named after it.
 function methodology({html}: ReportUi, result: Analysis | undefined): Region {
   if (!result?.ok) return "";
   return html`<details class="events-section methodology-section">
@@ -233,40 +287,43 @@ function methodology({html}: ReportUi, result: Analysis | undefined): Region {
     </details>`;
 }
 
-function detail(ui: ReportUi, result: Analysis | undefined): Region {
-  if (!result?.ok) return "";
+function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): Region {
+  const result = tab?.result;
+  const round = activeRound(tab, key);
+  if (!result?.ok || !round) return "";
   const {html} = ui;
+  const report = round.report;
   return html`<div class="report-region">
       <section class="events-section">
         <h2>Capabilities</h2>
         <p class="section-note">AND semantics: every fact question must answer YES for its group to be demonstrated.</p>
-        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(result.report.capabilities), "capability")}</div>
+        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(report.capabilities), "capability")}</div>
       </section>
       <section class="events-section">
         <h2>Violations</h2>
         <p class="section-note">OR semantics: any fact question answering YES confirms its violation group.</p>
-        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(result.report.violations), "violation")}</div>
+        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(report.violations), "violation")}</div>
       </section>
       <section class="events-section">
         <h2>Operational Diagnostics</h2>
         <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
-        ${diagnosticsTable(ui, result.report)}
+        ${diagnosticsTable(ui, report)}
       </section>
       <section class="events-section">
         <h2>Model Output</h2>
         <p class="section-note">What the provider reported about the model's own work. Not scored: a model given ten times the prompt and a model that spent its budget reasoning are doing different tasks, and that is context for the verdicts above rather than a verdict itself.</p>
-        ${ui.Inputs.table(modelOutputRows(result.report), {
+        ${ui.Inputs.table(modelOutputRows(report), {
           columns: ["field", "value"],
           header: {field: "MEASURE", value: "VALUE"},
           sort: false,
-          rows: modelOutputRows(result.report).length,
+          rows: modelOutputRows(report).length,
           layout: "auto"
         })}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>
         <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
-        ${provenanceTable(ui, result.source, result.report)}
+        ${provenanceTable(ui, result.source, report)}
         <p class="source-line">
           The question definitions and answers above come directly from the rubric engine that
           analyzed this log.
@@ -285,11 +342,41 @@ export function renderReportSections(
   tabsState: ReportTabsState | undefined,
 ): {emptyState: Region; notices: Region; methodology: Region; profile: Region; detail: Region} {
   const tab = activeReportTab(tabsState);
+
+  // Round selection swaps the two regions in place rather than travelling through tab state.
+  //
+  // Routing it through the Observable input was the obvious design and it does not work: the state
+  // updates and the input event fires, but the runtime does not recompute the cell, so the page keeps
+  // the round it opened on. Swapping the nodes here is what the maze level select already does on this
+  // same page, and it keeps the whole feature inside this module - no page wiring, no new state field,
+  // and no chance of a stale round key outliving the log it came from.
+  let profileNode: Region = "";
+  let detailNode: Region = "";
+
+  const select = (key: string): void => {
+    const nextProfile = profile(ui, tab, key, select);
+    const nextDetail = detail(ui, tab, key);
+    // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region
+    // that was never inserted - a test rendering one half, a caller displaying only the profile - from
+    // throwing on the first click.
+    if (profileNode instanceof Element && nextProfile instanceof Element && profileNode.parentNode) {
+      profileNode.replaceWith(nextProfile);
+    }
+    if (detailNode instanceof Element && nextDetail instanceof Element && detailNode.parentNode) {
+      detailNode.replaceWith(nextDetail);
+    }
+    profileNode = nextProfile;
+    detailNode = nextDetail;
+  };
+
+  profileNode = profile(ui, tab, null, select);
+  detailNode = detail(ui, tab, null);
+
   return {
     emptyState: emptyState(ui, tab),
     notices: notices(ui, tab),
     methodology: methodology(ui, tab?.result),
-    profile: profile(ui, tab),
-    detail: detail(ui, tab?.result)
+    profile: profileNode,
+    detail: detailNode,
   };
 }

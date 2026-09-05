@@ -56,6 +56,37 @@ body {
   font-size: var(--fs-body);
 }
 
+/* Framework's default sheet caps prose to a reading measure, in two rules:
+
+     p, table, figure, figcaption, h1-h6, .katex-display { max-width: 640px }
+     blockquote, ol, ul                                  { max-width: 600px }
+
+   That is right for an article and wrong for this page. A report is tables, metric strips, maze
+   panels and stage lists that must span the width they are given, and its headings sit above blocks
+   that already do - a heading breaking at 640px over a paragraph running to 1320px reads as a layout
+   bug, not as measure.
+
+   Opting out was being done one selector at a time, which meant every block added since inherited a
+   cap nobody wanted and the next one would too - and the 600px rule went unnoticed entirely, because
+   a list that had opted out looked deliberate rather than rescued. Overriding both selector lists
+   once is the whole fix. It sits here, above the component rules, so anything that genuinely wants a
+   reading measure can still set its own max-width and win on order. */
+p,
+table,
+figure,
+figcaption,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+blockquote,
+ol,
+ul {
+  max-width: none;
+}
+
 #observablehq-main {
   padding-bottom: 2.5rem;
 }
@@ -133,7 +164,6 @@ a[href] {
 }
 
 .lede {
-  max-width: none;
   margin: 1.25rem 0 0;
   color: var(--oracle-muted);
   font-size: var(--fs-body);
@@ -142,7 +172,7 @@ a[href] {
 
 .analysis-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   margin: 1.5rem 0;
 }
@@ -254,7 +284,6 @@ a[href] {
 
 .report-share-disclosure {
   grid-column: 1 / -1;
-  max-width: none;
   margin: 0;
   color: var(--oracle-muted);
   font-size: var(--fs-small);
@@ -280,7 +309,6 @@ a[href] {
    one long line, set the panel's minimum size, and pushed the whole page wider than the screen.
    anywhere is the one value that lets an unbreakable string shrink its container. */
 .report-source-url {
-  max-width: none;
   min-width: 0;
   overflow-wrap: anywhere;
   margin: 0;
@@ -320,7 +348,6 @@ a[href] {
 .report-workspace,
 .report-region {
   width: 100%;
-  max-width: none;
 }
 
 #observablehq-main > p:has(> .report-region),
@@ -358,6 +385,15 @@ a[href] {
   line-height: 1;
 }
 
+/* The groups behind the fraction, on the card that states it. Muted and small: the number is the
+   finding, the ids are how to look it up in the table below. */
+.metric-detail {
+  color: var(--oracle-muted);
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+  line-height: 1.4;
+}
+
 .metric-ink { border-top: 4px solid var(--oracle-ink); }
 .metric-teal { border-top: 4px solid var(--oracle-sage); }
 .metric-rose { border-top: 4px solid var(--oracle-rose); }
@@ -381,6 +417,9 @@ a[href] {
   border-top: 0;
 }
 
+/* Framework's default sheet caps p and h1-h6 at 640px for prose measure. Every block that spans the
+   page already opts out of that; the headings above those blocks were still capped, so a heading long
+   enough to wrap would break at 640px above a paragraph running the full width. */
 .oracle-summary h2,
 .events-section h2,
 .methodology-title {
@@ -390,14 +429,79 @@ a[href] {
 }
 
 .oracle-summary p {
-  max-width: none;
   font-size: var(--fs-body);
   line-height: 1.65;
 }
 
 .methodology-intro {
-  max-width: none;
   line-height: 1.65;
+}
+
+/* The round tabs, under the source line. Underline-selected rather than boxed: they sit inside a
+   section that already has a border, and a second boxed control there would compete with the report
+   tabs above for what "a tab" means on this page. */
+.round-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.4rem;
+  margin: 0.7rem 0 0.3rem;
+}
+
+/* Boxed and set in the display face, at h3 size: the game identity is the subject of everything below
+   it, and as quiet underlined text it read as a caption on the filename above rather than as the thing
+   the report is about. The selected one is filled, so which game you are reading is legible without
+   comparing weights across a row. */
+/* Selected and unselected are one hue at two weights, not two unrelated colours: the pills are the same
+   kind of thing, and only one of them is being read. Pale sage tints the ones you could switch to;
+   solid sage fills the one you are on, so the state is legible from the fill alone, before the reader
+   compares any two labels. */
+.round-tab,
+.round-identity {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--oracle-sage);
+  border-radius: 999px;
+  background: var(--oracle-selected);
+  color: var(--oracle-ink);
+  font: 600 var(--fs-h3)/1.25 var(--oracle-display);
+  letter-spacing: -0.01em;
+}
+
+.round-tab {
+  /* Unselected reads as available rather than as a peer of the selected one: the sage outline is what
+     groups it with its sibling, and the lighter border keeps it from competing for the eye. */
+  border-color: color-mix(in srgb, var(--oracle-sage) 35%, transparent);
+  cursor: pointer;
+}
+
+.round-tab:hover {
+  border-color: var(--oracle-sage);
+  background: color-mix(in srgb, var(--oracle-sage) 22%, var(--oracle-selected));
+}
+
+.round-tab-active,
+.round-tab-active:hover {
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
+/* One round: the same chip, and filled like a selected tab, because that is what it is - the game being
+   read. Left unfilled it was a pale outline against pale paper, which is exactly the thing that made
+   the identity easy to miss. */
+.round-identity {
+  display: inline-block;
+  margin: 0.7rem 0 0.3rem;
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
+/* Keyboard focus has to stay visible: these are the only control on the page a reader tabs into
+   between the address bar and the rubric tables. */
+.round-tab:focus-visible {
+  outline: 2px solid var(--oracle-sage);
+  outline-offset: 2px;
 }
 
 .methodology-section summary {
@@ -417,7 +521,6 @@ a[href] {
 }
 
 .analysis-pipeline {
-  max-width: none;
   margin: 1.5rem 0;
   padding: 0;
   list-style: none;
@@ -450,7 +553,6 @@ a[href] {
 }
 
 .analysis-pipeline p {
-  max-width: none;
   margin: 0;
   line-height: 1.6;
 }
@@ -543,17 +645,10 @@ a[href] {
 
 .notice ul,
 .notice ol {
-  max-width: none;
   margin: 0;
   padding-left: 1.1rem;
 }
 
-.notice blockquote,
-.events-section blockquote,
-.events-section ol,
-.events-section ul {
-  max-width: none;
-}
 
 .notice-error {
   border-color: var(--oracle-rose);
@@ -596,7 +691,6 @@ button {
 }
 
 table {
-  max-width: none;
   font-family: var(--oracle-body);
 }
 
@@ -915,6 +1009,98 @@ td {
 /* The lightest step is barely there against paper on purpose - an ordinary turn should not shout - but
    a swatch has no height to help it read, so it keeps an outline. */
 .maze-legend-swatch.is-decay-1 {
+  border: 1px solid var(--oracle-muted);
+}
+
+/* Text carried for a screen reader only. The Turns row leans on colour to tie itself to the strip, and
+   colour is exactly what a screen reader cannot relay - so each count also says its rule in words. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The Turns row's breakdown: the same three charges the strip under the scrubber draws, in the same
+   three colours, so the reader can add the bottom bars up and land on these numbers. Deliberately the
+   legend's vocabulary and palette rather than a second scheme of its own. */
+.maze-turns-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.4rem;
+}
+
+/* No gap on the container: a flex gap would apply around the bracket pseudo-elements too and float
+   them off the counts they enclose. The spacing lives between the parts instead. */
+.maze-turns-breakdown {
+  display: flex;
+  align-items: baseline;
+  color: var(--oracle-muted);
+}
+
+.maze-turns-part + .maze-turns-part {
+  margin-left: 0.45rem;
+}
+
+/* Brackets around the breakdown, so the row reads as "473 (371 · 93 · 9)" - the total, then what it
+   was made of. Generated like the separators: typed into the markup they would be spoken as
+   "left parenthesis" and would sit inside the copied value. */
+.maze-turns-breakdown::before,
+.maze-turns-breakdown::after {
+  color: var(--oracle-line);
+}
+
+.maze-turns-breakdown::before { content: "("; }
+.maze-turns-breakdown::after { content: ")"; }
+
+.maze-turns-part {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+/* A plus between counts, matching mazeLevelRows' text form of the same row exactly: these are parts of
+   the total beside them, and the sign is what says so. Generated rather than typed into the markup so
+   it stays out of the accessibility tree, where the counts are already separated by their spoken
+   labels. */
+.maze-turns-part + .maze-turns-part::before {
+  content: "+";
+  align-self: baseline;
+  color: var(--oracle-line);
+  margin-right: 0.2rem;
+}
+
+.maze-turns-swatch {
+  align-self: center;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 0.1rem;
+  background: var(--oracle-muted);
+}
+
+.maze-turns-part.is-decay-1 .maze-turns-swatch {
+  background: var(--oracle-line);
+  /* Same reason as the legend's: the lightest step needs an edge to be visible against paper. */
+  border: 1px solid var(--oracle-muted);
+}
+
+.maze-turns-part.is-decay-2 .maze-turns-swatch { background: var(--oracle-rose); }
+.maze-turns-part.is-decay-3 .maze-turns-swatch { background: var(--oracle-ink); }
+
+/* Unreported turns match the strip's unknown bar - hatched, never flat, because a cost nobody wrote
+   down is not a cost of zero. */
+.maze-turns-part.is-decay-unreported .maze-turns-swatch {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--oracle-muted) 0 1px,
+    transparent 1px 3px
+  );
   border: 1px solid var(--oracle-muted);
 }
 

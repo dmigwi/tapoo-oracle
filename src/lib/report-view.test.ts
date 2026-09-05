@@ -78,6 +78,30 @@ const logExport = JSON.stringify({
   ]
 })
 
+// A second round in the same export: a different game and level, its own maze, its own outcome. What
+// the round tabs exist for.
+const twoRoundExport = JSON.stringify({
+  ...JSON.parse(logExport) as Record<string, unknown>,
+  entries: [
+    ...(JSON.parse(logExport) as {entries: LogEntry[]}).entries,
+    {...entry("Agent level started.", {
+      startPosition: {x: 1, y: 1},
+      destinationCell: {row: 0, col: 5},
+      maze: REAL_MAZE
+    }, 3), game: 3, level: 2},
+    {...entry("Agent response.", {payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}}}, 4), game: 3, level: 2},
+    {...entry("Agent level lost.", {outcome: "lost", agent: {playerName: "Katara"},
+      playerPosition: {x: 1, y: 1}, playerUniqueCellsVisited: 1, decayUnitsCharged: 1}, 5), game: 3, level: 2},
+  ]
+})
+
+const twoRoundTab = (): ReportTab => {
+  const result = analyzeLogText(twoRoundExport, {label: "two-rounds.json"})
+  expect(result.ok).toBe(true)
+  return {id: "t2", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
+    label: "two-rounds.json", status: "loaded", result}
+}
+
 const loadedTab = (): ReportTab => {
   const result = analyzeLogText(logExport, {label: "gemma4.json"})
   expect(result.ok).toBe(true)
@@ -138,12 +162,23 @@ describe("profile", () => {
     expect(query(profile(), ".source-line").textContent).toMatch(/gemma4\.json/)
   })
 
-  it("puts the maze between the source line and the metrics", () => {
-    // The order is the point: the reader sees which log, then where the agent went, then the counts.
+  it("puts the maze above the profile, and the metrics inside it", () => {
+    // The order is the point: the reader sees which log, then where the agent went, then the profile.
     // Asserted on the actual child sequence rather than on index arithmetic, which reads as passing
     // whenever a class is simply absent.
     const regions = [...profile().children].map((node) => node.className || node.tagName.toLowerCase())
-    expect(regions).toEqual(["events-section", "analysis-strip", "events-section oracle-summary"])
+    expect(regions).toEqual(["events-section", "events-section oracle-summary"])
+  })
+
+  it("keeps the metric strip inside the profile it summarises, under the prose", () => {
+    // The strip used to be a section of its own between the maze and the profile, which read as three
+    // unrelated blocks. It belongs to the Behavior Profile: same section, after the sentence, so the
+    // cards are the figures for the paragraph above them rather than a floating row of numbers.
+    const summary = query(profile(), ".oracle-summary")
+    expect(summary.querySelector(".analysis-strip")).not.toBeNull()
+
+    const order = [...summary.children].map((node) => node.className || node.tagName.toLowerCase())
+    expect(order).toEqual(["h2", "p", "analysis-strip"])
   })
 
   it("renders the decoded maze, not a placeholder", () => {
@@ -152,16 +187,73 @@ describe("profile", () => {
 
   it("carries one metric card per headline figure", () => {
     const cards = profile().querySelectorAll(".analysis-strip .metric")
-    expect(cards).toHaveLength(4)
+    // Two fractions and nothing else. "Rounds" left when a report became per-round: it could only ever
+    // read 1, and it existed to warn that the verdicts were blended across mazes.
+    expect(cards).toHaveLength(2)
     expect([...cards].map((card) => query(card, "span").textContent)).toContain(
       "Capabilities demonstrated"
     )
   })
 
-  it("states what a negative answer means, in the summary", () => {
-    expect(query(profile(), ".oracle-summary").textContent).toMatch(
-      /not that the model is incapable/
-    )
+  // One page, one explanation of what a NO means: the methodology section. The summary and the hero
+  // lede used to carry copies of it, and three statements of one rule read as three hedges.
+  it("leaves what a negative answer means to the methodology section", () => {
+    const sections = renderReportSections(ui, stateWith(loadedTab()))
+    expect(text(sections.profile)).not.toMatch(/not that the model is incapable/)
+    expect(text(sections.methodology)).toMatch(/not that the model is incapable/)
+  })
+})
+
+describe("round tabs", () => {
+  // Regions are attached to a document: selecting a round replaces them in place, and replaceWith
+  // needs a parent. A detached render would pass every assertion below and do nothing on the page.
+  const mount = (tab: ReportTab) => {
+    const sections = renderReportSections(ui, stateWith(tab))
+    const host = document.createElement("div")
+    for (const region of [sections.profile, sections.detail]) {
+      if (region !== "") host.append(region)
+    }
+    document.body.append(host)
+    return host
+  }
+  const labels = (node: ParentNode) =>
+    queryAll<HTMLElement>(node, ".round-tab").map((button) => button.textContent ?? "")
+
+  it("names each game identity the log recorded, in play order", () => {
+    expect(labels(mount(twoRoundTab()))).toEqual(["Game 2 \u00b7 Level 1", "Game 3 \u00b7 Level 2"])
+  })
+
+  // A tablist of one is not a choice, but the identity still has to be visible - it is what the
+  // verdicts below are about.
+  it("states the identity on its own line when there is only one round", () => {
+    const node = mount(loadedTab())
+    expect(labels(node)).toEqual([])
+    expect(query(node, ".round-identity").textContent).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  it("opens on the first round", () => {
+    expect(query(mount(twoRoundTab()), ".round-tab-active").textContent).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  // The whole point: the verdicts, the maze and the metric cards move together. A click that swapped
+  // the replay and left the rubric behind would put one round's answers over another round's maze.
+  it("swaps the profile and the detail together when a round is clicked", () => {
+    const host = mount(twoRoundTab())
+    const before = host.textContent ?? ""
+
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 3 \u00b7 Level 2")
+    expect(host.textContent).not.toBe(before)
+    // Both regions, not just the one holding the tabs.
+    expect(queryAll(host, ".rubric-table").length).toBeGreaterThan(0)
+  })
+
+  it("switches back, so a round is never a one-way door", () => {
+    const host = mount(twoRoundTab())
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+    queryAll<HTMLButtonElement>(host, ".round-tab")[0]?.click()
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 2 \u00b7 Level 1")
   })
 })
 

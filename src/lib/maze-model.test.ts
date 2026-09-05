@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
+import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
 import type {EncodedMaze, Level, Outcome, Turn} from "./types"
 import {must, reportWith} from "./test-support";
 
@@ -49,6 +49,13 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): 
     decayUnitsCharged: 17,
   },
 })
+
+// A round of n turns whose only interesting property is what each was charged.
+const charged = (charges: Array<number | null>): Turn[] =>
+  charges.map((decayCharged, turn) => ({
+    turn, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1,
+    cells: ["0,0", "1,0"], rejectedMove: null, decayCharged,
+  }))
 
 const modelFor = (overrides: LevelOverrides = {}) =>
   must(mazeReplayModel(reportWith(level(overrides)))[0], "a model for the round")
@@ -150,7 +157,7 @@ describe("mazeLevelRows", () => {
 
     expect(value(rows, "Outcome")).toBe("won")
     expect(value(rows, "Turns")).toBe("3")
-    expect(value(rows, "Success route")).toBe("17 of 24 (71%)")
+    expect(value(rows, "Success path")).toBe("17 of 24 (71%)")
     // Agent-specific rows are no longer in mazeLevelRows.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
@@ -158,6 +165,46 @@ describe("mazeLevelRows", () => {
 
   it("is empty when there is no maze to describe", () => {
     expect(mazeLevelRows(modelFor({ encodedMaze: null }))).toEqual([])
+  })
+
+  // The row and the strip under the scrubber are two views of one partition. If the row could show a
+  // split the bars do not draw, a reader adding the bars up would land somewhere else and be right.
+  it("breaks the turn count down by what each turn was charged", () => {
+    const rows = mazeLevelRows(modelFor({turns: charged([1, 1, 2])}))
+    expect(value(rows, "Turns")).toBe("3 (2 + 1)")
+  })
+
+  it("shows turns no reading covered rather than folding them into a charge", () => {
+    const rows = mazeLevelRows(modelFor({turns: charged([1, 3, null])}))
+    expect(value(rows, "Turns")).toBe("3 (1 + 1 + 1 unreported)")
+  })
+
+  // One part is the total restated. A "3 (3)" would read as a breakdown that lost two thirds of itself.
+  it("leaves the count alone when every turn paid the same charge", () => {
+    expect(value(mazeLevelRows(modelFor({turns: charged([1, 1, 1])})), "Turns")).toBe("3")
+    expect(value(mazeLevelRows(modelFor()), "Turns")).toBe("3")
+  })
+})
+
+describe("decayTally", () => {
+  it("counts turns by charge, ascending, omitting penalties the round never paid", () => {
+    expect(decayTally(modelFor({turns: charged([2, 1, 2])}))).toEqual({
+      counts: [{charge: 1, count: 1}, {charge: 2, count: 2}],
+      unreported: 0,
+    })
+  })
+
+  // An unmeasured cost is not a cost of zero, and it is not a base charge either.
+  it("keeps unreported turns apart from charged ones", () => {
+    expect(decayTally(modelFor({turns: charged([null, null, 3])}))).toEqual({
+      counts: [{charge: 3, count: 1}],
+      unreported: 2,
+    })
+  })
+
+  // Tapoo's ceiling is three; anything above it is the same top step, not a fourth colour.
+  it("folds a charge above the ceiling into the top step", () => {
+    expect(decayTally(modelFor({turns: charged([5])})).counts).toEqual([{charge: 3, count: 1}])
   })
 })
 

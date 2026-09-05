@@ -326,7 +326,6 @@ export type Report = {
   reasoningEfforts: string[];
   output: ModelOutput;
   predictions: number;
-  rounds: number;
   traversalSpeed: number | null;
   traversalSpeedClass: string | null;
   capabilities: GroupResult[];
@@ -382,7 +381,25 @@ export type ModelOutput = {
   finishReasons: Array<[string, number]>;
 };
 
-export type Analysis = Result<{source: TapooLog; warnings: LogWarning[]; report: Report}>;
+/** One round's report, with the identity that names its tab. */
+export type RoundReport = {
+  /** `game/level`. Stable across renders, so it is what a tab selection stores. */
+  key: string;
+  game: number | null;
+  level: number | null;
+  /** "Game 2 · Level 1" - what the tab says. */
+  label: string;
+  report: Report;
+};
+
+export type Analysis = Result<{
+  source: TapooLog;
+  warnings: LogWarning[];
+  /** The rounds this log recorded, in the order they were played. Never empty for a parsed log: a log
+   * that names no round at all still yields one round holding everything. Each carries its own rubric
+   * answers, because a verdict about one maze is not a verdict about the next one. */
+  rounds: RoundReport[];
+}>;
 
 // --- Maze replay ---
 

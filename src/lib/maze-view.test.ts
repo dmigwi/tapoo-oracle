@@ -426,6 +426,42 @@ describe("the decay legend", () => {
     expect(query(build([level()]), ".maze-legend").hidden).toBe(true)
   })
 
+  // The Turns row and the legend are two renderings of decayTally. This is the assertion that keeps
+  // them one partition: if either drifts, a reader adding the bottom bars up stops landing on the row.
+  it("shows the same partition in the Turns row, in the strip's own colours", () => {
+    const node = build([charged(1, 1, 2)])
+    const cell = query(node, ".maze-turns-cell")
+
+    expect(query(cell, ".maze-turns-total").textContent).toBe("3")
+    expect(queryAll<HTMLElement>(cell, ".maze-turns-part").map((part) => [
+      [...part.classList].find((name) => name.startsWith("is-decay-")),
+      query(part, ".maze-turns-count").textContent,
+      part.title,
+    ])).toEqual([
+      ["is-decay-1", "2", "base charge"],
+      ["is-decay-2", "1", "invalid move"],
+    ])
+  })
+
+  // Colour is what ties the row to the strip, and colour is exactly what a screen reader cannot relay.
+  it("names each count in words for a reader who sees no colour", () => {
+    expect(query(build([charged(1, 1, 2)]), ".maze-turns-cell").textContent)
+      .toBe("32 base charge1 invalid move")
+  })
+
+  it("keeps unreported turns visible rather than folding them into a charge", () => {
+    const parts = queryAll<HTMLElement>(build([charged(1, 2, null)]), ".maze-turns-part")
+    expect(parts.map((part) => part.title)).toEqual([
+      "base charge", "invalid move", "decay not reported",
+    ])
+  })
+
+  // A lone part is the total restated; "3 (3)" would read as a breakdown that lost two thirds of itself.
+  it("leaves the count undivided when every turn paid the same charge", () => {
+    expect(queryAll(build([charged(1, 1, 1)]), ".maze-turns-part")).toHaveLength(0)
+    expect(query(build([charged(1, 1, 1)]), ".maze-turns-total").textContent).toBe("3")
+  })
+
   it("clears the previous round's legend when the selected maze is invalid", () => {
     const first = charged(1, 2, 3)
     const node = build([first, level({game: 3, encodedMaze: null})])

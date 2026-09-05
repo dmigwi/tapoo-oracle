@@ -1,4 +1,4 @@
-import type {Level, LogWarning, Region, Report} from "./types";
+import type {Analysis, Level, LogWarning, Region, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -10,6 +10,18 @@ import type {Level, LogWarning, Region, Report} from "./types";
  * a known-good fixture is stating that it *is* a success, and this says so once - which is more
  * honest than a cast, because a fixture that stops decoding fails here with the reason attached
  * rather than at some later property access. */
+/** The report for a single-round log's only round.
+ *
+ * Most fixtures are one round, and reaching through `rounds[0]` at every call site would bury what is
+ * actually being asserted. A fixture that grows a second round fails here rather than silently
+ * asserting against whichever round happened to be first. */
+export function firstRound(result: Analysis): Report {
+  const ok = expectOk(result);
+  const round = ok.rounds[0];
+  if (!round) throw new Error("analysis carries no rounds");
+  return round.report;
+}
+
 export function expectOk<T extends {ok: boolean}>(result: T): Extract<T, {ok: true}> {
   if (!result.ok) {
     throw new Error(`expected a success, got: ${JSON.stringify(result)}`);
@@ -88,7 +100,6 @@ export function reportWith(...levels: Level[]): Report {
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, durationNs: null, finishReasons: []},
     predictions: 0,
-    rounds: levels.length,
     traversalSpeed: null,
     traversalSpeedClass: null,
     capabilities: [],

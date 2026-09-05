@@ -91,7 +91,32 @@ function reportedMoves(record: Replay | null): string[] | null {
   return moves.length > 0 ? moves : null
 }
 
-export function buildLevels(entries: LogEntry[]): Level[] {
+/** One played round's entries, with the identity the log stamped on them. */
+export type RoundGroup = {
+  /** `game/level`, the identity used everywhere a round is addressed. */
+  key: string;
+  game: number | null;
+  level: number | null;
+  entries: LogEntry[];
+};
+
+// roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
+// "2/1" beside a filename reads as a fraction or a date before it reads as a round.
+export function roundLabel({game, level}: {game: number | null; level: number | null}): string {
+  const parts = [
+    typeof game === "number" ? `Game ${game}` : null,
+    typeof level === "number" ? `Level ${level}` : null,
+  ].filter(Boolean);
+  // A log that never stamps either field is still one round, and it still needs something to click.
+  return parts.length > 0 ? parts.join(" \u00b7 ") : "Whole log";
+}
+
+// groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
+//
+// The one definition of what a round is. The replay reads it to build a maze per round, and the report
+// reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
+// tab whose maze came from somewhere else.
+export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
   // An entry that does not name its round belongs to the round in progress.
   //
   // Reading `entry.game ?? 0` per entry instead filed every such entry under a fabricated round "0/0".
@@ -103,7 +128,7 @@ export function buildLevels(entries: LogEntry[]): Level[] {
   // Entries are in recorded order, so the round in progress is whatever the last entry to name one
   // said. Anything before the first such entry is held back and joins the round that opens after it -
   // it cannot belong to an earlier one, because there is none.
-  const groups = new Map<string, LogEntry[]>()
+  const groups = new Map<string, RoundGroup>()
   const beforeFirstRound: LogEntry[] = []
   let game: number | null = null
   let level: number | null = null
@@ -118,20 +143,27 @@ export function buildLevels(entries: LogEntry[]): Level[] {
     }
 
     const key = `${game ?? 0}/${level ?? 0}`
-    const group = groups.get(key) ?? []
-    if (group.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
-      group.push(...beforeFirstRound.splice(0))
+    // Identity comes from the running cursor, not from the group's first entry: on a log that stamps
+    // game and level only on round boundaries, the first entry of a group often carries neither, and a
+    // tab labelled from it would read "Whole log" beside fourteen properly named siblings.
+    const group = groups.get(key) ?? {key, game, level, entries: []}
+    if (group.entries.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
+      group.entries.push(...beforeFirstRound.splice(0))
     }
-    group.push(entry)
+    group.entries.push(entry)
     groups.set(key, group)
   }
 
   // A log that never names a round at all: one round, everything in it, as before.
   if (beforeFirstRound.length > 0) {
-    groups.set("0/0", beforeFirstRound)
+    groups.set("0/0", {key: "0/0", game: null, level: null, entries: beforeFirstRound})
   }
 
-  return [...groups.entries()].map(([key, groupEntries]) => {
+  return [...groups.values()]
+}
+
+export function buildLevels(entries: LogEntry[]): Level[] {
+  return groupEntriesByRound(entries).map(({key, entries: groupEntries}) => {
     const context = buildContext(groupEntries, { label: key })
     const started = asRecord(
       groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,

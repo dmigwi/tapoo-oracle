@@ -99,6 +99,55 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
 
 type SummaryRow = {field: string; value: string};
 
+// DECAY_REASONS is Tapoo's charging rule, which is an ordinal scale of three and not a measurement.
+// Every turn pays a base unit; an invalid move costs two; a response that broke the output format
+// costs three. Lives here rather than in the view because two surfaces now read the same scale - the
+// strip under the scrubber and the Turns row - and a reader comparing them must not find two
+// vocabularies for one rule.
+export const DECAY_REASONS: Record<number, string> = {
+  1: "base charge",
+  2: "invalid move",
+  3: "output format violation",
+};
+
+// The most a turn can be charged: Tapoo's own ceiling.
+//
+// Three is charged only when lastSubmittedMoves is empty - a malformed response, an exhausted token
+// cap, or a failed request.
+export const MOST_DECAY = 3;
+
+/** How a round's turns divide across the three charges, plus the turns no reading covered. */
+export type DecayTally = {
+  /** One entry per charge the round actually incurred, ascending. A charge that never happened is
+   * absent rather than zero: naming a penalty nobody paid describes the rules, not the run. */
+  counts: Array<{charge: number; count: number}>;
+  /** Turns whose charge no reading settled. Not zero-cost turns - unmeasured ones. */
+  unreported: number;
+};
+
+// decayTally counts turns by what they were charged. The single source both the legend under the
+// scrubber and the Turns row count from, so the two can never disagree.
+export function decayTally(levelModel: LevelModel | null | undefined): DecayTally {
+  const counts = new Map<number, number>();
+  let unreported = 0;
+
+  for (const turn of levelModel?.turns ?? []) {
+    if (turn.decayCharged === null) {
+      unreported += 1;
+      continue;
+    }
+    const charge = Math.min(turn.decayCharged, MOST_DECAY);
+    counts.set(charge, (counts.get(charge) ?? 0) + 1);
+  }
+
+  return {
+    counts: [...counts.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([charge, count]) => ({charge, count})),
+    unreported,
+  };
+}
+
 // mazeStructureRows describes the static shape of the maze — its topology and the two structural
 // proofs that confirm it is a valid perfect maze. These facts do not change as the round is played.
 export function mazeStructureRows(levelModel: LevelModel | null | undefined): SummaryRow[] {
@@ -108,8 +157,8 @@ export function mazeStructureRows(levelModel: LevelModel | null | undefined): Su
 
   return [
     {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Edges", value: formatCount(stats.edges)},
     {field: "Dead ends", value: formatCount(stats.deadEnds)},
+    {field: "Edges", value: formatCount(stats.edges)},
     {field: "Corridors", value: formatCount(stats.corridors)},
     {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
     {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
@@ -127,10 +176,26 @@ export function mazeLevelRows(levelModel: LevelModel | null | undefined): Summar
   const outcome = levelModel.outcome ?? {};
   const pathCoverage = Math.round((stats.successPath! / stats.cells) * 100);
 
+  // The turn count on its own says how many attempts there were and nothing about what they cost. The
+  // breakdown says both, and it is the same partition the strip under the scrubber draws - so a reader
+  // can add the bottom bars up and land on these numbers. The text here is the fallback; the view
+  // renders the same tally with the strip's own colours.
+  //
+  // Joined with "+" rather than a middot: the parts are a partition of the total, and the sign says so.
+  // A separator that only groups leaves the reader to guess whether these are shares of 473 or three
+  // unrelated tallies printed beside it.
+  const tally = decayTally(levelModel);
+  const parts = tally.counts.map((entry) => formatCount(entry.count));
+  if (tally.unreported > 0) parts.push(`${formatCount(tally.unreported)} unreported`);
+
   return [
     {field: "Outcome", value: outcome.outcome ?? "unfinished"},
-    {field: "Turns", value: formatCount(levelModel.turns.length)},
-    {field: "Success route", value: `${formatCount(stats.successPath!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
+    {
+      field: "Turns",
+      value:
+        parts.length > 1 ? `${formatCount(levelModel.turns.length)} (${parts.join(" + ")})` : formatCount(levelModel.turns.length),
+    },
+    {field: "Success path", value: `${formatCount(stats.successPath!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
   ];
 }
 

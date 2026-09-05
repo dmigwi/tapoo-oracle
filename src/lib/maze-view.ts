@@ -10,7 +10,7 @@
 // document is hidden.
 
 import { isMove } from "./log-contract"
-import { mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
+import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
 import { formatCount } from "./report-adapters"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report } from "./types"
 
@@ -178,23 +178,10 @@ function buildMovesBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
   return bars;
 }
 
-// DECAY_REASONS is Tapoo's charging rule, which is an ordinal scale of three and not a measurement.
-// Every turn pays a base unit; an invalid move costs two; a response that broke the output format costs
-// three.
-const DECAY_REASONS: Record<number, string> = {
-  1: "base charge",
-  2: "invalid move",
-  3: "output format violation",
-};
-
-// The most a turn can be charged: Tapoo's own ceiling.
-//
-// Three is charged only when lastSubmittedMoves is empty - a malformed response, an exhausted token
-// cap, or a failed request - and those turns are in the replay now, so the strip has all three steps
-// to draw and scales to all three. An absolute scale rather than the round's own maximum: a base
-// charge means the same height in every report, and a round that only ever paid the base rate reads
-// as the cheap run it was instead of filling the strip.
-const MOST_DECAY = 3;
+// One name per charge, used by the legend, the bar tooltips and the Turns row alike. A reader who
+// learns "invalid move" from the legend must meet the same words in the summary table, or the two
+// surfaces read as two unrelated tallies that happen to share numbers.
+const decayLabel = (charge: number): string => DECAY_REASONS[charge] ?? `${charge} decay`;
 
 function buildDecayBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
   const charges = model.turns.map((turn) => turn.decayCharged);
@@ -248,22 +235,10 @@ function buildDecayLegend(legend: HTMLElement, model: LevelModel, hidden: boolea
   legend.hidden = hidden;
   if (hidden) return;
 
-  const counts = new Map<number, number>();
-  for (const turn of model.turns) {
-    if (turn.decayCharged === null) continue;
-    const charge = Math.min(turn.decayCharged, MOST_DECAY);
-    counts.set(charge, (counts.get(charge) ?? 0) + 1);
-  }
-
-  for (const charge of [1, 2, 3]) {
-    const count = counts.get(charge);
-    if (count === undefined) continue;
-
+  for (const {charge, count} of decayTally(model).counts) {
     const item = createHtmlElement("li", "maze-legend-item");
     item.append(createHtmlElement("span", `maze-legend-swatch is-decay-${charge}`));
-    item.append(
-      createHtmlElement("span", null, `${DECAY_REASONS[charge] ?? `${charge} decay`} - ${formatCount(count)}`),
-    );
+    item.append(createHtmlElement("span", null, `${decayLabel(charge)} - ${formatCount(count)}`));
     legend.append(item);
   }
 
@@ -389,6 +364,46 @@ function summaryPanel(heading: string, rows: Array<{field: string; value: string
   return panel;
 }
 
+// turnRow renders the Turns row as the same partition the strip under the scrubber draws: the total,
+// then one swatched count per charge, in the strip's own colours.
+//
+// The swatch is what unifies the two. Numbers alone would leave the reader to guess which of 371, 93
+// and 9 the tall dark bars were; sharing `is-decay-N` means the colour they learned from the legend is
+// the colour they read here. Each count carries its rule as a title and as visually-hidden text, so
+// the meaning survives both a hover and a screen reader that sees no colour at all.
+function turnRow(model: LevelModel): Node {
+  const cell = createHtmlElement("span", "maze-turns-cell");
+  cell.append(createHtmlElement("span", "maze-turns-total", formatCount(model.turns.length)));
+
+  const tally = decayTally(model);
+  const parts: Array<{className: string; count: number; label: string}> = tally.counts.map(
+    ({charge, count}) => ({className: `maze-turns-part is-decay-${charge}`, count, label: decayLabel(charge)}),
+  );
+  // Turns no reading covered are shown, not folded into a charge they may not have paid. Without them
+  // the parts would not sum to the total and the row would quietly lose turns.
+  if (tally.unreported > 0) {
+    parts.push({className: "maze-turns-part is-decay-unreported", count: tally.unreported, label: "decay not reported"});
+  }
+
+  // A single part is the whole total restated. Nothing to break down, so the row stays just the count.
+  if (parts.length < 2) return cell;
+
+  // The enclosing brackets are drawn by .maze-turns-breakdown's ::before/::after rather than appended
+  // here, for the same reason as the separators: in the markup they would be read aloud as "left
+  // parenthesis" and would land in the copied text between a count and its label.
+  const breakdown = createHtmlElement("span", "maze-turns-breakdown");
+  for (const part of parts) {
+    const item = createHtmlElement("span", part.className);
+    item.title = part.label;
+    item.append(createHtmlElement("span", "maze-turns-swatch"));
+    item.append(createHtmlElement("span", "maze-turns-count", formatCount(part.count)));
+    item.append(createHtmlElement("span", "visually-hidden", ` ${part.label}`));
+    breakdown.append(item);
+  }
+  cell.append(breakdown);
+  return cell;
+}
+
 function summaryTable(rows: Array<Record<string, string | number | Node>>, headers: string[]): HTMLElement {
   const table = createHtmlElement("table", "maze-summary-table");
   const head = createHtmlElement("thead");
@@ -428,7 +443,7 @@ function agentStatsRow(stats: AgentLevelStats): HTMLElement {
 
   stats.agents.forEach((agent, i) => {
     const panel = createHtmlElement("div", "maze-agent-panel");
-    panel.append(createHtmlElement("p", "maze-agent-name", `${agent} \u00b7 Agent Seat ${i + 1}`));
+    panel.append(createHtmlElement("p", "maze-agent-name", `${agent} \u00b7 Agent at Seat ${i + 1}`));
 
     const table = createHtmlElement("table", "maze-summary-table maze-agent-table");
     const head = createHtmlElement("thead");
@@ -612,7 +627,12 @@ export function createMazeReplay(report: Report): HTMLElement {
     const levelPanel = createHtmlElement("div", "maze-summary-panel");
     levelPanel.append(
       createHtmlElement("h3", "maze-summary-heading", "Level"),
-      summaryTable(mazeLevelRows(model), ["Property", "Value"]),
+      // The Turns row is the one cell that carries colour, so the view swaps in the rendered tally over
+      // the model's plain-text form of the same numbers.
+      summaryTable(
+        mazeLevelRows(model).map((row) => (row.field === "Turns" ? {...row, value: turnRow(model)} : row)),
+        ["Property", "Value"],
+      ),
     );
     const agentStats = mazeLevelAgentStats(model);
     if (agentStats) levelPanel.append(agentStatsRow(agentStats));
