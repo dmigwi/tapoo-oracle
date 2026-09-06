@@ -5,7 +5,7 @@
 import { classifyTraversalSpeed } from "./log-contract"
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { CellKey, Frame, LevelModel, Report, VisitStatus } from "./types"
+import type { CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
 
 // The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
 // holds adapters and view modules hold DOM - but nothing outside this file uses them, and the split
@@ -182,13 +182,17 @@ export type DecayTally = {
   unreported: number;
 };
 
-// decayTally counts turns by what they were charged. The single source both the legend under the
-// scrubber and the Turns row count from, so the two can never disagree.
-export function decayTally(levelModel: LevelModel | null | undefined): DecayTally {
+// decayTally counts turns by what they were charged.
+//
+// Takes the turns rather than the level, because the two callers mean different sets of them: the Turns
+// row in the level summary counts the whole round, and the legend under the scrubber counts only what
+// has been played. One function, so the two can never disagree about how a charge is classified - only
+// about which turns they are asking about.
+export function decayTally(turns: readonly Turn[]): DecayTally {
   const counts = new Map<number, number>();
   let unreported = 0;
 
-  for (const turn of levelModel?.turns ?? []) {
+  for (const turn of turns) {
     if (turn.decayCharged === null) {
       unreported += 1;
       continue;
@@ -241,7 +245,7 @@ export function mazeLevelRows(levelModel: LevelModel | null | undefined): Summar
   // Joined with "+" rather than a middot: the parts are a partition of the total, and the sign says so.
   // A separator that only groups leaves the reader to guess whether these are shares of 473 or three
   // unrelated tallies printed beside it.
-  const tally = decayTally(levelModel);
+  const tally = decayTally(levelModel.turns);
   const parts = tally.counts.map((entry) => formatCount(entry.count));
   if (tally.unreported > 0) parts.push(`${formatCount(tally.unreported)} unreported`);
 

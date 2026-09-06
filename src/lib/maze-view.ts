@@ -252,12 +252,15 @@ function buildDecayBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
 //
 // Only the charges this round actually incurred are listed. A legend naming a penalty that never
 // happened describes the rules rather than the run, and the run is what the reader is looking at.
-function buildDecayLegend(legend: HTMLElement, model: LevelModel, hidden: boolean): void {
+function buildDecayLegend(legend: HTMLElement, frame: Frame, hidden: boolean): void {
   legend.replaceChildren();
   legend.hidden = hidden;
   if (hidden) return;
 
-  for (const {charge, count} of decayTally(model).counts) {
+  // Counted over the turns played, not the whole round: this is a key to the strip above it, and that
+  // strip fades everything ahead of the thumb. The round's own totals are already in the level summary's
+  // Turns row, which is where a reader goes for the figure that does not move.
+  for (const {charge, count} of decayTally(frame.played).counts) {
     const item = createHtmlElement("li", "maze-legend-item");
     item.append(createHtmlElement("span", `maze-legend-swatch is-decay-${charge}`));
     // Split the same way as the visit legend beside the grid: two keys with the same shape should not
@@ -541,7 +544,7 @@ function turnRow(model: LevelModel): Node {
   const cell = createHtmlElement("span", "maze-turns-cell");
   cell.append(createHtmlElement("span", "maze-turns-total", formatCount(model.turns.length)));
 
-  const tally = decayTally(model);
+  const tally = decayTally(model.turns);
   const parts: Array<{className: string; count: number; label: string}> = tally.counts.map(
     ({charge, count}) => ({className: `maze-turns-part is-decay-${charge}`, count, label: decayLabel(charge)}),
   );
@@ -719,6 +722,7 @@ export function createMazeReplay(report: Report): HTMLElement {
     // The slider fades its track ahead of the thumb; the strips fade the turns ahead of it, so all
     // three read as one control rather than a slider with two decorations beside it.
     buildVisitLegend(visitLegend, active, frame);
+    buildDecayLegend(legend, frame, decayStrip.hidden === true);
 
     const current = frame.turnIndex - 1;
     const total = Number(range.max);
@@ -807,7 +811,6 @@ export function createMazeReplay(report: Report): HTMLElement {
     // Built once per round. drawFrame runs on every scrub and has no business rebuilding 900 nodes.
     movesBars = buildMovesBars(movesStrip, model);
     decayBars = buildDecayBars(decayStrip, model);
-    buildDecayLegend(legend, model, decayStrip.hidden === true);
 
     const levelPanel = createHtmlElement("div", "maze-summary-panel");
     levelPanel.append(

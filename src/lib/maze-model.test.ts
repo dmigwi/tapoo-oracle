@@ -271,7 +271,7 @@ describe("mazeLevelRows", () => {
 
 describe("decayTally", () => {
   it("counts turns by charge, ascending, omitting penalties the round never paid", () => {
-    expect(decayTally(modelFor({turns: charged([2, 1, 2])}))).toEqual({
+    expect(decayTally(modelFor({turns: charged([2, 1, 2])}).turns)).toEqual({
       counts: [{charge: 1, count: 1}, {charge: 2, count: 2}],
       unreported: 0,
     })
@@ -279,7 +279,7 @@ describe("decayTally", () => {
 
   // An unmeasured cost is not a cost of zero, and it is not a base charge either.
   it("keeps unreported turns apart from charged ones", () => {
-    expect(decayTally(modelFor({turns: charged([null, null, 3])}))).toEqual({
+    expect(decayTally(modelFor({turns: charged([null, null, 3])}).turns)).toEqual({
       counts: [{charge: 3, count: 1}],
       unreported: 2,
     })
@@ -287,7 +287,7 @@ describe("decayTally", () => {
 
   // Tapoo's ceiling is three; anything above it is the same top step, not a fourth colour.
   it("folds a charge above the ceiling into the top step", () => {
-    expect(decayTally(modelFor({turns: charged([5])})).counts).toEqual([{charge: 3, count: 1}])
+    expect(decayTally(modelFor({turns: charged([5])}).turns).counts).toEqual([{charge: 3, count: 1}])
   })
 })
 

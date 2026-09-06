@@ -1177,6 +1177,20 @@ td {
   color: var(--oracle-muted);
 }
 
+/* Centred under the strips it explains, with the same room above and below that the caption gets.
+ *
+ * The caption above the scrubber and this row below it are the same kind of line - one sentence of
+ * muted text explaining the control between them - and they were set to different rules, so the block
+ * read as a centred caption, a control, and then a caption that had drifted left. The side margin stays
+ * half a thumb, which is what keeps the row inside the track's own width. */
+.maze-decay-legend {
+  justify-content: center;
+  /* Padding, not margin: .maze-legend zeroes the padding for the visit key beside the grid, and a
+     margin here measured out to nothing against the scrubber above it. */
+  margin: 0 calc(var(--maze-thumb) / 2);
+  padding: 0.75rem 0;
+}
+
 .maze-legend[hidden] {
   display: none;
 }

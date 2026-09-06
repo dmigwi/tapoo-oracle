@@ -568,6 +568,32 @@ describe("the decay legend", () => {
     expect(legend(build([charged(1, 1, 2)]))).toEqual(["base charge - 2", "invalid move - 1"])
   })
 
+  // The key describes the strip above it, and that strip fades everything ahead of the thumb - so the
+  // counts have to move with it. The round's own totals live in the level summary's Turns row, which is
+  // where a reader goes for the figure that does not move.
+  //
+  // The suite reads the default position, which is the end of the round, so every other assertion here
+  // would pass whether this followed the scrubber or not.
+  it("counts only the turns played so far", () => {
+    const node = build([charged(1, 1, 2)])
+
+    scrubTo(node, 1)
+    expect(legend(node)).toEqual(["base charge - 1"])
+
+    scrubTo(node, 2)
+    expect(legend(node)).toEqual(["base charge - 2"])
+
+    scrubTo(node, 3)
+    expect(legend(node)).toEqual(["base charge - 2", "invalid move - 1"])
+  })
+
+  it("names nothing at the start position, where no turn has been charged", () => {
+    const node = build([charged(1, 1, 2)])
+    scrubTo(node, 0)
+
+    expect(legend(node)).toEqual([])
+  })
+
   it("lists only the charges this round actually incurred", () => {
     // A legend naming a penalty that never happened describes the rules rather than the run, and the
     // run is what the reader is looking at.
