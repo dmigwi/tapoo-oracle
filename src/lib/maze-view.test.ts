@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest"
 
 import {createMazeReplay} from "./maze-view"
-import type {EncodedMaze, Level} from "./types"
+import type {CellKey, EncodedMaze, Level, VisitStatus} from "./types"
 import {at, query, queryAll, reportWith} from "./test-support";
 
 const REAL_MAZE = {
@@ -31,6 +31,7 @@ const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}
   destinationCell: "0,5",
   endCell: "2,1",
   observedExits: new Map(),
+  visitStatusByTurn: new Map(),
   positions: [],
   turns: [
     { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
@@ -388,9 +389,103 @@ describe("the bars beside the scrubber", () => {
   })
 })
 
+// The overlay is the feature: a cell's colour has to say how heavily it was worked, and it has to change
+// as the scrubber moves.
+describe("visit status on the grid", () => {
+  const statusesOf = (node: ParentNode) =>
+    queryAll<SVGRectElement>(node, ".maze-overlay rect.maze-cell").map(
+      (rect) => [...rect.classList].find((name) => name.startsWith("is-")) ?? "",
+    )
+
+  const statusLevel = (byTurn: Array<[number, Array<[string, string]>]>) => {
+    const base = level()
+    return {
+      ...base,
+      visitStatusByTurn: new Map(
+        byTurn.map(([turn, cells]) => [turn, new Map(cells as Array<[CellKey, VisitStatus]>)]),
+      ),
+    }
+  }
+
+  it("classes each visited cell by the status the log gave it", () => {
+    const node = build([statusLevel([[0, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 1)
+    expect(statusesOf(node)).toContain("is-oscillating")
+  })
+
+  // A cell nobody entered has no rect at all, so the paper shows through - which is what "unvisited"
+  // looks like, and why the scale needs no fill for it.
+  it("draws nothing for a cell that was never entered", () => {
+    const node = build([level()])
+    scrubTo(node, 1)
+    // The 4x6 maze has 24 cells; only the walked ones are painted.
+    expect(statusesOf(node).length).toBeLessThan(24)
+  })
+
+  it("re-derives the classes when the scrubber moves", () => {
+    const node = build([statusLevel([[0, [["0,0", "explored"]]], [2, [["0,0", "oscillating"]]]])])
+
+    scrubTo(node, 1)
+    expect(statusesOf(node)).toContain("is-explored")
+    expect(statusesOf(node)).not.toContain("is-oscillating")
+
+    scrubTo(node, 3)
+    expect(statusesOf(node)).toContain("is-oscillating")
+  })
+
+  // Matched case-insensitively on the status name alone: how the labels are worded and capitalised is a
+  // copy decision, and a test that pinned the prose would fail on an edit that changed nothing.
+  it("names the statuses on screen in the legend, worst last", () => {
+    const node = build([statusLevel([[0, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 1)
+    const items = queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
+      .map((item) => item.textContent ?? "")
+
+    // The composed part, not the gloss. The name and the "cells with" stem are built at render, so a
+    // broken composition shows up here as "undefined - cells with ..."; the gloss after it is prose and
+    // pinning it made this test fail on an edit that changed nothing about the mechanism.
+    expect(items.some((text) => /^Explored - cells with \S/.test(text))).toBe(true)
+    expect(items.some((text) => /^explored/i.test(text))).toBe(true)
+    expect(items.at(-1)).toMatch(/^oscillating/i)
+    // The scale reads worst-last, so unvisited opens it.
+    expect(items.at(0)).toMatch(/^unvisited/i)
+
+    // The drift guard. The label is composed from the status, so it cannot disagree with the swatch -
+    // and this is what holds that true if anyone ever writes the names out by hand again. Read from the
+    // rendered swatch class rather than from a list here, so the assertion has an independent source.
+    for (const item of queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")) {
+      const status = [...query(item, ".maze-legend-swatch").classList]
+        .find((name) => name.startsWith("is-"))
+        ?.slice(3)
+      expect(status).toBeDefined()
+      const capitalised = `${(status ?? "").charAt(0).toUpperCase()}${(status ?? "").slice(1)}`
+      expect(item.textContent).toMatch(new RegExp(`^${capitalised} - cells with `))
+    }
+  })
+
+  // The four counts have to sum to the maze, or the key is describing something other than the grid
+  // beside it. unvisited is the remainder: no cell in frame.visited can be unvisited.
+  it("counts unvisited as the maze area less the cells walked", () => {
+    const node = build([level()])
+    scrubTo(node, 2)
+
+    const counts = new Map(
+      queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item").map((item) => {
+        const text = item.textContent ?? ""
+        return [text.split(" ")[0]?.toLowerCase() ?? "", Number(text.split(" - ").at(-1))]
+      }),
+    )
+    const walked = queryAll(node, ".maze-overlay rect.maze-cell").length
+
+    // The fixture maze is 4x6.
+    expect([...counts.values()].reduce((sum, n) => sum + n, 0)).toBe(24)
+    expect(counts.get("unvisited")).toBe(24 - walked)
+  })
+})
+
 describe("the decay legend", () => {
   const legend = (node: ParentNode) =>
-    queryAll<HTMLElement>(node, ".maze-legend-item").map((item) => item.textContent ?? "")
+    queryAll<HTMLElement>(node, ".maze-decay-legend .maze-legend-item").map((item) => item.textContent ?? "")
 
   const charged = (...values: Array<number | null>) => {
     const base = level()
@@ -416,14 +511,14 @@ describe("the decay legend", () => {
   })
 
   it("keeps the swatch colours in step with the bars", () => {
-    const swatches = queryAll<HTMLElement>(build([charged(1, 2, 3)]), ".maze-legend-swatch")
+    const swatches = queryAll<HTMLElement>(build([charged(1, 2, 3)]), ".maze-decay-legend .maze-legend-swatch")
       .map((swatch) => [...swatch.classList].find((name) => name.startsWith("is-decay-")))
 
     expect(swatches).toEqual(["is-decay-1", "is-decay-2", "is-decay-3"])
   })
 
   it("says nothing when the round reports no charge at all", () => {
-    expect(query(build([level()]), ".maze-legend").hidden).toBe(true)
+    expect(query(build([level()]), ".maze-decay-legend").hidden).toBe(true)
   })
 
   // The Turns row and the legend are two renderings of decayTally. This is the assertion that keeps
@@ -472,6 +567,6 @@ describe("the decay legend", () => {
     select.dispatchEvent(new window.Event("change", {bubbles: true}))
 
     expect(legend(node)).toEqual([])
-    expect(query(node, ".maze-legend").hidden).toBe(true)
+    expect(query(node, ".maze-decay-legend").hidden).toBe(true)
   })
 })

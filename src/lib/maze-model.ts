@@ -5,7 +5,7 @@
 import { classifyTraversalSpeed } from "./log-contract"
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { CellKey, Frame, LevelModel, Report } from "./types"
+import type { CellKey, Frame, LevelModel, Report, VisitStatus } from "./types"
 
 // The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
 // holds adapters and view modules hold DOM - but nothing outside this file uses them, and the split
@@ -52,6 +52,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       destinationCell: destination,
       endCell: level.endCell,
       observedExits: level.observedExits,
+      visitStatusByTurn: level.visitStatusByTurn,
       turns: level.turns,
       outcome: level.outcome,
       agents
@@ -65,11 +66,36 @@ export function mazeReplayModel(report: Report): LevelModel[] {
 // means every position it can show is reachable in a test without a browser.
 export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
   const played = levelModel.turns.slice(0, clamp(turnIndex, 0, levelModel.turns.length));
-  const visited = new Map<CellKey, string | null>();
 
-  if (levelModel.startCell) visited.set(levelModel.startCell, null);
+  // The status each cell last carried at or before this frame.
+  //
+  // Statuses are reported per turn and only for the cells inside that turn's history window, so a cell
+  // walked away from keeps the last thing said about it until something says otherwise. Walking the
+  // turns in order and overwriting is what "last one wins" means; a cell never named at all falls back
+  // to "explored", which is the weakest claim the scale can make about a cell we know was entered.
+  const statuses = new Map<CellKey, VisitStatus>();
+  const lastTurn = played.at(-1)?.turn;
+  for (const [turn, reported] of [...levelModel.visitStatusByTurn].sort(([a], [b]) => a - b)) {
+    if (lastTurn !== undefined && turn > lastTurn) break;
+    for (const [cell, status] of reported) statuses.set(cell, status);
+  }
+
+  const visited = new Map<CellKey, {playerName: string | null; status: VisitStatus}>();
+  const enter = (cell: CellKey, playerName: string | null): void => {
+    // A cell in this map was entered - that is what puts it here, and the walk is not a graded judgement
+    // the way the status is. So a carried-forward "unvisited" cannot stand: it was true when it was
+    // reported, and the agent has since walked the cell without any later payload naming it again. Both
+    // that and a cell no payload ever named fall back to "explored", the weakest thing the scale can say
+    // about a cell known to have been entered. Nothing in the overlay is ever drawn "unvisited"; an
+    // unvisited cell has no rect at all, and shows the paper.
+    const reported = statuses.get(cell);
+    const status = reported === undefined || reported === "unvisited" ? "explored" : reported;
+    visited.set(cell, {playerName, status});
+  };
+
+  if (levelModel.startCell) enter(levelModel.startCell, null);
   for (const turn of played) {
-    for (const cell of turn.cells) visited.set(cell, turn.playerName);
+    for (const cell of turn.cells) enter(cell, turn.playerName);
   }
 
   const current = played.at(-1);

@@ -11,8 +11,8 @@
 
 import { isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
-import { formatCount } from "./utils"
-import type { CellKey, Frame, LevelModel, Maze, Move, Report } from "./types"
+import { capitalize, formatCount } from "./utils"
+import type { CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
 
 // --- Drawing constants ---
 
@@ -238,7 +238,107 @@ function buildDecayLegend(legend: HTMLElement, model: LevelModel, hidden: boolea
   for (const {charge, count} of decayTally(model).counts) {
     const item = createHtmlElement("li", "maze-legend-item");
     item.append(createHtmlElement("span", `maze-legend-swatch is-decay-${charge}`));
-    item.append(createHtmlElement("span", null, `${decayLabel(charge)} - ${formatCount(count)}`));
+    // Split the same way as the visit legend beside the grid: two keys with the same shape should not
+    // weight their numbers differently.
+    item.append(createHtmlElement("span", null, `${decayLabel(charge)} - `));
+    item.append(createHtmlElement("strong", "maze-legend-count", formatCount(count)));
+    legend.append(item);
+  }
+
+  legend.hidden = legend.childElementCount === 0;
+}
+
+// VISIT_SCALE holds only what distinguishes one grade from the next, in worsening order.
+//
+// Renders as, in this order - the whole of what a reader sees, so wording can be judged here rather
+// than reconstructed from the pieces below:
+//
+//   Unvisited - cells with no visits yet (open ground)
+//   Explored - cells with fewer visits than the open-exit count
+//   Backtracking - cells with visits equal to the open-exit count
+//   Oscillating - cells with more visits than the open-exit count
+//
+// The name and the "cells with" stem are composed at render rather than retyped four times. That is not
+// only less to read: the name shown is the status itself, so it cannot drift from the value it
+// explains. A row relabelled "Revisiting" while its swatch stayed is-oscillating was one typo away and
+// would have been invisible; the legend test now checks each label against the swatch's own class.
+//
+// Every claim these four make, in one place, so the next edit does not have to rediscover them:
+//
+// 1. All four are one comparison at four positions - the cell's total visits against its count of open
+//    exits - worded as one scale: none, fewer, equal, more. Read down the key and the whole scale is
+//    visible without being explained, which is the reason a reader looks at a key at all. Unvisited
+//    joins that construction rather than describing itself: the zero is a position on the same axis.
+//
+//    "Equal to" in the middle, never "as many as", even though the latter is the tidier parallel with
+//    "fewer than" and "more than". "As many as" is idiomatically an upper bound - "as many as fifty
+//    attended" means up to fifty - and that reading is precisely the explored case, so the phrase could
+//    invert the distinction it exists to draw. This is a report about exact counts: backtracking is
+//    visits == open exits, not within one of it, and the wording has to be as unarguable as the rule.
+//
+// 2. The name is the status verbatim, capitalised. It is the vocabulary of the log and of Tapoo's own
+//    tool description, so a reader can carry "oscillating" straight back to the payload.
+//
+// 3. "Open exits", never bare "exits". A reader looking at a grid of boxes counts four sides per cell,
+//    and the denominator is only the sides a move can pass through - a corridor cell has four sides and
+//    two open exits, so "two visits" is its whole budget rather than half of it. The word carries the
+//    difference between the maze's structure and the walls that shape it.
+//
+// 4. Both counts are totals, and the wording has to keep saying so. Tapoo tracks no per-exit ledger: a
+//    T-junction entered three times through the same exit is backtracking at three and oscillating at
+//    four, with two open exits still untouched. So "one visit per exit" is wrong however well it reads
+//    - it describes a cell worked evenly, which is not what the status means and not something the log
+//    could tell us.
+//
+// 5. Dead ends need no clause of their own. A dead-end has one open exit, so its first visit already
+//    equals that count and it reads as backtracking by the ordinary rule; naming them separately made
+//    an exception of what the comparison produces on its own.
+const VISIT_SCALE: Array<[VisitStatus, string]> = [
+  ["unvisited", "cells with no visits yet (open ground)"],
+  ["explored", "cells with fewer visits than the open-exit count"],
+  ["backtracking", "cells with visits equal to the open-exit count"],
+  ["oscillating", "cells with more visits than the open-exit count"],
+];
+
+const visitLabel = (status: VisitStatus, gloss: string): string =>
+  `${capitalize(status)} - ${gloss}`;
+// buildVisitLegend names the three tints on the grid, and counts them for the frame on screen.
+//
+// Same argument as the decay legend below it: three colours say nothing on their own, and a reader who
+// never hovers a cell still has to learn the scale. Counted per frame rather than per round because the
+// legend is a key to what is drawn right now - watching "oscillating - 3" appear as you scrub is the
+// finding, not a footnote to it.
+//
+// unvisited is counted, not tallied: no cell in frame.visited can be unvisited - being there means it
+// was entered - so it is simply the maze's area less what has been walked. Listing it completes the
+// scale and makes the four counts sum to the maze, which is what turns the key into a tracker.
+function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame): void {
+  legend.replaceChildren();
+
+  const counts = new Map<VisitStatus, number>();
+  for (const {status} of frame.visited.values()) {
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+
+  const cells = model.stats?.cells;
+  if (typeof cells === "number") {
+    // Clamped: a walk that somehow left the grid would otherwise report a negative remainder, and the
+    // key is the wrong place for a reader to first meet that.
+    counts.set("unvisited", Math.max(0, cells - frame.visited.size));
+  }
+
+  for (const [status, gloss] of VISIT_SCALE) {
+    const count = counts.get(status);
+    // A state the round has not reached is left out rather than shown at zero, as the decay legend does:
+    // a legend naming what never happened describes the rules instead of the run.
+    if (count === undefined || count === 0) continue;
+    const item = createHtmlElement("li", "maze-legend-item");
+    item.append(createHtmlElement("span", `maze-legend-swatch is-${status}`));
+    // Label and count as separate elements so the number can carry its own weight. The count is the
+    // datum here - the label explains it once and then never changes, while the number is what a reader
+    // watches move as they scrub.
+    item.append(createHtmlElement("span", null, `${visitLabel(status, gloss)} - `));
+    item.append(createHtmlElement("strong", "maze-legend-count", formatCount(count)));
     legend.append(item);
   }
 
@@ -252,18 +352,23 @@ function buildDecayLegend(legend: HTMLElement, model: LevelModel, hidden: boolea
 function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) => string): void {
   overlay.replaceChildren();
 
-  // Visited cells are tinted. --oracle-selected is only 1.12:1 against paper so it never signals alone,
-  // and the agent-coloured trail drawn below is its second cue: every visited cell lies on that path by
-  // construction. An earlier version added a coloured bar along each cell's lower edge instead, which
-  // was the same weight and orientation as a wall and read as one - it made the maze look like it had
-  // walls the log never described.
-  for (const cell of frame.visited.keys()) {
+  // Visited cells are tinted by how heavily Tapoo says they were worked, not by whether they were
+  // entered at all. One flat tint said a run that ended thrashing in a corner looked exactly like a
+  // clean traversal.
+  //
+  // The tint is never the only cue: the agent-coloured trail drawn below crosses every visited cell by
+  // construction, and the legend names the three colours. An earlier version put a coloured bar along
+  // each cell's lower edge instead, which was the same weight and orientation as a wall and read as one
+  // - it made the maze look like it had walls the log never described.
+  for (const [cell, {status}] of frame.visited) {
     const {x, y} = cellXY(cell);
-    overlay.append(
-      createSvgElement("rect", {
-        x: x + 1, y: y + 1, width: CELL - 2, height: CELL - 2, fill: "var(--oracle-selected)", opacity: 1.0
-      })
-    );
+    const rect = createSvgElement("rect", {
+      x: x + 1, y: y + 1, width: CELL - 2, height: CELL - 2
+    });
+    // A class rather than an inline fill, so the ramp lives with the rest of the palette and can be
+    // reasoned about as one scale instead of a constant buried in a draw call.
+    rect.setAttribute("class", `maze-cell is-${status}`);
+    overlay.append(rect);
   }
 
   // The path walked so far, per agent, so crossing trails stay tellable apart.
@@ -512,9 +617,15 @@ export function createMazeReplay(report: Report): HTMLElement {
   let movesBars: HTMLElement[] = [];
   let decayBars: HTMLElement[] = [];
 
-  const legend = createHtmlElement("ul", "maze-legend");
+  // Beside the grid it describes, not down with the decay legend: it is a key to the maze, and a key
+  // reads where the thing it explains is. The stage puts the two on one row while there is width for
+  // both and lets the key drop underneath when there is not.
+  const stage = createHtmlElement("div", "maze-stage");
+  const visitLegend = createHtmlElement("ul", "maze-legend maze-visit-legend");
+  stage.append(figure, visitLegend);
+  const legend = createHtmlElement("ul", "maze-legend maze-decay-legend");
   const summary = createHtmlElement("div", "maze-summary");
-  root.append(figure, caption, scrubberRow, legend, summary);
+  root.append(stage, caption, scrubberRow, legend, summary);
 
   // models is non-empty here: the caller returned early for a report with no rounds.
   let active: LevelModel = models[0]!;
@@ -538,6 +649,8 @@ export function createMazeReplay(report: Report): HTMLElement {
     //
     // The slider fades its track ahead of the thumb; the strips fade the turns ahead of it, so all
     // three read as one control rather than a slider with two decorations beside it.
+    buildVisitLegend(visitLegend, active, frame);
+
     const current = frame.turnIndex - 1;
     const total = Number(range.max);
     range.style.setProperty("--progress", `${total > 0 ? (frame.turnIndex / total) * 100 : 0}%`);
@@ -555,6 +668,8 @@ export function createMazeReplay(report: Report): HTMLElement {
     summary.replaceChildren();
     legend.replaceChildren();
     legend.hidden = true;
+    visitLegend.replaceChildren();
+    visitLegend.hidden = true;
 
     if (!model.maze) {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and

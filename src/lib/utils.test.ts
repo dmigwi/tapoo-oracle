@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 
-import {asArray, asRecord, asTrimmedText, clamp, fnv1a64Checksum, formatCount, isRecord} from "./utils"
+import {asArray, asRecord, asTrimmedText, capitalize, clamp, fnv1a64Checksum, formatCount, isRecord} from "./utils"
 
 // The structure string and checksum from a real Tapoo export (v2.5.1, 6x4), carried here rather than
 // imported from the maze suite: this describes the hash, not the maze. maze.test.ts keeps the whole
@@ -82,6 +82,23 @@ describe("asTrimmedText", () => {
     for (const value of [{}, [1, 2], null, undefined]) {
       expect(asTrimmedText(value)).toBe("")
     }
+  })
+})
+
+describe("capitalize", () => {
+  it("raises the first character only", () => {
+    expect(capitalize("oscillating")).toBe("Oscillating")
+  })
+
+  // The tail is left exactly as it was: a title-caser would mangle a value that already carries a
+  // capital of its own, and the callers pass words whose remainder is already right.
+  it("leaves the rest of the string alone", () => {
+    expect(capitalize("openMoves")).toBe("OpenMoves")
+    expect(capitalize("Already")).toBe("Already")
+  })
+
+  it("survives an empty string", () => {
+    expect(capitalize("")).toBe("")
   })
 })
 

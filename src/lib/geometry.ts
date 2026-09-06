@@ -7,7 +7,7 @@
 // Nothing here reads a log or answers a question. It converts between the shapes a cell arrives in and
 // the key the rest of the app uses, and it steps one cell to the next.
 
-import type {CellKey, Move} from "./types";
+import type {CellKey, Move, VisitStatus} from "./types";
 
 // --- Maze geometry ---
 
@@ -72,6 +72,48 @@ export function movesFromLogged(openMoves: unknown): Set<string> {
   }
 
   return new Set(Object.keys(openMoves ?? {}));
+}
+
+const VISIT_STATUSES = new Set(["unvisited", "explored", "backtracking", "oscillating"]);
+
+const asVisitStatus = (value: unknown): VisitStatus | null =>
+  typeof value === "string" && VISIT_STATUSES.has(value) ? (value as VisitStatus) : null;
+
+// statusesFromLogged reads what a cell's openMoves say about the cells they lead to.
+//
+// The status belongs to the *reached* cell, not to the cell that owns the entry - Tapoo's own wording is
+// "every openMoves entry ... includes the reached cell's visitStatus". A history entry carries no status
+// of its own; across the snapshot log its only keys are cell, openMoves and playerName. So a cell learns
+// its status from whichever neighbour points back at it, and the caller resolves the move with stepFrom.
+//
+// Both logged shapes carry it and both are read here. movesFromLogged above drops it from each - taking
+// only entry[0] from a compacted pair, and only the keys of the uncompacted object - which is correct
+// for a caller that wants exits and is why this is a separate reader rather than a wider return type.
+export function statusesFromLogged(openMoves: unknown): Array<[string, VisitStatus]> {
+  const pairs: Array<[string, VisitStatus]> = [];
+
+  if (Array.isArray(openMoves)) {
+    // Compacted: [move, visitStatus].
+    for (const entry of openMoves as unknown[]) {
+      if (!Array.isArray(entry)) continue;
+      const [move, status] = entry as unknown[];
+      const known = asVisitStatus(status);
+      if (typeof move === "string" && move.length > 0 && known) pairs.push([move, known]);
+    }
+    return pairs;
+  }
+
+  // Uncompacted: {move: {row, col, visitStatus}}.
+  for (const [move, value] of Object.entries((openMoves ?? {}) as Record<string, unknown>)) {
+    const known = asVisitStatus(
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>).visitStatus
+        : null,
+    );
+    if (move.length > 0 && known) pairs.push([move, known]);
+  }
+
+  return pairs;
 }
 
 // stepFrom resolves the cell reached by applying one move command to a "row,col" key.

@@ -26,11 +26,13 @@ import {
   cellFromLogged,
   isMove,
   movesFromLogged,
+  statusesFromLogged,
 } from "./log-contract"
 import {indexLog} from "./log-index"
 import {asArray, asRecord} from "./utils"
 import type {
   LogIndex,
+  VisitStatus,
   CellKey,
   Context,
   GroupKind,
@@ -127,6 +129,7 @@ export function buildContext(
       cachedPromptTokens: null, durationNs: null, finishReasons: new Map(),
     },
     exits: new Map(),
+    visitStatusByTurn: new Map(),
     positions: [],
     timeline: [],
     submissions: [],
@@ -205,12 +208,25 @@ export function buildContext(
           noteTool("get_maze_structure")
           // Guarded as an array: the key being present does not make the value iterable, and a
           // non-list here used to throw straight out of the report.
+          // The tool result on turn N's request describes the world at the start of turn N, which is
+          // the same moment as the replay frame that has turns 0..N-1 played. So the statuses harvested
+          // here belong to this turn with no offset applied.
+          const statuses = context.visitStatusByTurn.get(currentTurn) ?? new Map<CellKey, VisitStatus>()
+
           for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
             const cell = cellFromLogged(record.cell)
             if (cell) {
               context.exits.set(cell, movesFromLogged(record.openMoves))
+
+              // Resolved through the move, because the status belongs to the cell the move reaches -
+              // never to the cell whose entry carries it.
+              for (const [move, status] of statusesFromLogged(record.openMoves)) {
+                if (isMove(move)) statuses.set(stepFrom(cell, move), status)
+              }
             }
           }
+
+          if (statuses.size > 0) context.visitStatusByTurn.set(currentTurn, statuses)
         }
 
         if ("currentCell" in payload) {
@@ -653,19 +669,45 @@ function availableContextDisregard(context: Context): Record<string, boolean> {
 
 // V5. RESOURCE WASTE
 function resourceWaste(context: Context): Record<string, boolean> {
-  // Q2. Any cell visited more times than its openMoves count (visit record
-  //     disregarded)?
-  const arrivals = new Map<CellKey, number>()
-  for (const cell of context.positions) {
-    arrivals.set(cell, (arrivals.get(cell) ?? 0) + 1)
-  }
+  // Q1. Was any known cell entered more times than its confirmed open-move count?
+  //
+  // Answered from Tapoo's own label wherever the log carries one. `oscillating` is defined as precisely
+  // this question - visits above the cell's fixed open-exit count - so a cell that ever wore it is the
+  // violation, stated by the producer rather than recomputed here.
+  //
+  // The derivation below it was under-reporting, in two ways that compound. It counted
+  // `context.positions`, which records one cell per turn - so a turn applying three moves contributed
+  // its final cell and the two it passed through were never counted at all. And it needed
+  // `exitsOf`, which only knows cells that appeared in some filteredTraversalHistory, so any cell
+  // without one was skipped by the `known !== null` guard rather than judged.
+  //
+  // The label has neither problem: Tapoo counts every entry, against the fixed exit count, for every
+  // cell - and every visited cell is named by some window, so the harvest is complete for exactly the
+  // cells this question is about.
+  const oscillated = [...context.visitStatusByTurn.values()].some((cells) =>
+    [...cells.values()].some((status) => status === "oscillating"),
+  )
 
   // A spanning tree lets a complete depth-first exploration touch a cell once per exit - in and back
   // out of each branch - so exceeding the exit count, not matching it, is what cannot be justified.
-  const excessVisits = [...arrivals].some(([cell, count]) => {
-    const known = exitsOf(context, cell)
-    return known !== null && count > known.size
-  })
+  //
+  // Kept for a log that carries no statuses at all - an older export, or a round where the agent never
+  // called get_maze_structure. Unchanged, including its blind spots: it is what this question answered
+  // before, and a log that cannot reach the label should get the same answer it always did rather than
+  // a differently-wrong one. One provenance per log, never a blend of the two.
+  const derivedExcessVisits = (): boolean => {
+    const arrivals = new Map<CellKey, number>()
+    for (const cell of context.positions) {
+      arrivals.set(cell, (arrivals.get(cell) ?? 0) + 1)
+    }
+
+    return [...arrivals].some(([cell, count]) => {
+      const known = exitsOf(context, cell)
+      return known !== null && count > known.size
+    })
+  }
+
+  const excessVisits = context.visitStatusByTurn.size > 0 ? oscillated : derivedExcessVisits()
 
   // Q3. Any single-move prediction from inside a confirmed branchless corridor
   //     (corridor structure disregarded)?

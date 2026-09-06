@@ -13,7 +13,9 @@
 // how to read.
 
 import type {
+  CellKey,
   EncodedMaze,
+  Move,
   LogWarning,
   AssistantMessage,
   ResponseUsage,
@@ -23,9 +25,12 @@ import type {
   TapooLog,
 } from "./types";
 
-import {asArray, asRecord, asTrimmedText, isRecord} from "./utils";
+import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, isRecord} from "./utils";
 import {indexLog} from "./log-index";
-import {mazeFromEncoded} from "./maze";
+import {cellFromGridPoint, mazeFromEncoded} from "./maze";
+// Imported as well as re-exported below: a re-export puts a name on this module's surface without
+// putting it in scope, and traversalPayloadWarnings needs to call them.
+import {cellFromLogged, isMove, statusesFromLogged, stepFrom} from "./geometry";
 
 export {
   AGENT_API_MODE,
@@ -48,6 +53,7 @@ export {
   classifyTraversalSpeed,
   isMove,
   movesFromLogged,
+  statusesFromLogged,
   stepFrom,
 } from "./geometry";
 
@@ -259,6 +265,7 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
 
   warnings.push(...unreadableResponseWarnings(entries));
   warnings.push(...encodedMazeWarnings(entries));
+  warnings.push(...traversalPayloadWarnings(entries));
 
   // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
   //
@@ -342,6 +349,116 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
 //
 // Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
 // from the exits the log's own tool results confirmed.
+// traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
+//
+// The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
+// be drawn as fact. `content_checksum` is fnv1a64Checksum of the content Tapoo actually sent - not of
+// the compacted form the log keeps - so it cannot be checked against what is on disk directly. It can be
+// checked by rebuilding the original, which every field needed for is either in the record or on the
+// round's "Agent level started." entry.
+//
+// Verified byte-exact against a real export: the key order, the compact separators, and cellType's
+// precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
+//
+// Checked here rather than when the maze is drawn: this pass already walks every entry in order, so a
+// damaged payload is reported once, up front, instead of being discovered by whoever happens to scrub to
+// the turn holding it. It reads the round's facts from a running cursor rather than from
+// groupEntriesByRound - rounds.ts imports this module, so borrowing its grouping would close a cycle.
+function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
+  const warnings: LogWarning[] = [];
+
+  let exits: Map<CellKey, Set<Move>> | null = null;
+  let startCell: CellKey | null = null;
+  let destinationCell: unknown = null;
+  let historyWindowRadius: unknown = null;
+  let damaged = 0;
+  let firstDamaged: string | null = null;
+
+  const cellTypeOf = (cell: CellKey): string => {
+    // start-cell and target-cell override the structural type: cell 0,0 of the snapshot log has one
+    // exit and would read dead-end, and Tapoo writes start-cell.
+    if (cell === startCell) return "start-cell";
+    if (cell === cellFromLogged(destinationCell)) return "target-cell";
+    const open = exits?.get(cell)?.size ?? 0;
+    if (open <= 1) return "dead-end";
+    return open === 2 ? "corridor" : "junction";
+  };
+
+  for (const entry of entries) {
+    const details = asRecord(entry.details);
+
+    if (entry.payload === LOG_EVENTS.levelStarted) {
+      const built = mazeFromEncoded(details.maze as EncodedMaze);
+      exits = built.ok ? built.maze.exits : null;
+      startCell = cellFromGridPoint(asRecord(details.startPosition));
+      destinationCell = details.destinationCell;
+      historyWindowRadius = details.historyWindowRadius;
+      continue;
+    }
+
+    for (const message of asArray(details.messages).map(asRecord)) {
+      if (message.role !== "tool" || typeof message.content !== "string") continue;
+      const checksum = message.content_checksum;
+      if (typeof checksum !== "string" || exits === null) continue;
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(message.content);
+      } catch {
+        continue;
+      }
+      const body = asRecord(payload);
+      if (!Array.isArray(body.filteredTraversalHistory)) continue;
+
+      const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
+        const cell = cellFromLogged(record.cell);
+        const [row, col] = (cell ?? "0,0").split(",").map(Number);
+        const openMoves: Record<string, unknown> = {};
+        for (const [move, status] of statusesFromLogged(record.openMoves)) {
+          if (!isMove(move)) continue;
+          const [toRow, toCol] = stepFrom(cell ?? "0,0", move).split(",").map(Number);
+          openMoves[move] = {row: toRow, col: toCol, visitStatus: status};
+        }
+        return {
+          playerName: record.playerName,
+          cell: {row, col},
+          cellType: cellTypeOf(cell ?? "0,0"),
+          openMoves,
+        };
+      });
+
+      const current = cellFromLogged(body.currentCell);
+      const [currentRow, currentCol] = (current ?? "0,0").split(",").map(Number);
+      const rebuilt = JSON.stringify({
+        level: entry.level,
+        currentCell: {row: currentRow, col: currentCol},
+        destinationCell,
+        historyWindowRadius,
+        filteredTraversalHistory: history,
+      });
+
+      if (fnv1a64Checksum(rebuilt) !== checksum) {
+        damaged += 1;
+        firstDamaged ??= `turn ${entry.turn ?? "?"} of game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
+      }
+    }
+  }
+
+  if (damaged > 0) {
+    // Inaccurate, not incomplete: the maze still draws, and it draws visit colours taken from a payload
+    // that does not match what Tapoo says it sent. A reader would have no way to tell.
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        damaged === 1
+          ? `A maze-structure payload at ${firstDamaged ?? "an unknown turn"} does not match its checksum, so the visit colours on the replay may not be what the agent was shown.`
+          : `${damaged} maze-structure payloads do not match their checksums, the first at ${firstDamaged ?? "an unknown turn"}, so the visit colours on the replay may not be what the agent was shown.`,
+    });
+  }
+
+  return warnings;
+}
+
 function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
   const warnings: LogWarning[] = [];
 

@@ -352,6 +352,7 @@ export function buildLevels(entries: LogEntry[]): Level[] {
         typeof started.historyWindowRadius === "number" ? started.historyWindowRadius : null,
       endCell,
       observedExits: context.exits,
+      visitStatusByTurn: context.visitStatusByTurn,
       positions: context.positions,
       turns,
       outcome,

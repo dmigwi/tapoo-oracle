@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
-import type {EncodedMaze, Level, Outcome, Turn} from "./types"
+import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn} from "./types"
 import {must, reportWith} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
@@ -13,9 +13,10 @@ const REAL_MAZE: EncodedMaze = {
 }
 
 // A three-turn round through the real maze: two clean turns, then one whose second move hits a wall.
-type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null}
+type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null;
+  visitStatusByTurn?: VisitStatusByTurn}
 
-const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): Level => ({
+const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusByTurn}: LevelOverrides = {}): Level => ({
   key: "2/1",
   game: 2,
   level: 1,
@@ -28,6 +29,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome}: LevelOverrides = {}): 
   destinationCell: "0,5",
   endCell: "2,0",
   observedExits: new Map(),
+  visitStatusByTurn: visitStatusByTurn ?? new Map(),
   positions: [],
   turns: turns ?? [
     { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
@@ -131,6 +133,53 @@ describe("mazeFrameAt", () => {
 
 const value = (rows: {field: string; value: string}[], field: string) =>
   rows.find((row) => row.field === field)?.value
+
+// Statuses are reported per turn, and only for the cells inside that turn's history window - so a cell
+// walked away from keeps the last thing said about it. The carry-forward is what makes the overlay whole
+// at every scrub position, and getting it wrong is invisible except at the turn it changes.
+describe("visit statuses across a scrub", () => {
+  const withStatuses = (byTurn: Array<[number, Array<[string, string]>]>) =>
+    modelFor({
+      visitStatusByTurn: new Map(
+        byTurn.map(([turn, cells]) => [turn, new Map(cells as Array<[CellKey, VisitStatus]>)]),
+      ),
+    })
+
+  it("carries the last reported status forward to later turns", () => {
+    const model = withStatuses([[0, [["0,0", "backtracking"]]]])
+    expect(mazeFrameAt(model, 1).visited.get("0,0")?.status).toBe("backtracking")
+    expect(mazeFrameAt(model, 3).visited.get("0,0")?.status).toBe("backtracking")
+  })
+
+  it("applies a relabel from the turn that reported it, and not before", () => {
+    const model = withStatuses([
+      [0, [["0,0", "explored"]]],
+      [2, [["0,0", "oscillating"]]],
+    ])
+
+    expect(mazeFrameAt(model, 1).visited.get("0,0")?.status).toBe("explored")
+    expect(mazeFrameAt(model, 2).visited.get("0,0")?.status).toBe("explored")
+    expect(mazeFrameAt(model, 3).visited.get("0,0")?.status).toBe("oscillating")
+  })
+
+  // "explored" is the weakest claim the scale makes about a cell we know was entered, so it is what an
+  // unreported cell falls back to - never a grade the log did not give.
+  it("falls back to explored for a cell no payload ever named", () => {
+    expect(mazeFrameAt(modelFor(), 3).visited.get("1,0")?.status).toBe("explored")
+  })
+
+  // A real export produced exactly this: a cell labelled unvisited early, walked later, and never named
+  // again - so it kept the stale label and drew with no fill at all, invisible on a path the agent had
+  // demonstrably taken. Being in this map means it was entered, and the walk is not a graded judgement.
+  it("never leaves a walked cell reading unvisited", () => {
+    const model = withStatuses([[0, [["1,0", "unvisited"]]]])
+    expect(mazeFrameAt(model, 3).visited.get("1,0")?.status).toBe("explored")
+  })
+
+  it("keeps the seat that entered the cell alongside its status", () => {
+    expect(mazeFrameAt(modelFor(), 2).visited.get("1,0")?.playerName).toBe("Katara")
+  })
+})
 
 describe("mazeStructureRows", () => {
   it("describes the static maze topology", () => {

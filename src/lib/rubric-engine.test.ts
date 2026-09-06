@@ -4,7 +4,7 @@ import {LOG_EVENTS} from "./log-contract"
 import {answerRubric} from "./report"
 import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
 import type {GroupResult, LogEntry, LogLevel, Report} from "./types"
-import {at} from "./test-support";
+import {at, must} from "./test-support";
 
 // A log is a sequence of entries, and every question below is answered from what those entries do or
 // do not contain. These builders keep each test to the entries it is actually about: anything a test
@@ -278,6 +278,107 @@ describe("answerRubric", () => {
       expect(report.traversalSpeed).toBeNull()
       expect(report.traversalSpeedClass).toBeNull()
     })
+  })
+})
+
+// V5.Q1 asks whether any known cell was entered more times than its confirmed open-move count. That is
+// the definition of Tapoo's `oscillating`, so the label answers it directly.
+//
+// It used to be derived, and the derivation could not see the case below. It counted context.positions,
+// one cell per turn, so a cell passed through inside a multi-move batch contributed nothing at all - and
+// it needed an exit count from filteredTraversalHistory, skipping any cell that had none.
+describe("V5.Q1, excess visits", () => {
+  const answer = (entries: LogEntry[]) =>
+    must(VIOLATIONS.find((group) => group.id === "V5"), "the V5 group").evaluate(buildContext(entries)).Q1
+
+  const structure = (turnNumber: number, cell: [number, number], moves: Array<[string, string]>) =>
+    turn(turnNumber, {
+      messages: [
+        toolMessage({
+          currentCell: cell,
+          filteredTraversalHistory: [{playerName: "Katara", cell, openMoves: moves}],
+        }),
+      ],
+    })
+
+  it("confirms the violation when Tapoo labelled any cell oscillating", () => {
+    expect(answer(structure(0, [1, 1], [["MoveUp", "oscillating"]]))).toBe(true)
+  })
+
+  it("leaves it unconfirmed when no cell went past its exit count", () => {
+    expect(answer(structure(0, [1, 1], [["MoveUp", "backtracking"], ["MoveDown", "explored"]]))).toBe(false)
+  })
+
+  // The exact shape the old derivation missed: one turn, one tool result, and a cell the agent never
+  // ended a turn on - so it never entered context.positions and was never counted.
+  it("sees a cell the turn-boundary count could never reach", () => {
+    const entries = structure(0, [0, 0], [["MoveDown", "oscillating"]])
+    const context = buildContext(entries)
+
+    expect(context.positions).toEqual(["0,0"])
+    expect(context.positions).not.toContain("1,0")
+    expect(answer(entries)).toBe(true)
+  })
+
+  // A log with no statuses at all - an older export, or a round where get_maze_structure was never
+  // called - still gets the derivation it always got, rather than a silent NO.
+  it("falls back to the derivation when the log carries no statuses", () => {
+    const entries = turn(0, {
+      messages: [
+        toolMessage({
+          currentCell: {row: 0, col: 0},
+          // Uncompacted and pre-visitStatus: exits are stated, grades are not.
+          filteredTraversalHistory: [{playerName: "Katara", cell: {row: 0, col: 0}, openMoves: {MoveDown: {row: 1, col: 0}}}],
+        }),
+      ],
+    })
+    const context = buildContext(entries)
+
+    expect(context.visitStatusByTurn.size).toBe(0)
+    expect(context.exits.get("0,0")).toEqual(new Set(["MoveDown"]))
+    expect(answer(entries)).toBe(false)
+  })
+})
+
+// The status a cell carries is written on its neighbours' entries, never on its own: Tapoo's wording is
+// "every openMoves entry ... includes the reached cell's visitStatus", and a history entry has no status
+// field at all. Reading a pair as the entry cell's own status would shift the whole overlay one cell -
+// wrong in a way that still looks plausible on screen, which is why it is pinned here.
+describe("harvesting visit statuses", () => {
+  const structure = (turnNumber: number, cell: [number, number], moves: Array<[string, string]>) =>
+    turn(turnNumber, {
+      messages: [
+        toolMessage({
+          currentCell: cell,
+          filteredTraversalHistory: [{playerName: "Katara", cell, openMoves: moves}],
+        }),
+      ],
+    })
+
+  it("credits the status to the cell the move reaches, not to the cell that reported it", () => {
+    const context = buildContext(structure(0, [1, 1], [["MoveUp", "backtracking"], ["MoveRight", "oscillating"]]))
+
+    expect([...must(context.visitStatusByTurn.get(0), "turn 0's statuses")]).toEqual([
+      ["0,1", "backtracking"],
+      ["1,2", "oscillating"],
+    ])
+    // The reporting cell learns nothing about itself from its own entry.
+    expect(context.visitStatusByTurn.get(0)?.has("1,1")).toBe(false)
+  })
+
+  it("keeps each turn's observations under that turn", () => {
+    const context = buildContext([
+      ...structure(0, [1, 1], [["MoveUp", "explored"]]),
+      ...structure(1, [1, 1], [["MoveUp", "oscillating"]]),
+    ])
+
+    expect(context.visitStatusByTurn.get(0)?.get("0,1")).toBe("explored")
+    expect(context.visitStatusByTurn.get(1)?.get("0,1")).toBe("oscillating")
+  })
+
+  it("records nothing for a turn whose payload carried no status", () => {
+    const context = buildContext(structure(0, [1, 1], []))
+    expect(context.visitStatusByTurn.has(0)).toBe(false)
   })
 })
 

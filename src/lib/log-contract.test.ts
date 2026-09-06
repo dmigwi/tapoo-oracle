@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, stepFrom} from "./log-contract"
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, parseTapooLogText, statusesFromLogged, stepFrom} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
 import {at, expectErr, expectOk, messagesOf} from "./test-support";
@@ -48,6 +50,37 @@ describe("maze geometry", () => {
       "get_prediction_rules",
       "get_last_prediction_outcome",
     ])
+  })
+})
+
+// Both logged shapes carry the status and both must be read: compacted logs write [move, status] pairs,
+// uncompacted ones nest it in the value. movesFromLogged drops it from each on purpose - it wants exits.
+describe("statusesFromLogged", () => {
+  it("reads the compacted [move, status] pairs", () => {
+    expect(statusesFromLogged([["MoveUp", "explored"], ["MoveDown", "oscillating"]])).toEqual([
+      ["MoveUp", "explored"],
+      ["MoveDown", "oscillating"],
+    ])
+  })
+
+  it("reads the uncompacted object, where the status sits inside the value", () => {
+    expect(statusesFromLogged({MoveDown: {row: 1, col: 0, visitStatus: "unvisited"}})).toEqual([
+      ["MoveDown", "unvisited"],
+    ])
+  })
+
+  // A status outside the scale is a shape we do not understand, and colouring a cell from it would be
+  // inventing a reading. Dropped rather than passed through.
+  it("drops a status the scale does not define", () => {
+    expect(statusesFromLogged([["MoveUp", "sideways"], ["MoveDown", "explored"]])).toEqual([
+      ["MoveDown", "explored"],
+    ])
+  })
+
+  it("survives the shapes a producer should never write", () => {
+    expect(statusesFromLogged(null)).toEqual([])
+    expect(statusesFromLogged("MoveUp")).toEqual([])
+    expect(statusesFromLogged([["MoveUp"], 42, null])).toEqual([])
   })
 })
 
@@ -163,6 +196,49 @@ describe("parseTapooLogExport", () => {
     expect(result.ok).toBe(true)
     expect(expectOk(result).value.entries).toHaveLength(1)
     expect(expectOk(result).warnings).toEqual([])
+  })
+})
+
+// The visit colours on the replay are read straight out of get_maze_structure payloads, so a damaged one
+// would be drawn as fact. content_checksum is over the content Tapoo sent, not the compacted form the
+// log keeps, so the check rebuilds the original and hashes that.
+describe("the traversal payload checksum", () => {
+  const checksumWarnings = (log: unknown): string[] => {
+    const result = parseTapooLogText(JSON.stringify(log))
+    if (!result.ok) throw new Error(`fixture did not parse: ${result.error}`)
+    return result.warnings.map((warning) => warning.message).filter((m) => m.includes("checksum"))
+  }
+
+  // The half that matters most: a false positive here would put an accuracy warning on every clean
+  // report, and a reader who meets one on a good log stops believing the next one.
+  it("is silent on a real export, where all 16 payloads reconstruct byte-exactly", () => {
+    expect(checksumWarnings(fixtureData)).toEqual([])
+  })
+
+  it("reports a payload whose contents no longer match what Tapoo hashed", () => {
+    const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    let tampered = 0
+    for (const entry of log.entries) {
+      const details = entry.details as {messages?: Array<Record<string, unknown>>} | null
+      for (const message of details?.messages ?? []) {
+        if (message.role !== "tool" || typeof message.content !== "string") continue
+        if (typeof message.content_checksum !== "string") continue
+        const payload = JSON.parse(message.content) as {
+          filteredTraversalHistory?: Array<{openMoves?: string[][]}>
+        }
+        const first = payload.filteredTraversalHistory?.[0]?.openMoves?.[0]
+        if (!first) continue
+        // One status flipped and nothing else: the payload still parses, and would still draw.
+        first[1] = "oscillating"
+        message.content = JSON.stringify(payload)
+        tampered += 1
+      }
+    }
+
+    expect(tampered).toBe(16)
+    expect(checksumWarnings(log)).toEqual([
+      "16 maze-structure payloads do not match their checksums, the first at turn 0 of game 2 level 1, so the visit colours on the replay may not be what the agent was shown.",
+    ])
   })
 })
 

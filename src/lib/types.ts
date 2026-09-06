@@ -21,6 +21,21 @@ export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
 /** Open exits as a log records them: an object keyed by move, or `[move, visitStatus]` pairs once the
  * result has been compacted for the download. */
 
+/** How heavily a cell has been worked, as Tapoo grades it.
+ *
+ * Tapoo's own rule, from get_maze_structure's description: it compares the cell's visit count with its
+ * fixed open-exit count. `explored` is below, `backtracking` is equal - every exit used once, so the
+ * direction is exhausted - and `oscillating` is above, which is moves being wasted. A dead-end reads as
+ * `backtracking` from its first visit, because nothing lies beyond a single exit.
+ *
+ * Read from the log, never derived here. The count it is computed from is not serialized, so a status
+ * we worked out ourselves could not be checked against the source - and if Tapoo's grading is ever
+ * wrong, a report that recomputed it would hide the defect instead of showing it. */
+export type VisitStatus = "unvisited" | "explored" | "backtracking" | "oscillating";
+
+/** What one tool result said about one cell, and when it said it. */
+export type VisitStatusByTurn = Map<number, Map<CellKey, VisitStatus>>;
+
 export type LogLevel = "error" | "info" | "warn";
 
 /** One entry, carrying only the fields `isLogEntry` actually verifies. `turn`, `level` and `game`
@@ -208,6 +223,10 @@ export type Context = {
     finishReasons: Map<string, number>;
   };
   exits: Map<CellKey, Set<string>>;
+  /** Visit statuses as each turn's tool result reported them, keyed by the turn that carried them. Not
+   * cumulative: a cell appears only on the turns that named it, and the view carries the last one
+   * forward. */
+  visitStatusByTurn: VisitStatusByTurn;
   positions: CellKey[];
   timeline: TimelineEvent[];
   submissions: Submission[];
@@ -288,6 +307,7 @@ export type Level = {
   historyWindowRadius: number | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
+  visitStatusByTurn: VisitStatusByTurn;
   positions: CellKey[];
   turns: Turn[];
   outcome: Outcome | null;
@@ -416,6 +436,7 @@ export type LevelModel = {
   destinationCell: CellKey | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
+  visitStatusByTurn: VisitStatusByTurn;
   turns: Turn[];
   outcome: Outcome | null;
   agents: string[];
@@ -425,7 +446,9 @@ export type Frame = {
   played: Turn[];
   turnIndex: number;
   totalTurns: number;
-  visited: Map<CellKey, string | null>;
+  /** Every cell entered so far, with the seat that last entered it and how Tapoo graded it as of this
+   * frame. The status is the last one reported at or before this turn, so it changes as you scrub. */
+  visited: Map<CellKey, {playerName: string | null; status: VisitStatus}>;
   positions: Map<string, CellKey>;
   currentCell: CellKey | null;
   rejected: {cell: CellKey | null; move: string} | null;

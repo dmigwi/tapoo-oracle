@@ -46,6 +46,11 @@
   --oracle-terracotta: #a3472d;
   --oracle-amber: #855711;
   --oracle-rose: #963c37;
+  /* The visit-status ramp. Named here rather than written at each use so the cell on the grid and the
+     swatch in the key beside it can never drift apart - they are the same statement twice. */
+  --oracle-visit-explored: color-mix(in srgb, var(--oracle-sage) 20%, var(--oracle-paper));
+  --oracle-visit-backtracking: color-mix(in srgb, var(--oracle-amber) 38%, var(--oracle-paper));
+  --oracle-visit-oscillating: color-mix(in srgb, var(--oracle-terracotta) 60%, var(--oracle-paper));
   --theme-background: var(--oracle-paper);
   --theme-background-alt: var(--oracle-surface);
   --theme-foreground: var(--oracle-ink);
@@ -1061,9 +1066,13 @@ td {
   background: var(--oracle-surface);
 }
 
+/* Centred over the stage it titles. The grid stops growing at 30rem and the stage centres what it
+   holds, so a left-set heading sat off to one side of the thing it names - the panel read as two
+   alignments rather than one composition. */
 .maze-heading {
   margin: 0 0 0.75rem;
   font-size: var(--fs-h2);
+  text-align: center;
 }
 
 .maze-controls:not(:empty) {
@@ -1082,10 +1091,72 @@ td {
 
 /* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px
    cells into dinner plates, and the walls stop reading as a maze. */
+/* The maze and its key, side by side while both fit and stacked when they do not.
+ *
+ * flex-wrap rather than a media query: what matters is whether these two fit next to each other, and
+ * that depends on the panel they are in - not on how wide the window happens to be. The key's basis is
+ * its natural width, so it drops below the grid exactly when the row can no longer hold it. */
+.maze-stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  /* Centred as a pair inside the replay panel. The grid stops growing at 30rem, so on a wide panel the
+     two would otherwise sit against the left edge with the leftover width pooling on the right - the
+     panel would look mis-set rather than roomy. Centring the line keeps the maze under the heading it
+     belongs to at every width, and when the row wraps it centres the key beneath the grid. */
+  justify-content: center;
+  gap: 0.5rem 1.75rem;
+}
+
 .maze-figure {
   display: flex;
+  /* Basis is the grid's own maximum, and it does not grow: left to absorb the row's leftover width the
+     figure pushed the key out to the far edge, reading as two unrelated blocks rather than a thing and
+     its key. It still shrinks, which is what lets the row give up and wrap. */
+  flex: 0 1 30rem;
   justify-content: center;
+  min-width: 0;
   padding: 0.5rem 0;
+}
+
+/* One status per row: three lines of "label - count" read as a list to scan down, where the decay
+   legend's single row reads as a caption. Vertically centred against the grid rather than pinned to its
+   top edge, so a three-item key sits with the maze instead of floating above it. */
+.maze-visit-legend {
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-self: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+/* Visited cells, tinted by how heavily Tapoo says each was worked.
+ *
+ * Tapoo grades every cell by comparing its visit count with its fixed open-exit count: below is
+ * explored, equal is backtracking (every exit used once, so the direction is exhausted), above is
+ * oscillating (moves being wasted). We read that label from the log rather than recomputing it.
+ *
+ * Green -> yellow -> red is the natural reading of that scale and it is also the exact axis a red-green
+ * deficiency collapses, so as everywhere else in this file the steps are separated by lightness as well
+ * as by hue. Measured against paper: 1.32 : 1.76 : 2.59, adjacent steps 1.33 and 1.47, ends 1.96 apart;
+ * as greyscale luminance 0.676 : 0.496 : 0.321, evenly spaced and strictly ordered. A heavier mark is a
+ * worse cell, which reads without being learned.
+ *
+ * Kept to tints, not fills: the ink walls sit at 11.0 / 8.27 / 5.62 against these, and the agent trail
+ * crossing them stays at or above 2.12 even on the darkest - the trail is the second cue that a cell was
+ * entered at all, and it must not be swallowed by the thing it crosses.
+ *
+ * unvisited gets no rule. A cell nobody entered shows the paper, as it always has. */
+.maze-cell.is-explored {
+  fill: var(--oracle-visit-explored);
+}
+
+.maze-cell.is-backtracking {
+  fill: var(--oracle-visit-backtracking);
+}
+
+.maze-cell.is-oscillating {
+  fill: var(--oracle-visit-oscillating);
 }
 
 .maze-grid {
@@ -1116,12 +1187,43 @@ td {
   gap: 0.35rem;
 }
 
+/* Ink as well as bold: the legend sits in --oracle-muted, and a bold muted number reads as murky rather
+   than as emphasis. The colour is what separates the count from the sentence explaining it. */
+.maze-legend-count {
+  color: var(--oracle-ink);
+  font-weight: 700;
+}
+
 .maze-legend-swatch {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 0.1rem;
   background: var(--oracle-muted);
 }
+
+/* The key's swatches are the cell tints themselves, from the same tokens. They were falling through to
+   the muted default, so all three read as one grey - a key that named three colours and showed none.
+   Outlined for the same reason the lightest decay swatch is: a pale tint at 0.6rem has no height to
+   help it read against paper. */
+/* Outlined in ink, not in the pale line the decay swatches use. These four are tints of the paper they
+   sit on - unvisited *is* the surface behind the grid - so a swatch with a faint edge has nothing to
+   separate it from the card and reads as a gap where a colour should be. Ink is the same value the maze
+   draws its walls in, so the chip reads as a cell with its edges, which is exactly what it stands for. */
+.maze-legend-swatch.is-unvisited,
+.maze-legend-swatch.is-explored,
+.maze-legend-swatch.is-backtracking,
+.maze-legend-swatch.is-oscillating {
+  border: 1px solid var(--oracle-ink);
+}
+
+/* An unvisited cell is drawn with no rect at all, so what shows through it is the panel behind the
+   grid. The swatch is that same surface rather than a plain white, which would name a colour the maze
+   never draws - the ink outline above is the whole of what makes it visible. */
+.maze-legend-swatch.is-unvisited { background: var(--oracle-surface); }
+
+.maze-legend-swatch.is-explored { background: var(--oracle-visit-explored); }
+.maze-legend-swatch.is-backtracking { background: var(--oracle-visit-backtracking); }
+.maze-legend-swatch.is-oscillating { background: var(--oracle-visit-oscillating); }
 
 .maze-legend-swatch.is-decay-1 { background: var(--oracle-line); }
 .maze-legend-swatch.is-decay-2 { background: var(--oracle-rose); }
@@ -1193,7 +1295,6 @@ td {
 .maze-turns-part + .maze-turns-part::before {
   content: "+";
   align-self: baseline;
-  color: var(--oracle-line);
   margin-right: 0.2rem;
 }
 
@@ -1225,11 +1326,18 @@ td {
   border: 1px solid var(--oracle-muted);
 }
 
+/* Centred under the frame it describes, with the heading and the stage above it.
+ *
+ * The cost is real and accepted: this text changes on every scrub, and centred text re-centres as its
+ * length changes, so the caption drifts left and right while the thumb moves. min-height already stops
+ * it jumping vertically when a turn has no refused move; nothing stops the horizontal shift, which is
+ * the price of the panel reading as one centred composition. */
 .maze-caption {
   margin: 0.5rem 0 0.75rem;
   color: var(--oracle-muted);
   font-size: var(--fs-small);
   min-height: 1.4em;
+  text-align: center;
 }
 
 .maze-scrubber {
