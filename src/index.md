@@ -4,7 +4,7 @@ toc: false
 ---
 
 ```js
-import {createReportTabsInput, renderReportSections} from "./app.js";
+import {createReportTabsInput, renderReportSections, stampBuildAge} from "./app.js";
 ```
 
 <section class="oracle-hero">
@@ -16,6 +16,12 @@ import {createReportTabsInput, renderReportSections} from "./app.js";
 
 ```js
 const reportTabsState = view(createReportTabsInput());
+```
+
+```js
+// The footer's build date is stamped into the HTML; how long ago that was can only be answered while
+// someone is looking, so it is finished here.
+stampBuildAge(document, new Date());
 ```
 
 ```js

@@ -457,6 +457,10 @@ export type LevelModel = {
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
   visitStatusAfterTurn: VisitStatusByTurn;
+  /** How far from its current cell the agent could see its own traversal history, as a Manhattan
+   * radius in cells. It bounds what the agent knew when it chose each move, so it belongs beside the
+   * round's other facts rather than with the maze's fixed shape. */
+  historyWindowRadius: number | null;
   turns: Turn[];
   outcome: Outcome | null;
   agents: string[];

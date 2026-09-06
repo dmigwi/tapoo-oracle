@@ -566,6 +566,18 @@ a[href] {
 /* The round tabs, under the source line. Underline-selected rather than boxed: they sit inside a
    section that already has a border, and a second boxed control there would compete with the report
    tabs above for what "a tab" means on this page. */
+/* Where the report says how it was made, next to the game it is about.
+ *
+ * It sat in the footer, then in the hero. The footer is where a page puts what it does not expect to be
+ * read; the hero states it before there is a report to state it about. Here it heads the report itself,
+ * beside the round identity - which is also where the processing it describes produced something.
+ *
+ * The guidance a reader needs *before* pasting an address is not this sentence: the empty state carries
+ * it, under "Public or non-sensitive payloads only", where someone preparing a gist actually reads it. */
+.processing-note {
+  margin: 0.6rem 0 0;
+}
+
 .round-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -690,6 +702,7 @@ a[href] {
    paper, well past the 4.5:1 AA threshold. */
 .section-note,
 .source-line,
+.processing-note,
 .methodology-preview {
   color: var(--oracle-muted);
   font-size: var(--fs-small);

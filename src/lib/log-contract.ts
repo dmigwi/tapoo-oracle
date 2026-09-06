@@ -434,7 +434,24 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
     for (const message of asArray(details.messages).map(asRecord)) {
       if (message.role !== "tool" || typeof message.content !== "string") continue;
       const checksum = message.content_checksum;
-      if (typeof checksum !== "string" || exits === null) continue;
+      // Verify only when the round supplied every input the reconstruction needs.
+      //
+      // The checksum covers the payload Tapoo sent, which carries destinationCell and
+      // historyWindowRadius - and compaction strips both, so they can only come from the round's
+      // "Agent level started." entry. Without one, JSON.stringify simply omits the keys and the rebuilt
+      // text is a different string, so *every* payload in the round would fail and an otherwise sound
+      // log would be stamped inaccurate from top to bottom.
+      //
+      // A missing input is not evidence of damage. It means we cannot check, which is silence.
+      if (
+        typeof checksum !== "string" ||
+        exits === null ||
+        destinationCell === null ||
+        destinationCell === undefined ||
+        typeof historyWindowRadius !== "number"
+      ) {
+        continue;
+      }
 
       let payload: unknown;
       try {

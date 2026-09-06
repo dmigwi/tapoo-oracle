@@ -225,6 +225,10 @@ function profile(
         ${rounds.length < 2
           ? html`<p class="round-identity">${round.label}</p>`
           : roundTabs(ui, rounds, round, select)}
+        <p class="processing-note">
+          Log contents are analyzed in your browser and never uploaded; a shared link carries the log
+          address to the host serving this page.
+        </p>
         ${createMazeReplay(round.report)}
       </section>
       <section class="events-section oracle-summary">

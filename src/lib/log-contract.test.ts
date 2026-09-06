@@ -267,6 +267,20 @@ describe("the traversal payload checksum", () => {
     expect(checksumWarnings(fixtureData)).toEqual([])
   })
 
+  // The checksum covers fields compaction strips - destinationCell and historyWindowRadius - so they can
+  // only come from the round's "Agent level started." entry. A log without one cannot be checked, and
+  // saying so by silence is the only honest answer: reporting a mismatch would stamp every payload in an
+  // otherwise sound log as damaged, on the strength of something we never had.
+  it("stays silent when the round never recorded what the reconstruction needs", () => {
+    const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    for (const entry of log.entries) {
+      const details = entry.details as Record<string, unknown> | null
+      if (details && "historyWindowRadius" in details) delete details.historyWindowRadius
+    }
+
+    expect(checksumWarnings(log)).toEqual([])
+  })
+
   it("reports a payload whose contents no longer match what Tapoo hashed", () => {
     const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
     let tampered = 0

@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 
-import {asArray, asRecord, asTrimmedText, capitalize, clamp, fnv1a64Checksum, formatCount, isRecord} from "./utils"
+import {asArray, asRecord, asTrimmedText, capitalize, clamp, fnv1a64Checksum, formatCount, isRecord, relativeAge} from "./utils"
 
 // The structure string and checksum from a real Tapoo export (v2.5.1, 6x4), carried here rather than
 // imported from the maze suite: this describes the hash, not the maze. maze.test.ts keeps the whole
@@ -116,6 +116,26 @@ describe("clamp", () => {
   it("returns the bound when the range is a single point", () => {
     expect(clamp(5, 0, 0)).toBe(0)
     expect(clamp(-5, 0, 0)).toBe(0)
+  })
+})
+
+describe("relativeAge", () => {
+  const at = (iso: string) => new Date(iso)
+  const now = at("2026-09-06T12:00:00Z")
+
+  it("counts in the largest unit that still reads as a whole number", () => {
+    expect(relativeAge(at("2026-09-06T11:59:58Z"), now)).toBe("2 seconds ago")
+    expect(relativeAge(at("2026-09-06T11:45:00Z"), now)).toBe("15 minutes ago")
+    expect(relativeAge(at("2026-09-06T09:00:00Z"), now)).toBe("3 hours ago")
+    expect(relativeAge(at("2026-09-01T12:00:00Z"), now)).toBe("5 days ago")
+    expect(relativeAge(at("2026-06-06T12:00:00Z"), now)).toBe("3 months ago")
+    expect(relativeAge(at("2024-09-06T12:00:00Z"), now)).toBe("2 years ago")
+  })
+
+  // "always", not "auto": a freshly built page would otherwise read "now", which is the one answer that
+  // stops being true the moment it is read.
+  it("says how many seconds rather than 'now'", () => {
+    expect(relativeAge(at("2026-09-06T11:59:59Z"), now)).toBe("1 second ago")
   })
 })
 

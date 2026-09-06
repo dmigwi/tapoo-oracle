@@ -53,6 +53,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       endCell: level.endCell,
       observedExits: level.observedExits,
       visitStatusAfterTurn: level.visitStatusAfterTurn,
+      historyWindowRadius: level.historyWindowRadius,
       turns: level.turns,
       outcome: level.outcome,
       agents
@@ -257,6 +258,16 @@ export function mazeLevelRows(levelModel: LevelModel | null | undefined): Summar
         parts.length > 1 ? `${formatCount(levelModel.turns.length)} (${parts.join(" + ")})` : formatCount(levelModel.turns.length),
     },
     {field: "Success path", value: `${formatCount(stats.successPath!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
+    // How much of its own history the agent could see, which bounds what any verdict about its choices
+    // can fairly claim: a move that looks careless at radius 2 may have been the best available to
+    // something that could not see the cell it had already exhausted.
+    {
+      field: "History window",
+      value:
+        levelModel.historyWindowRadius === null
+          ? "not recorded"
+          : `${formatCount(levelModel.historyWindowRadius)} cells (Manhattan radius)`,
+    },
   ];
 }
 

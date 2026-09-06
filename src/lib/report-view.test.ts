@@ -231,6 +231,16 @@ describe("profile", () => {
       .every((detail) => !(detail.textContent ?? "").includes("\u00b7"))).toBe(true)
   })
 
+  // The note went footer -> hero -> here. Its order is the point: what file, which game, how it was
+  // processed, then the replay - so it is asserted on the actual sequence rather than on presence.
+  it("says how the log was processed, between the game identity and the replay", () => {
+    const node = profile()
+    const order = [...query(node, ".events-section").children].map((child) => child.className)
+
+    expect(order).toEqual(["source-line", "round-identity", "processing-note", "maze-replay"])
+    expect(query(node, ".processing-note").textContent).toMatch(/analyzed in your browser/)
+  })
+
   it("renders the decoded maze, not a placeholder", () => {
     expect(profile().querySelector("svg.maze-grid")).not.toBeNull()
   })

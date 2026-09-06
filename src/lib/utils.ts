@@ -86,6 +86,34 @@ export function formatCount(value: number | string): string {
   return Number(value).toLocaleString("en-US");
 }
 
+/** How long ago `from` was, relative to `now`, in the largest unit that still reads as a whole number.
+ *
+ * Intl.RelativeTimeFormat rather than a hand-rolled ladder: it owns the pluralisation, and the units it
+ * picks are the ones a reader expects. `numeric: "always"`, so a fresh build reads "2 seconds ago"
+ * rather than "now" - this is a report about exact figures, and "now" is the one answer that stops being
+ * true the moment it is read.
+ */
+export function relativeAge(from: Date, now: Date): string {
+  const seconds = Math.round((from.getTime() - now.getTime()) / 1000);
+  const format = new Intl.RelativeTimeFormat("en-US", {numeric: "always"});
+
+  const steps: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ["second", 60],
+    ["minute", 60],
+    ["hour", 24],
+    ["day", 30],
+    ["month", 12],
+  ];
+
+  let value = seconds;
+  for (const [unit, limit] of steps) {
+    if (Math.abs(value) < limit) return format.format(value, unit);
+    value = Math.trunc(value / limit);
+  }
+
+  return format.format(value, "year");
+}
+
 // --- Hashing ---
 
 /** fnv1a64Checksum is the FNV-1a 64-bit hash Tapoo stamps onto an encoded maze, over UTF-8 bytes.

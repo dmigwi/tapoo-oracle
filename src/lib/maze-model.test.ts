@@ -17,16 +17,17 @@ const REAL_MAZE: EncodedMaze = {
 
 // A three-turn round through the real maze: two clean turns, then one whose second move hits a wall.
 type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null;
-  visitStatusAfterTurn?: VisitStatusByTurn}
+  visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
-const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn}: LevelOverrides = {}): Level => ({
+const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
+  historyWindowRadius = null}: LevelOverrides = {}): Level => ({
   key: "2/1",
   game: 2,
   level: 1,
   encodedMaze,
   startCell: "0,0",
   startPosition: null,
-  historyWindowRadius: null,
+  historyWindowRadius,
   // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
   // [row, col] - through the contract, so a level model never carries the raw form.
   destinationCell: "0,5",
@@ -246,6 +247,19 @@ describe("mazeLevelRows", () => {
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
   })
 
+  // What the agent could see of its own history bounds what any verdict about its choices can fairly
+  // claim, so it sits with the round's facts rather than with the maze's fixed shape.
+  it("states how far the agent could see its own history", () => {
+    expect(value(mazeLevelRows(modelFor({historyWindowRadius: 2})), "History window"))
+      .toBe("2 cells (Manhattan radius)")
+  })
+
+  // Older exports may not carry it, and a missing radius is not a radius of zero - which would say the
+  // agent saw nothing at all.
+  it("says so when the radius was never recorded", () => {
+    expect(value(mazeLevelRows(modelFor()), "History window")).toBe("not recorded")
+  })
+
   it("is empty when there is no maze to describe", () => {
     expect(mazeLevelRows(modelFor({ encodedMaze: null }))).toEqual([])
   })
@@ -316,6 +330,9 @@ describe("mazeLevelAgentStats", () => {
     const reported = level.outcome?.playerUniqueCellsVisited
     expect(reported).toBe(17)
     expect(stats.cellsEntered[0]).toBe(`${String(reported)} of 24 (71%)`)
+
+    // And the radius the round was actually configured with, read from the same export.
+    expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
   })
 
   it("reports not-recorded decay when turns carry no charge", () => {

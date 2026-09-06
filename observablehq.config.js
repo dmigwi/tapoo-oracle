@@ -12,6 +12,19 @@ import {SITE_BASE_ENV, STAGED_ROOT, STRIPPED_BUILD_ENV} from "./scripts/build-ro
 //
 // preview is covered along with build and deploy: serving something the build never produces is the
 // failure this arrangement exists to prevent.
+// The date this copy was built, stamped into the footer beside the version.
+//
+// A version number alone does not say how current a deployed page is: the site is static, so what a
+// reader is looking at is whatever was built and pushed last, and the version only moves when someone
+// remembers to bump it. UTC and date-only - the build machine's timezone is not a fact about the
+// report, and an hour's precision would suggest the page changes more often than it does.
+//
+// Evaluated when the config is read, which is once per build. That does mean two builds of the same
+// commit differ by this string, so the output is not byte-reproducible; the alternative is the last
+// commit date, which is stable but needs git present in every build environment.
+const BUILT_AT = new Date();
+const BUILT_ON = BUILT_AT.toISOString().slice(0, 10);
+
 const needsStagedRoot = ["build", "deploy", "preview"].includes(process.argv[2]);
 const isStagedBuild = process.env[STRIPPED_BUILD_ENV] === "1";
 
@@ -34,16 +47,19 @@ export default {
   // Says only what a reader needs to trust the page: which build answered, where the logs come from,
   // and what does and does not leave their browser.
   //
-  // "never uploaded" was true of the log and false of its address. A shared report is a /r/<token>
-  // route, so the token - which decodes back to the log URL - travels in the request path and lands
-  // in the host's access logs on every visit. The contents are still only ever read in the browser;
-  // the claim is narrowed to that, because a blanket "never uploaded" beside a feature that does
-  // send something is the kind of sentence this project exists to avoid.
+  // What this is and when it was built. The privacy claim that used to sit here has moved to the hero,
+  // above the URL field: it is the thing a reader needs before they paste an address, and a footer is
+  // where a page puts what it does not expect to be read.
+  //
+  // It moved intact, including the clause after the semicolon. "Never uploaded" was true of the log and
+  // false of its address - a shared report is a /r/<token> route, so the token, which decodes back to
+  // the log URL, travels in the request path and lands in the host's access logs on every visit. A
+  // blanket "never uploaded" beside a feature that does send something is the kind of sentence this
+  // project exists to avoid, and shortening it on the way up would have reintroduced exactly that.
   footer:
-    `<strong>Tapoo Oracle v${packageMetadata.version}</strong> · ` +
-    'Reads gameplay logs from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>. ' +
-    'Log contents are analyzed in your browser and never uploaded; a shared link carries the ' +
-    'log address to the host serving this page.',
+    `<strong>Tapoo Oracle v${packageMetadata.version}</strong> · Last modified on ` +
+    `<time datetime="${BUILT_AT.toISOString()}" data-build-age>${BUILT_ON}</time> · ` +
+    'Reads gameplay logs from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>.',
 
   // The pages and sections in the sidebar. If you don’t specify this option,
   // all pages will be listed in alphabetical order. Listing pages explicitly
