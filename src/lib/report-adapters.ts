@@ -28,44 +28,37 @@ export function formatCount(value: number | string): string {
   return Number(value).toLocaleString("en-US");
 }
 
-// profileCards: the two fractions, each carrying the groups it counted.
+// profileCards: the two fractions, each naming the groups it counted.
 //
-// The ids used to sit in the summary sentence - "demonstrated 5 of 9 capabilities (C2, C3, C6, C8, C9).
-// Confirmed violations: V2, V4, V5." - which made a reader parse one long sentence to learn which
-// groups a fraction was about, with the answer several words away from the number. A card already
-// states the fraction; the groups behind it belong on the same card, not in prose beside it.
+// The groups are named in full, with their code in parentheses - "Multi-step execution (C6)" - rather
+// than left as a row of codes. A card reading "5/9 (C2, C3, C6, C8, C9)" looks informative and is not:
+// the reader has to carry five codes down to the rubric tables and match them there to learn what was
+// actually demonstrated. Hovering was the cheaper fix and it is not one, because a hover does not exist
+// on touch and nothing about a code invites the attempt.
+//
+// The cost is height - five names is three lines where five codes was one - and it is paid in the one
+// place on the page where the reader is deciding what this agent did.
+//
+// Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
+// the test can then assert on the groups themselves rather than on punctuation.
 export function profileCards(
   report: Report,
-): Array<{label: string; value: string; detail: string; tone: string}> {
-  const met = (groups: GroupResult[]): number => groups.filter((group) => group.met).length;
-  const ids = (groups: GroupResult[]): string[] =>
-    groups.filter((group) => group.met).map((group) => group.id);
-
-  const capabilities = ids(report.capabilities);
-  const violations = ids(report.violations);
+): Array<{label: string; value: string; groups: Array<{id: string; label: string}>; tone: string}> {
+  const card = (label: string, groups: GroupResult[], tone: string) => {
+    const met = groups.filter((group) => group.met);
+    return {
+      label,
+      value: `${met.length}/${groups.length}`,
+      // Empty when nothing was met, so the view can drop the list entirely: "Violations confirmed 0/6,
+      // none" states the same zero twice.
+      groups: met.map((group) => ({id: group.id, label: group.label})),
+      tone,
+    };
+  };
 
   return [
-    {
-      label: "Capabilities demonstrated",
-      value: `${met(report.capabilities)}/${report.capabilities.length}`,
-      // Named rather than left blank: "None observed" is a finding about this round, and an empty line
-      // under a 0/9 reads as a card that failed to render.
-      detail: capabilities.length ? capabilities.join(", ") : "None observed",
-      tone: "teal"
-    },
-    {
-      label: "Violations confirmed",
-      value: `${met(report.violations)}/${report.violations.length}`,
-      detail: violations.length ? violations.join(", ") : "None confirmed",
-      tone: "rose"
-    },
-    // No "Predictions" card: the count only means anything against the turn count it is short of, and
-    // that comparison now lives in the level summary's Turns row, per round, where the scrubber's bars
-    // can be added up to reach the same number. The whole-log figure is still stated in narrativeSummary.
-    //
-    // No "Rounds" card either: a report now covers exactly one round, so the count could only ever say
-    // "1". It existed to warn the reader that the verdicts above were blended across mazes, and the
-    // round tabs above the replay are what removed the need for that warning.
+    card("Capabilities demonstrated", report.capabilities, "teal"),
+    card("Violations confirmed", report.violations, "rose"),
   ];
 }
 
@@ -135,12 +128,17 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
 // diagnosticRows reports operational signals that are deliberately excluded from the violation
 // profile. Endpoint failures in particular can be caused by infrastructure outside the model's
 // reasoning, so the rubric notes require them to be preserved as evidence but never scored.
-export function diagnosticRows(report: Report): Array<{signal: string; count: number; scored: string}> {
+export function diagnosticRows(
+  report: Report,
+): Array<{signal: string; count: number; scoredBy: string | null}> {
+  // scoredBy is the rubric question this signal answers, or null when nothing scores it. A nullable id
+  // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code
+  // from a word was to look at the characters. The distinction is knowledge this table already has.
   return [
-    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scored: "no"},
-    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scored: "V2.Q2"},
-    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scored: "V2.Q1"},
-    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scored: "V5.Q3"}
+    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scoredBy: null},
+    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scoredBy: "V2.Q2"},
+    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scoredBy: "V2.Q1"},
+    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scoredBy: "V5.Q3"}
   ];
 }
 
@@ -156,7 +154,7 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
       // Object.fromEntries on a heterogeneous array is `any`; the annotation is what keeps that from
       // becoming the declared row type.
       Object.fromEntries<unknown>([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count] as const)]),
-      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored] as const)]),
+      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scoredBy ?? "no"] as const)]),
     ],
   }
 }

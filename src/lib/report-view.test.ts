@@ -181,6 +181,56 @@ describe("profile", () => {
     expect(order).toEqual(["h2", "p", "analysis-strip"])
   })
 
+  // A row of codes looks informative and is not: the reader has to carry them to the rubric tables to
+  // learn what was demonstrated. The names have to be on the card, in the open - not behind a hover,
+  // which does not exist on touch and which nothing about a code invites.
+  it("spells out every group it counted, keeping the code for cross-reference", () => {
+    const detail = queryAll<HTMLElement>(profile(), ".metric-detail")
+    expect(detail.length).toBeGreaterThan(0)
+
+    const node = profile()
+    const codes = queryAll<HTMLElement>(node, ".metric-detail .rubric-code")
+    expect(codes.length).toBeGreaterThan(0)
+    expect(codes.every((code) => /^[CV]\d+$/.test(code.textContent ?? ""))).toBe(true)
+
+    // Words, not just codes: a card whose names went missing would still match the codes above.
+    const names = detail
+      .map((region) => region.textContent ?? "")
+      .join(" ")
+      .replace(/[CV]\d+|\u00b7|\s+/g, " ")
+    expect(names.trim().length).toBeGreaterThan(20)
+    expect(node.querySelector(".metric-detail abbr")).toBeNull()
+  })
+
+  // One appearance, reserved for identifiers, so a reader can find a cross-reference by its shape.
+  // The rubric table's own ID column has to wear it too, or the code on the card and the code that
+  // defines it look like different kinds of thing.
+  it("gives every rubric identifier the same reserved treatment", () => {
+    expect(queryAll(profile(), ".metric-detail .rubric-code").length).toBeGreaterThan(0)
+
+    const rows = rendered(renderReportSections(ui, stateWith(loadedTab())).detail)
+    const inTable = queryAll<HTMLElement>(rows, ".rubric-table .rubric-code")
+    expect(inTable.length).toBeGreaterThan(0)
+    // The same element and the same class as on the card - not a cell styled to resemble one.
+    expect(inTable.every((code) => code.tagName === "SPAN")).toBe(true)
+    expect(inTable.every((code) => /^[CV]\d+\.Q\d+$/.test(code.textContent ?? ""))).toBe(true)
+  })
+
+  // One group per line, so the codes stack into a column down the left edge. What this can assert is
+  // the structure that makes that possible - one element per group, each opening with its code. That
+  // the element is a block is a stylesheet fact, and no stylesheet is loaded here.
+  it("wraps each group in its own element, opening with the code", () => {
+    const groups = queryAll<HTMLElement>(profile(), ".metric-detail .metric-group")
+    expect(groups.length).toBeGreaterThan(1)
+    expect(groups.every((group) => group.firstElementChild?.className === "rubric-code")).toBe(true)
+
+    // The line break is what separates the groups now, so a leftover middot would read as noise on the
+    // end of a line.
+    expect(profile().querySelector(".metric-sep")).toBeNull()
+    expect(queryAll<HTMLElement>(profile(), ".metric-detail")
+      .every((detail) => !(detail.textContent ?? "").includes("\u00b7"))).toBe(true)
+  })
+
   it("renders the decoded maze, not a placeholder", () => {
     expect(profile().querySelector("svg.maze-grid")).not.toBeNull()
   })
@@ -190,9 +240,11 @@ describe("profile", () => {
     // Two fractions and nothing else. "Rounds" left when a report became per-round: it could only ever
     // read 1, and it existed to warn that the verdicts were blended across mazes.
     expect(cards).toHaveLength(2)
-    expect([...cards].map((card) => query(card, "span").textContent)).toContain(
-      "Capabilities demonstrated"
-    )
+    // The label now carries its group ids inline, so match the start rather than the whole string.
+    expect([...cards].map((card) => query(card, "span").textContent)).toEqual([
+      expect.stringMatching(/^Capabilities demonstrated/),
+      expect.stringMatching(/^Violations confirmed/),
+    ])
   })
 
   // One page, one explanation of what a NO means: the methodology section. The summary and the hero
@@ -269,6 +321,19 @@ describe("detail", () => {
     expect(headings).toEqual(
       expect.arrayContaining(["Capabilities", "Violations", "Operational Diagnostics", "Provenance"])
     )
+  })
+
+  // Which cells are identifiers comes from the data, not from what the text looks like. An unscored
+  // signal prints "no" and must stay plain: a rule that read the characters would be right about this
+  // one by luck and wrong the day the id scheme changes.
+  it("chips only the cells the data says are identifiers", () => {
+    const chips = queryAll<HTMLElement>(detail(), ".rubric-code").map((code) => code.textContent)
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips).toContain("V2.Q2")
+    expect(chips).not.toContain("no")
+
+    // The count cells share a column with the scoring cells and are never identifiers.
+    expect(chips.every((text) => /^[CV]\d+\.Q\d+$/.test(text ?? ""))).toBe(true)
   })
 
   it("builds the rubric tables through the real Inputs.table", () => {

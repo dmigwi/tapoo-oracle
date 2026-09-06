@@ -208,18 +208,24 @@ describe("presentation", () => {
     expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "2/6" })
 
     // The groups behind each fraction, on the card that states it - not several words away in prose.
-    expect(at(cards, 0).detail).toMatch(/^C\d/)
-    expect(at(cards, 1).detail).toMatch(/^V\d/)
-    expect(at(cards, 0).detail.split(", ")).toHaveLength(5)
-    expect(at(cards, 1).detail.split(", ")).toHaveLength(2)
+    // Counted, so the ids and the numerator can never disagree about what was met.
+    expect(at(cards, 0).groups).toHaveLength(5)
+    expect(at(cards, 1).groups).toHaveLength(2)
+    expect(at(cards, 0).groups.map((group) => group.id).every((id) => id.startsWith("C"))).toBe(true)
+    expect(at(cards, 1).groups.map((group) => group.id).every((id) => id.startsWith("V"))).toBe(true)
+    // Each code carries the name it stands for, so "C6" can be read where it appears.
+    expect(at(cards, 0).groups.every((group) => group.label.length > 0)).toBe(true)
 
     // The rubric forbids collapsing the two into one score interval.
     expect(cards.map((card) => card.label)).not.toContain("Score")
   })
 
-  it("names an empty group rather than leaving the card blank", () => {
+  // "Violations confirmed (none) 0/6" states the same zero three times, so the parenthetical is simply
+  // absent and the fraction carries it alone.
+  it("lists no groups when none were met", () => {
     const none = profileCards({...fixtureReport, capabilities: [], violations: []})
-    expect(none.map((card) => card.detail)).toEqual(["None observed", "None confirmed"])
+    expect(none.map((card) => card.groups)).toEqual([[], []])
+    expect(none.map((card) => card.value)).toEqual(["0/0", "0/0"])
   })
 
   it("shows every fact question with its answer and group result", () => {
@@ -240,8 +246,14 @@ describe("presentation", () => {
   })
 
   it("marks endpoint failures as unscored", () => {
-    const endpoint = must(diagnosticRows(fixtureReport).find((row) => row.signal === "Endpoint failures"), "a matching row")
-    expect(endpoint.scored).toBe("no")
+    const rows = diagnosticRows(fixtureReport)
+    const find = (signal: string) => must(rows.find((row) => row.signal === signal), `the ${signal} row`)
+
+    // Null rather than the word "no": nothing scores an endpoint failure, and the table decides how to
+    // print that. A display string here would put "no" and "V2.Q2" in one field, leaving the view to
+    // tell a code from a word by looking at its characters.
+    expect(find("Endpoint failures").scoredBy).toBeNull()
+    expect(find("Empty responses").scoredBy).toBe("V2.Q2")
   })
 
   it("pivots diagnostics into count and scoring rows", () => {

@@ -16,6 +16,10 @@
      hierarchy, just noise: differences too small to signal anything, yet enough to make the page
      feel assembled from parts. Every size below is chosen; nothing inherits a browser or library
      default. Anything needing a size uses one of these. */
+  /* Above hero, and used by exactly one thing: the two fractions in the behavior profile. Those are
+     what a reader came for - how many capabilities, how many violations - and the strip is the one
+     place on the page allowed to be louder than the page title. */
+  --fs-display: 3.2rem;
   --fs-hero: 2.4rem;
   --fs-figure: 2.1rem;
   --fs-h2: 1.4rem;
@@ -23,6 +27,12 @@
   --fs-body: 1.0625rem;
   --fs-small: 0.95rem;
   --fs-micro: 0.85rem;
+  /* An eighth step, added deliberately rather than as a one-off. The scale's rule is that every size is
+     chosen and reused, not that seven is the number - and the metric cards needed a size below micro
+     for text that restates, in shorter form, what the tables below state in full. At micro it read as
+     a peer of the card's own label; here it reads as an annotation to the number above it. Nothing
+     larger than a supporting clause should ever use this. */
+  --fs-nano: 0.76rem;
   /* Warm near-black. A neutral #171717 against cream paper reads as printed-on-screen rather than
      printed-on-paper, and it is the single colour covering most of the page. */
   --oracle-ink: #2a201a;
@@ -170,11 +180,13 @@ a[href] {
   line-height: 1.65;
 }
 
+/* The report's headline. Given more air than anything around it, because everything below is evidence
+   for these two numbers and a reader who stops after one screen should leave with them. */
 .analysis-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin: 1.5rem 0;
+  gap: 1.25rem;
+  margin: 1.75rem 0;
 }
 
 .report-workspace {
@@ -368,35 +380,144 @@ a[href] {
   border-radius: 0.3rem;
 }
 
+/* Two columns under a full-width heading: the fraction on the left, the groups it counted on the
+   right.
+ *
+ * Stacked, the group list pushed the card to five lines of small text below the number and the two
+   cards in the strip ended up different heights. Side by side, the number keeps the reading position
+   the eye lands on first and the list fills the space beside it that was empty anyway.
+ *
+ * `auto 1fr`: the fraction takes exactly its own width - the two cards' numbers are the same size, so
+   their lists start at the same place - and the list takes the rest. A card with no groups leaves the
+   second column empty rather than restating a zero. */
 .metric {
-  padding: 1rem;
+  display: grid;
+  grid-template-areas:
+    "label label"
+    "value groups";
+  grid-template-columns: auto 1fr;
+  /* Pack the rows at the top. The two cards in a strip are stretched to a common height, and with the
+     default `stretch` the leftover height is shared out between the rows - so the card with the
+     shorter list started its number 29px further down than its neighbour, for no reason a reader
+     could see. Extra height belongs at the bottom of the card. */
+  align-content: start;
+  column-gap: 1.25rem;
+  padding: 1.35rem 1.5rem;
 }
 
-.metric span {
-  display: block;
-  color: var(--oracle-muted);
-  font-size: var(--fs-small);
+.metric > span:first-child {
+  grid-area: label;
 }
 
 .metric strong {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: var(--fs-figure);
+  grid-area: value;
+  align-self: start;
+  margin-top: 0.3rem;
+  color: var(--oracle-ink);
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
   line-height: 1;
 }
 
-/* The groups behind the fraction, on the card that states it. Muted and small: the number is the
-   finding, the ids are how to look it up in the table below. */
 .metric-detail {
-  color: var(--oracle-muted);
-  font-family: var(--oracle-mono);
-  font-size: var(--fs-micro);
-  line-height: 1.4;
+  grid-area: groups;
 }
 
-.metric-ink { border-top: 4px solid var(--oracle-ink); }
-.metric-teal { border-top: 4px solid var(--oracle-sage); }
-.metric-rose { border-top: 4px solid var(--oracle-rose); }
+/* Direct children only. As `.metric span` this also caught the spans inside the group list, turning
+   every name, code and separator into its own line - five names became fifteen rows. */
+.metric > span {
+  display: block;
+  color: var(--oracle-muted);
+  /* The heading now spans the card rather than sitting above a number in a narrow column, so it can
+     carry the size it always wanted: it names what the fraction below it counts. */
+  font-size: var(--fs-body);
+}
+
+
+
+/* The groups behind the fraction, inline on the label that names them. Mono so a row of codes reads as
+   identifiers rather than as prose, and no smaller than the label it sits in - it is part of the same
+   sentence, not a footnote to it. */
+/* The groups the fraction counted, named in full. Body face, not mono: these are words to read, and
+   setting them as code would make five names look like five identifiers again - the thing spelling
+   them out exists to undo. */
+.metric-detail {
+  /* Top-aligned with the fraction, not centred against it. Centred, a three-line list pushed its first
+     row below the number while a five-line list pulled it above, so the two cards in the strip
+     disagreed about where a card starts reading. The offset lines the first row up with the numeral's
+     cap rather than its box. */
+  align-self: start;
+  margin-top: 0.75rem;
+  color: var(--oracle-muted);
+  font-size: var(--fs-nano);
+  /* Looser than the size alone would give: at this size a 1.5 leading closes the lines up into a block
+     the eye skips over, and this text exists to be read when the number above it raises a question. */
+  line-height: 1.6;
+}
+
+/* The codes hold the card's own text size instead of shrinking a further 10%. They are the one thing
+   here a reader is meant to carry to the tables below, and a mono glyph at 0.68rem is not legible. */
+.metric-detail .rubric-code {
+  font-size: 1em;
+}
+
+/* Rubric identifiers, and nothing else on the page, look like this.
+ *
+ * C2, V4, C7.Q1 are the page's cross-references: a card names one, the rubric table defines it, the
+ * diagnostics table says which question scored a signal. As plain text they read as part of the
+ * sentence around them and a reader has to work out that the code is a thing to look up. A tinted
+ * mono chip makes them findable by shape, from across the page, without reading a word.
+ *
+ * Warm tan rather than sage or rose: the same codes appear under both the capability and the violation
+ * headings, and tinting them with either colour would state a verdict the code does not carry. */
+.rubric-code {
+  padding: 0.05em 0.35em;
+  border-radius: 0.2rem;
+  background: var(--oracle-footer);
+  color: var(--oracle-ink);
+  font-family: var(--oracle-mono);
+  font-size: 0.9em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* One group per line, so the codes stack into a column down the left edge - the same reading order the
+   rubric table below opens with, and the reason the code leads the name in the first place.
+ *
+ * Run together on wrapped lines the codes started wherever the previous name happened to end, which
+ * looked like a column that had failed rather than a sentence. The cost is a line per group: five
+ * lines where three ran on. A separator is no longer needed to say where an item ends - the line
+ * break does it - so the middot is gone with it. */
+.metric-group {
+  display: block;
+}
+
+/* The tone rule reads as a heading rule over the card rather than as a hairline, and a wash of the same
+   colour carries it down through the card - enough to lift the strip off the paper the rest of the
+   report sits on, far too little to tint the text. */
+.metric-ink,
+.metric-teal,
+.metric-rose {
+  border-top-width: 5px;
+  border-top-style: solid;
+}
+
+.metric-ink {
+  border-top-color: var(--oracle-ink);
+  background: color-mix(in srgb, var(--oracle-ink) 4%, var(--oracle-surface));
+}
+
+.metric-teal {
+  border-top-color: var(--oracle-sage);
+  background: color-mix(in srgb, var(--oracle-sage) 7%, var(--oracle-surface));
+}
+
+.metric-rose {
+  border-top-color: var(--oracle-rose);
+  background: color-mix(in srgb, var(--oracle-rose) 6%, var(--oracle-surface));
+}
 
 .notice {
   padding: 1.2rem;

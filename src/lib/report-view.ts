@@ -10,6 +10,7 @@
 
 import { createMazeReplay } from "./maze-view";
 import {
+  diagnosticRows,
   diagnosticTableData,
   groupResultTone,
   narrativeSummary,
@@ -47,6 +48,13 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
     format: {
+      // The ID column is chipped here rather than by styling the cell: one class on one kind of
+      // element, so the code on a profile card and the code that defines it are the same object with
+      // the same rules. Styling the td instead meant the chip had to fight the cell - shrinking it off
+      // the column width and clipping its own background - to look like the spans everywhere else.
+      //
+      // Unconditional: every value in this column is an identifier by construction.
+      id: codeChip(html),
       groupResult: (value: string) => {
         const tone = groupResultTone(kind, value)
         return tone ? html`<span class=${tone}>${value}</span>` : value
@@ -57,11 +65,39 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
   })));
 }
 
-function diagnosticsTable({Inputs}: ReportUi, report: Report): HTMLElement {
+// A rubric identifier - C2, V4, C7.Q1 - gets one reserved appearance wherever it is printed.
+//
+// These codes are the page's cross-references: a card names C6, the rubric table's ID column defines
+// it, and the diagnostics table says which question scores a signal. Set as ordinary text they read as
+// part of the sentence around them, and the reader has to notice that "C6" is a thing to look up. One
+// treatment, used nowhere else, makes them findable by shape alone.
+//
+// Which values are identifiers is decided by the caller, never by inspecting the text. A regex over
+// cell contents was doing the latter, and it is a guess dressed as a rule: it would chip a group whose
+// name happened to look like a code and miss an id the day the scheme gains a letter. Every call site
+// below already knows - the ID column holds nothing else, and a diagnostic carries a nullable
+// scoredBy.
+const codeChip = (html: ReportUi["html"]) => (value: unknown): unknown =>
+  html`<span class="rubric-code">${value}</span>`;
+
+function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement {
   const data = diagnosticTableData(report);
+  // One column per signal, each holding a count in one row and its scoring question in the other. The
+  // signal's own scoredBy says which cell is the identifier - an unscored signal has none, so its "no"
+  // is never mistaken for one.
+  const chip = codeChip(html);
+  const format = Object.fromEntries(
+    diagnosticRows(report)
+      .filter((row) => row.scoredBy !== null)
+      .map((row) => [
+        row.signal,
+        (value: unknown) => (value === row.scoredBy ? chip(value) : value),
+      ]),
+  );
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
     header: {measure: "Measure"},
+    format,
     sort: false,
     rows: data.rows.length
   }));
@@ -199,7 +235,12 @@ function profile(
           (card) => html`<article class=${`metric metric-${card.tone}`}>
             <span>${card.label}</span>
             <strong>${card.value}</strong>
-            <span class="metric-detail">${card.detail}</span>
+            ${card.groups.length > 0
+              ? html`<span class="metric-detail">${card.groups.map(
+                    (group) =>
+                      html`<span class="metric-group"><span class="rubric-code">${group.id}</span> ${group.label}</span>`,
+                  )}</span>`
+              : ""}
           </article>`
         )}
         </span>
