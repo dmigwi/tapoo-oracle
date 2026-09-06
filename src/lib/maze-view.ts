@@ -9,7 +9,7 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { isMove } from "./log-contract"
+import { cellKey, isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
@@ -81,6 +81,146 @@ function ungradedHatch(): SVGElement {
   );
   defs.append(pattern);
   return defs;
+}
+
+// The magnifier icon, drawn here rather than carried as a file.
+//
+// The svgrepo original was a filled outline - three paths tracing a hairline ring - which at 1em renders
+// barely a pixel wide and reads as a smudge beside the button's own text weight. Stroked geometry
+// instead, because then the weight is one number that can be set to match the label rather than a shape
+// that has to be re-traced to change it.
+//
+// currentColor throughout, so the icon follows the button through its off and on states instead of
+// staying dark on a sage background.
+const MAGNIFIER_STROKE = {
+  fill: "none",
+  stroke: "currentColor",
+  "stroke-width": 3.2,
+  "stroke-linecap": "round",
+};
+
+function magnifierIcon(): SVGElement {
+  const svg = createSvgElement("svg", {
+    viewBox: "0 0 24 24", class: "maze-magnify-icon", "aria-hidden": "true", focusable: "false"
+  });
+  svg.append(
+    createSvgElement("circle", {cx: 10, cy: 10, r: 6.4, ...MAGNIFIER_STROKE}),
+    createSvgElement("line", {x1: 14.9, y1: 14.9, x2: 20.4, y2: 20.4, ...MAGNIFIER_STROKE}),
+  );
+  return svg;
+}
+
+// A cell key spelled out for a reader. "11,19" is the key the code passes around and it is ambiguous on
+// sight - row-then-column is a convention, not something the pair announces, and a maze that is not
+// square makes guessing wrong quietly. Naming both is two words and removes the guess.
+const spellCell = (cell: CellKey): string => {
+  const {row, col} = cellXY(cell);
+  return `row=${row}, col=${col}`;
+};
+
+// The radius used when a log never recorded one.
+//
+// The lens still magnifies without it - magnification is a view control, ours to choose - but it stops
+// claiming to be the agent's window: no scrim, and a caption that says only what it is showing. The
+// window is the log's to state, and we do not invent one.
+const ARROW_STEPS: Record<string, [number, number] | undefined> = {
+  ArrowUp: [-1, 0],
+  ArrowDown: [1, 0],
+  ArrowLeft: [0, -1],
+  ArrowRight: [0, 1],
+};
+
+const DEFAULT_LENS_RADIUS = 2;
+
+// hitLayer gives every cell something to point at.
+//
+// Cells only get a rect once they have been visited, so on unvisited ground there is nothing under the
+// pointer at all. Transparent rects over the whole grid fix that, and they carry the cell key rather
+// than needing pointer coordinates mapped back through getBoundingClientRect - which reports zeros in
+// jsdom, so a coordinate-based hit test could not be tested at all.
+//
+// Built once per round with the walls, not per frame: it does not change as the scrubber moves.
+function hitLayer(maze: Maze): SVGElement {
+  const layer = createSvgElement("g", {class: "maze-hits"});
+  for (let row = 0; row < maze.rows; row += 1) {
+    for (let col = 0; col < maze.cols; col += 1) {
+      const rect = createSvgElement("rect", {
+        x: col * CELL, y: row * CELL, width: CELL, height: CELL, fill: "transparent"
+      });
+      rect.setAttribute("data-cell", cellKey(row, col));
+      layer.append(rect);
+    }
+  }
+  return layer;
+}
+
+// lensViewBox crops the grid to the window around `cell`, which is the whole of the magnification: the
+// same on-screen box showing 2r+1 cells instead of the maze's full width.
+//
+// Deliberately not clamped to the maze. Against an outer wall the window runs off the grid and the lens
+// shows blank paper there, which is the truth - an agent in a corner has fewer cells in range. Sliding
+// the crop back inside would centre the lens on a cell the agent was not standing on.
+function lensViewBox(cell: CellKey, radius: number): string {
+  const {row, col} = cellXY(cell);
+  const span = (2 * radius + 1) * CELL;
+  return `${(col - radius) * CELL} ${(row - radius) * CELL} ${span} ${span}`;
+}
+
+// The crop is a square; the window is a diamond. Cells in the corners are inside the viewBox and outside
+// the reporting radius, so they are covered - the lens shows the shape of the window rather than a
+// rectangle that overstates it. This is what makes it the agent's window and not a generic zoom.
+//
+// Appended last, after the markers, so nothing drawn earlier survives underneath: a start or destination
+// mark outside the window would otherwise sit on top of the cover and claim the agent could see it.
+function scrim(cell: CellKey, radius: number): SVGElement {
+  const {row, col} = cellXY(cell);
+  const layer = createSvgElement("g", {class: "maze-lens-scrim"});
+  for (let r = row - radius; r <= row + radius; r += 1) {
+    for (let c = col - radius; c <= col + radius; c += 1) {
+      if (Math.abs(r - row) + Math.abs(c - col) <= radius) continue;
+      const rect = createSvgElement("rect", {x: c * CELL, y: r * CELL, width: CELL, height: CELL});
+      rect.setAttribute("class", "maze-lens-out");
+      rect.setAttribute("data-cell", cellKey(r, c));
+      layer.append(rect);
+    }
+  }
+  return layer;
+}
+
+// buildLens draws the window with the same three functions that draw the grid.
+//
+// Re-drawn rather than <use>d: our tints are class-driven and the ungraded cells are filled by url(#…),
+// and author styles matching into a use shadow tree is not dependable - the lens could come out
+// uncoloured. Re-drawing costs a window's worth of nodes, 25 at radius 2, and cannot diverge from the
+// grid because it is the same implementation.
+function buildLens(
+  model: LevelModel,
+  frame: Frame,
+  cell: CellKey,
+  radius: number,
+  showScrim: boolean,
+  colorOf: (name: string) => string,
+): SVGElement | null {
+  if (!model.maze) return null;
+
+  const svg = createSvgElement("svg", {
+    viewBox: lensViewBox(cell, radius),
+    class: "maze-lens-grid",
+    role: "img",
+    "aria-label": `Cells within ${radius} of ${spellCell(cell)}, magnified`
+  });
+
+  // The pattern lives in the document that references it, so the lens needs its own copy or the
+  // ungraded cells inside it lose their fill.
+  svg.append(ungradedHatch());
+  drawWalls(svg, model.maze);
+  const overlay = createSvgElement("g", {class: "maze-overlay"});
+  svg.append(overlay);
+  drawFrame(overlay, frame, colorOf);
+  drawMarkers(svg, model);
+  if (showScrim) svg.append(scrim(cell, radius));
+
+  return svg;
 }
 
 function drawWalls(svg: SVGElement, maze: Maze): void {
@@ -664,6 +804,18 @@ export function createMazeReplay(report: Report): HTMLElement {
     select.append(option);
   });
   if (models.length > 1) controls.append(select);
+
+  // A mode rather than a bare hover behaviour. Hovering a grid does nothing anywhere else on this page,
+  // so a lens that only appeared on hover would be invisible until stumbled into - and a reader who does
+  // not want it keeps a grid that behaves normally.
+  const magnify = createHtmlElement("button", "maze-magnify") as HTMLButtonElement;
+  magnify.type = "button";
+  magnify.setAttribute("aria-pressed", "false");
+  // The label states what the button is doing, not only what it would do. aria-pressed already carries
+  // that to a screen reader; this is the same fact for everyone else, and it is the difference between
+  // a button that looks selected and one that says so.
+  const magnifyLabel = createHtmlElement("span", null, "Magnify");
+  magnify.append(magnifierIcon(), magnifyLabel);
   root.append(controls);
 
   const figure = createHtmlElement("div", "maze-figure");
@@ -689,8 +841,20 @@ export function createMazeReplay(report: Report): HTMLElement {
   // reads where the thing it explains is. The stage puts the two on one row while there is width for
   // both and lets the key drop underneath when there is not.
   const stage = createHtmlElement("div", "maze-stage");
+  // The lens takes the column the key sits in, above it, so the magnified view reads at the same height
+  // as the grid it is reading. With the mode off the column is the key alone, exactly as before.
+  const aside = createHtmlElement("div", "maze-aside");
+  const lens = createHtmlElement("div", "maze-lens");
+  // The button lives inside the lens, and the body is what gets replaced on every paint - so the
+  // control survives the redraw that rebuilds the view around it.
+  const lensBody = createHtmlElement("div", "maze-lens-body");
   const visitLegend = createHtmlElement("ul", "maze-legend maze-visit-legend");
-  stage.append(figure, visitLegend);
+  // Directly above the panel it opens, rather than off in the controls row: the button and the view it
+  // produces are one thing, and a control that sits apart from its effect has to be connected by the
+  // reader before it means anything.
+  lens.append(magnify, lensBody);
+  aside.append(lens, visitLegend);
+  stage.append(figure, aside);
   const legend = createHtmlElement("ul", "maze-legend maze-decay-legend");
   const summary = createHtmlElement("div", "maze-summary");
   root.append(stage, caption, scrubberRow, legend, summary);
@@ -698,12 +862,59 @@ export function createMazeReplay(report: Report): HTMLElement {
   // models is non-empty here: the caller returned early for a report with no rounds.
   let active: LevelModel = models[0]!;
 
+  // The lens is a view concern, so its state lives here rather than on the Frame: paint() replaces the
+  // overlay on every scrub, and these two have to survive that.
+  let magnifying = false;
+  let focused: CellKey | null = null;
+
   const colorOf = (name: string): string => {
     const index = active.agents.indexOf(name);
     return AGENT_COLORS[(index < 0 ? 0 : index) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
   };
 
   let overlay: SVGElement | null = null;
+
+  // The radius the log recorded, or ours. A null radius means the log never said what the agent could
+  // see, so the lens still magnifies but stops claiming to be that window.
+  const lensRadius = (): number => active.historyWindowRadius ?? DEFAULT_LENS_RADIUS;
+  const claimsAgentWindow = (): boolean => active.historyWindowRadius !== null;
+
+  const paintLens = (frame: Frame): void => {
+    lensBody.replaceChildren();
+    // Open is a class, not `hidden`: the button is inside this box and has to stay reachable when there
+    // is no view yet. Closed, the box carries no border or padding, so it is the button and nothing else.
+    lens.classList.toggle("is-open", magnifying);
+    if (!magnifying) return;
+
+    // Opens on the agent's current cell, so turning the mode on shows something at once - and that
+    // default is the useful one, because it is the window the agent actually had this turn.
+    const cell = focused ?? frame.currentCell;
+    if (cell === null) return;
+
+    const radius = lensRadius();
+    const grid = buildLens(active, frame, cell, radius, claimsAgentWindow(), colorOf);
+    if (grid) lensBody.append(grid);
+
+    // "Visited cells", not "what the agent could see". The radius bounds which cells could be reported;
+    // it does not mean they were. The agent is only told about ground it has already entered, so the
+    // walls this lens draws on ground it never walked come from our decoded maze and were never in front
+    // of the model - which the caveat says, because the drawing itself invites the opposite reading.
+    const note = createHtmlElement(
+      "p",
+      "maze-lens-note",
+      claimsAgentWindow()
+        ? `Visited cells the agent can see from ${spellCell(cell)} - ${formatCount(radius)} cells out`
+        : `Magnified around ${spellCell(cell)}; the log did not record how far the history window reached`,
+    );
+    note.append(
+      createHtmlElement(
+        "span",
+        "maze-lens-caveat",
+        "The unvisited structure drawn here was never exposed to it.",
+      ),
+    );
+    lensBody.append(note);
+  };
 
   const paint = (): void => {
     const frame = mazeFrameAt(active, Number(range.value));
@@ -723,6 +934,7 @@ export function createMazeReplay(report: Report): HTMLElement {
     // three read as one control rather than a slider with two decorations beside it.
     buildVisitLegend(visitLegend, active, frame);
     buildDecayLegend(legend, frame, decayStrip.hidden === true);
+    paintLens(frame);
 
     const current = frame.turnIndex - 1;
     const total = Number(range.max);
@@ -734,6 +946,48 @@ export function createMazeReplay(report: Report): HTMLElement {
       }
     }
   };
+
+  // Moving a pointer across a large grid fires an event per pixel of travel. Rebuilding 25 cells each
+  // time is waste the lens does not need, so a move that stays inside the same cell does nothing.
+  const focusCell = (cell: CellKey | null): void => {
+    if (!magnifying || cell === null || cell === focused) return;
+    focused = cell;
+    paint();
+  };
+
+  const cellUnder = (target: EventTarget | null): CellKey | null =>
+    target instanceof Element ? target.getAttribute("data-cell") : null;
+
+  magnify.addEventListener("click", () => {
+    magnifying = !magnifying;
+    magnify.setAttribute("aria-pressed", String(magnifying));
+    magnify.classList.toggle("is-on", magnifying);
+    magnifyLabel.textContent = magnifying ? "Magnifying" : "Magnify";
+    figure.classList.toggle("is-magnifying", magnifying);
+    // Released rather than remembered: turning the mode back on should start where the agent is, not
+    // wherever the pointer happened to leave the grid a while ago.
+    if (!magnifying) focused = null;
+    paint();
+  });
+
+  figure.addEventListener("pointerover", (event) => focusCell(cellUnder(event.target)));
+  // Touch has no hover, so a tap has to count as one or the mode does nothing on a phone.
+  figure.addEventListener("click", (event) => focusCell(cellUnder(event.target)));
+
+  // The button is reachable by keyboard on its own; this is what makes the grid reachable once the mode
+  // is on, so the lens is not a mouse-only feature.
+  figure.addEventListener("keydown", (event) => {
+    if (!magnifying) return;
+    const step = ARROW_STEPS[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const from = focused ?? mazeFrameAt(active, Number(range.value)).currentCell;
+    if (from === null) return;
+    const {row, col} = cellXY(from);
+    const [rowStep, colStep] = step;
+    const next = cellKey(row + rowStep, col + colStep);
+    if (active.maze?.exits.has(next)) focusCell(next);
+  });
 
   const showLevel = (model: LevelModel): void => {
     active = model;
@@ -800,7 +1054,10 @@ export function createMazeReplay(report: Report): HTMLElement {
     //
     // Start and destination are the two fixed landmarks on the grid. They are what the trail is read
     // against, so nothing the trail draws should be able to hide them.
+    // Above the overlay so it catches the pointer, below the markers so it cannot hide them.
+    svg.append(hitLayer(model.maze));
     drawMarkers(svg, model);
+    svg.setAttribute("tabindex", "0");
     figure.append(svg);
 
     range.min = "0";

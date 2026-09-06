@@ -59,7 +59,7 @@ export default {
   footer:
     `<strong>Tapoo Oracle v${packageMetadata.version}</strong> · Last modified on ` +
     `<time datetime="${BUILT_AT.toISOString()}" data-build-age>${BUILT_ON}</time> · ` +
-    'Reads gameplay logs from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>.',
+    'Analyzes gameplay logs from <a href="https://github.com/dmigwi/tapoo">dmigwi/tapoo</a>.',
 
   // The pages and sections in the sidebar. If you don’t specify this option,
   // all pages will be listed in alphabetical order. Listing pages explicitly

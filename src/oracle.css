@@ -1104,6 +1104,138 @@ td {
 
 /* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px
    cells into dinner plates, and the walls stop reading as a maze. */
+/* The magnifier's column: the lens above the key it shares the stage with. */
+.maze-aside {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-self: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+/* Closed, this box is the button and nothing else - no border, no padding, no height of its own. The
+   button lives inside it so that opening the lens does not move the control that opened it. */
+.maze-lens {
+  position: relative;
+  align-self: flex-start;
+}
+
+/* Open, it is the same drawing at a tighter crop - a viewBox showing five cells where the grid shows
+   eighteen, which is the whole of the magnification. Boxed so it reads as a separate instrument rather
+   than as part of the grid beside it. */
+.maze-lens.is-open {
+  padding: 0.5rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+}
+
+.maze-lens-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Into the corner the diamond leaves empty.
+ *
+ * The window is a Manhattan diamond inside a square crop, so the four corners are covered cells - real
+ * estate the view itself cannot use. Putting the control there costs nothing that was being seen, and
+ * keeps it against the thing it operates rather than floating above it.
+ *
+ * Only while open: closed, the box has no size to position against, so the button stays in normal flow
+ * and is simply the head of the column. */
+.maze-lens.is-open .maze-magnify {
+  position: absolute;
+  top: 0.1rem;
+  right: 0.1rem;
+  z-index: 1;
+}
+
+/* Square, and big enough that magnifying is worth doing.
+ *
+ * The viewBox is always (2r+1) cells on both sides, so the drawing is square by construction and
+ * `aspect-ratio` only states that out loud - it is what stops a later change to the crop quietly
+ * turning the lens into a letterbox. At 14rem a five-cell window gave cells barely larger than the
+ * grid's own, which is a magnifier that does not magnify.
+ *
+ * Sized so the stage still holds both: 30rem of grid, 1.75rem of gap and this, inside the panel a
+ * report is read in. */
+.maze-lens-grid {
+  width: 100%;
+  max-width: 18rem;
+  aspect-ratio: 1;
+  height: auto;
+}
+
+.maze-lens-note {
+  margin: 0;
+  color: var(--oracle-muted);
+  font-size: var(--fs-nano);
+  line-height: 1.5;
+}
+
+/* The qualifier on the window, on its own line and quieter than the line it qualifies.
+ *
+ * It has to be here rather than in the methodology section: the lens draws the wall structure of ground
+ * the agent never walked, and a reader looking at that structure is one glance from concluding the model
+ * had it. The correction belongs where the misreading happens. */
+.maze-lens-caveat {
+  display: block;
+  color: var(--oracle-muted);
+  opacity: 0.85;
+}
+
+/* Cells inside the square crop but outside the Manhattan diamond, covered completely.
+ *
+ * Opaque, and in the panel's own colour rather than the paper's, so what is left is the diamond floating
+ * on the panel - the shape of the window and nothing else. Dimming them was the wrong reading of the
+ * job: this lens is not showing the maze with a note about reach, it is showing what the agent had, and
+ * a cell the agent could not see should be as absent here as it was to the agent. */
+.maze-lens-out {
+  fill: var(--oracle-surface);
+}
+
+/* The standard magnifier cursor, and only while the mode is on. zoom-in rather than a custom image: it
+   is what every other magnifier on the web uses, so it needs no learning and ships no asset. */
+.maze-figure.is-magnifying {
+  cursor: zoom-in;
+}
+
+/* Sits at the head of its own column, above the panel it opens, and sized to its text rather than
+   stretched by the column's flex. */
+.maze-magnify {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+  color: var(--oracle-muted);
+  font: 500 var(--fs-small)/1.2 var(--oracle-body);
+  cursor: pointer;
+}
+
+/* Squared to the text it sits beside, so the icon scales with the label rather than against it. */
+.maze-magnify-icon {
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+}
+
+.maze-magnify:hover {
+  border-color: var(--oracle-sage);
+  color: var(--oracle-ink);
+}
+
+.maze-magnify.is-on {
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
 /* The maze and its key, side by side while both fit and stacked when they do not.
  *
  * flex-wrap rather than a media query: what matters is whether these two fit next to each other, and

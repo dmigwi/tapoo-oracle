@@ -547,6 +547,151 @@ describe("visit status on the grid", () => {
   })
 })
 
+// The lens is a viewBox crop of the same drawing: 2r+1 cells rendered into the box that held the whole
+// grid, which is the whole of the magnification. Sized to historyWindowRadius, it is the window the
+// agent actually had.
+describe("the magnifier", () => {
+  const radiusLevel = (historyWindowRadius: number | null) => ({...level(), historyWindowRadius})
+  const button = (node: ParentNode) => query<HTMLButtonElement>(node, ".maze-magnify")
+  const lensBox = (node: ParentNode) =>
+    node.querySelector(".maze-lens-grid")?.getAttribute("viewBox") ?? null
+  const hover = (node: ParentNode, cell: string) => {
+    const hit = query(node, `.maze-hits rect[data-cell="${cell}"]`)
+    hit.dispatchEvent(new window.Event("pointerover", {bubbles: true}))
+  }
+
+  it("shows nothing until the mode is turned on", () => {
+    const node = build([radiusLevel(2)])
+
+    expect(query(node, ".maze-lens").classList.contains("is-open")).toBe(false)
+    expect(button(node).getAttribute("aria-pressed")).toBe("false")
+    expect(button(node).textContent).toBe("Magnify")
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(false)
+  })
+
+  // The label says what the button is doing, not only what it would do - the same fact aria-pressed
+  // carries, for the readers who cannot hear it.
+  it("says it is magnifying while the mode is on", () => {
+    const node = build([radiusLevel(2)])
+
+    button(node).click()
+    expect(button(node).textContent).toBe("Magnifying")
+
+    button(node).click()
+    expect(button(node).textContent).toBe("Magnify")
+  })
+
+  // Opening on the agent's cell means the mode shows something at once, and the useful thing: the
+  // window the agent had on the scrubbed turn.
+  it("opens on the agent's current cell", () => {
+    const node = build([radiusLevel(2)])
+    scrubTo(node, 3)
+    button(node).click()
+
+    // The fixture ends on "2,1": a 5-cell window is (col-2)*32, (row-2)*32, 5*32 square.
+    expect(lensBox(node)).toBe(`${(1 - 2) * 32} ${(2 - 2) * 32} ${5 * 32} ${5 * 32}`)
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(true)
+  })
+
+  it("follows the pointer to another cell", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "1,3")
+
+    expect(lensBox(node)).toBe(`${(3 - 2) * 32} ${(1 - 2) * 32} ${5 * 32} ${5 * 32}`)
+    expect(query(node, ".maze-lens-note").textContent).toMatch(/^Visited cells the agent can see from row=1, col=3/)
+  })
+
+  // Touch has no hover, so a tap has to count as one.
+  it("accepts a tap where there is no hover", () => {
+    const node = build([radiusLevel(1)])
+    button(node).click()
+    query(node, '.maze-hits rect[data-cell="2,2"]').dispatchEvent(
+      new window.Event("click", {bubbles: true}),
+    )
+
+    expect(lensBox(node)).toBe(`${(2 - 1) * 32} ${(2 - 1) * 32} ${3 * 32} ${3 * 32}`)
+  })
+
+  // An agent in a corner genuinely has fewer cells in range. Sliding the crop back inside would centre
+  // the lens on a cell it was not standing on.
+  it("lets the window run off the grid at an edge rather than clamping it", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "0,0")
+
+    expect(lensBox(node)).toBe(`${-2 * 32} ${-2 * 32} ${5 * 32} ${5 * 32}`)
+  })
+
+  // The crop is a square and the window is a diamond: at radius 2, 25 cells crop and 13 are reachable,
+  // so 12 are covered. Without this the lens would overstate how far the window reached.
+  it("covers the corners the Manhattan radius does not reach", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "2,2")
+
+    const dimmed = queryAll<SVGRectElement>(node, ".maze-lens-out")
+      .map((rect) => rect.getAttribute("data-cell"))
+    expect(dimmed).toHaveLength(12)
+    expect(dimmed).toContain("0,0")
+    expect(dimmed).not.toContain("2,0")
+  })
+
+  // The magnification is ours to choose; the window is the log's to state. Without a recorded radius the
+  // lens still magnifies but makes no claim about what the agent can see.
+  it("magnifies without claiming the agent's window when no radius was recorded", () => {
+    const node = build([radiusLevel(null)])
+    button(node).click()
+    hover(node, "2,2")
+
+    expect(lensBox(node)).not.toBeNull()
+    expect(queryAll(node, ".maze-lens-out")).toHaveLength(0)
+    // Matched on the claim, not on the words. The note here says the log "did not record how far the
+    // history window reached" - a denial that contains the same phrase as the assertion, which is why
+    // this checks for the positive form rather than for the substring.
+    expect(query(node, ".maze-lens-note").textContent).toMatch(/did not record/)
+    expect(query(node, ".maze-lens-note").textContent).not.toMatch(/^Visited cells the agent can see/)
+  })
+
+  // The lens draws the decoded structure, including walls on ground the agent never entered. Without
+  // this qualifier a reader would take those corridors for something the model had in front of it, so it
+  // is stated in both branches: it is a fact about the tool, not about whether a radius was recorded.
+  it("denies the agent the unvisited structure it draws", () => {
+    for (const radius of [2, null]) {
+      const node = build([radiusLevel(radius)])
+      button(node).click()
+      hover(node, "2,2")
+
+      expect(query(node, ".maze-lens-caveat").textContent).toMatch(/never exposed/)
+    }
+  })
+
+  // The one that fails if the lens is built in showLevel rather than paint().
+  it("redraws as the scrubber moves, without leaving its cell", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "1,0")
+
+    scrubTo(node, 1)
+    const early = query(node, ".maze-lens-grid").innerHTML
+    scrubTo(node, 3)
+    const late = query(node, ".maze-lens-grid").innerHTML
+
+    expect(early).not.toBe(late)
+    expect(lensBox(node)).toBe(`${(0 - 2) * 32} ${(1 - 2) * 32} ${5 * 32} ${5 * 32}`)
+  })
+
+  it("hides the lens and the cursor again when the mode is turned off", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    button(node).click()
+
+    expect(query(node, ".maze-lens").classList.contains("is-open")).toBe(false)
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(false)
+    expect(button(node).getAttribute("aria-pressed")).toBe("false")
+  })
+})
+
 describe("the decay legend", () => {
   const legend = (node: ParentNode) =>
     queryAll<HTMLElement>(node, ".maze-decay-legend .maze-legend-item").map((item) => item.textContent ?? "")
