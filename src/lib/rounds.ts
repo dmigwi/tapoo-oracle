@@ -7,7 +7,8 @@
 
 import { LOG_EVENTS, cellFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
-import { asArray, asRecord, buildContext } from "./rubric-engine"
+import { buildContext } from "./rubric-engine"
+import { asArray, asRecord } from "./utils"
 import type { CellKey, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
 
 

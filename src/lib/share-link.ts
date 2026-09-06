@@ -7,7 +7,7 @@
 
 import {parseTapooLogText} from "./log-contract";
 import type {DecodedPayload, LogWarning, PayloadResult, TapooLog, UrlResult} from "./types";
-import {asTrimmedText} from "./untrusted";
+import {asTrimmedText} from "./utils";
 
 // --- Online JSON URLs ---
 

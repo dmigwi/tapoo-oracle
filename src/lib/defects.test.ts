@@ -7,7 +7,7 @@ import {buildLevels} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
 import {at, must, reportWith} from "./test-support"
-import {asTrimmedText} from "./untrusted"
+import {asTrimmedText} from "./utils"
 import type {LogEntry, ReportTabsState} from "./types"
 
 // Regressions for the defects the TypeScript conversion exposed.

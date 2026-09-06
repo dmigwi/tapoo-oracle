@@ -11,7 +11,7 @@
 
 import { isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
-import { formatCount } from "./report-adapters"
+import { formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report } from "./types"
 
 // --- Drawing constants ---

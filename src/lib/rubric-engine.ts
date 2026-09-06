@@ -28,6 +28,7 @@ import {
   movesFromLogged,
 } from "./log-contract"
 import {indexLog} from "./log-index"
+import {asArray, asRecord} from "./utils"
 import type {
   LogIndex,
   CellKey,
@@ -40,18 +41,6 @@ import type {
 } from "./types"
 
 // --- Reading a log entry ---
-
-// asRecord is the boundary between arbitrary JSON and everything below it.
-//
-// A log's `details` and a tool result's parsed content are whatever the producer wrote. Narrowing them
-// to a record of unknowns - rather than trusting a shape - is what forces each read below to say what
-// it expects, and is why a malformed field now produces a skipped entry instead of a TypeError that
-// takes the whole report down with it.
-export const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-
-// asArray keeps a field that should be a list from being iterated when it is not one.
-export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
 // parsePrediction recovers the moves array a model submitted, mirroring the three tiers
 // frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after

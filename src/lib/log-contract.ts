@@ -23,7 +23,7 @@ import type {
   TapooLog,
 } from "./types";
 
-import {asTrimmedText} from "./untrusted";
+import {asArray, asRecord, asTrimmedText, isRecord} from "./utils";
 import {indexLog} from "./log-index";
 import {mazeFromEncoded} from "./maze";
 
@@ -77,17 +77,17 @@ export {
 // the log and either would work, but a body that looks like a response is better evidence about that
 // body than a label written beside it.
 export function assistantMessage(payload: unknown): AssistantMessage | null {
-  const body = asRecordOrEmpty(payload);
+  const body = asRecord(payload);
 
   // Ollama, then OpenAI: both wrap a single message object.
   const wrapped =
     isRecord(body.message)
       ? body.message
       : (() => {
-          const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+          const [choice] = asArray(body.choices);
           // Only the first choice. Tapoo asks for one completion, and scoring a second would credit
           // the agent with a prediction it was never judged on.
-          const message = asRecordOrEmpty(choice).message;
+          const message = asRecord(choice).message;
           return isRecord(message) ? message : null;
         })();
 
@@ -116,7 +116,7 @@ export function assistantMessage(payload: unknown): AssistantMessage | null {
   const toolNames: string[] = [];
 
   for (const block of body.content as unknown[]) {
-    const record = asRecordOrEmpty(block);
+    const record = asRecord(block);
     if (record.type === "text" && typeof record.text === "string") content += record.text;
     else if (record.type === "thinking" && typeof record.thinking === "string") reasoning += record.thinking;
     else if (record.type === "tool_use" && typeof record.name === "string") toolNames.push(record.name);
@@ -129,17 +129,11 @@ export function assistantMessage(payload: unknown): AssistantMessage | null {
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object";
-
-const asRecordOrEmpty = (value: unknown): Record<string, unknown> =>
-  isRecord(value) ? value : {};
-
 // Ollama and OpenAI both use OpenAI's tool-call shape: a list of {function: {name}}.
 function toolNamesOf(calls: unknown): string[] {
   if (!Array.isArray(calls)) return [];
   return (calls as unknown[])
-    .map((call) => asRecordOrEmpty(asRecordOrEmpty(call).function).name)
+    .map((call) => asRecord(asRecord(call).function).name)
     .filter((name): name is string => typeof name === "string" && name !== "");
 }
 
@@ -151,13 +145,11 @@ function toolNamesOf(calls: unknown): string[] {
 // how many of the completion tokens were spent thinking, and how much of the prompt was served from
 // cache rather than re-read.
 export function responseUsage(payload: unknown): ResponseUsage {
-  const body = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const body = asRecord(payload);
   const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
-  const record = (value: unknown): Record<string, unknown> =>
-    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
-  const usage = record(body.usage);
-  const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+  const usage = asRecord(body.usage);
+  const [choice] = asArray(body.choices);
 
   const firstString = (...values: unknown[]): string | null => {
     for (const value of values) if (typeof value === "string" && value !== "") return value;
@@ -170,12 +162,12 @@ export function responseUsage(payload: unknown): ResponseUsage {
     // Anthropic's output_tokens already includes its extended-thinking tokens, which is why they are
     // not added on top - doing so would double-count the thinking against the completion budget.
     completionTokens: num(body.eval_count) ?? num(usage.completion_tokens) ?? num(usage.output_tokens),
-    reasoningTokens: num(record(usage.completion_tokens_details).reasoning_tokens),
+    reasoningTokens: num(asRecord(usage.completion_tokens_details).reasoning_tokens),
     cachedPromptTokens:
-      num(record(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
+      num(asRecord(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
     durationNs: num(body.total_duration),
     // Ollama's done_reason, OpenAI's per-choice finish_reason, Anthropic's stop_reason.
-    finishReason: firstString(body.done_reason, record(choice).finish_reason, body.stop_reason),
+    finishReason: firstString(body.done_reason, asRecord(choice).finish_reason, body.stop_reason),
   };
 }
 

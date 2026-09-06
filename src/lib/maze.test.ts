@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {cellFromGridPoint, decodeEncodedMaze, fnv1a64Checksum, mazeFromEncoded, successPathLength} from "./maze"
+import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, successPathLength} from "./maze"
 import {expectErr, expectOk} from "./test-support";
 
 // The exact maze block from a real Tapoo export (v2.5.1, 6x4). Using the shipped bytes rather than a
@@ -16,16 +16,6 @@ const REAL_MAZE = {
 
 const START = "0,0"
 const DESTINATION = "0,5"
-
-describe("fnv1a64Checksum", () => {
-  it("reproduces the checksum Tapoo stamped on a real maze", () => {
-    expect(fnv1a64Checksum(REAL_MAZE.structure)).toBe(REAL_MAZE.structure_checksum)
-  })
-
-  it("changes when the structure changes", () => {
-    expect(fnv1a64Checksum(`${REAL_MAZE.structure}0`)).not.toBe(REAL_MAZE.structure_checksum)
-  })
-})
 
 describe("decodeEncodedMaze", () => {
   it("expands to the rendered grid the dimensions imply", () => {

@@ -12,6 +12,7 @@
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
 import {MOVES, cellKey, isMove, stepFrom} from "./geometry";
+import {fnv1a64Checksum} from "./utils";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} from "./types";
 
 // --- Rendered grid geometry ---
@@ -45,22 +46,6 @@ const isOpen = (token: string | undefined): boolean =>
   typeof token === "string" && token.length > 0 && token.charCodeAt(0) === 32;
 
 // --- Decoding the logged maze ---
-
-// fnv1a64Checksum is the FNV-1a 64-bit hash Tapoo stamps onto an encoded maze, over UTF-8 bytes.
-// Ported rather than imported - the alternative is trusting a structure string that may have been
-// truncated in transit and then rendering a maze that never existed.
-export function fnv1a64Checksum(text: string): string {
-  const offsetBasis = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-
-  let hash = offsetBasis;
-  for (const byte of new TextEncoder().encode(text)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * prime);
-  }
-
-  return `0x${hash.toString(16).padStart(16, "0")}`;
-}
 
 // decodeEncodedMaze expands the compact structure string back into the exact token grid Tapoo rendered.
 //

@@ -4,7 +4,7 @@
 
 import { classifyTraversalSpeed } from "./log-contract"
 import { mazeFromEncoded } from "./maze"
-import { formatCount } from "./report-adapters"
+import { clamp, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Report } from "./types"
 
 // The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
@@ -64,7 +64,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
 // Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
 // means every position it can show is reachable in a test without a browser.
 export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
-  const played = levelModel.turns.slice(0, Math.max(0, Math.min(turnIndex, levelModel.turns.length)));
+  const played = levelModel.turns.slice(0, clamp(turnIndex, 0, levelModel.turns.length));
   const visited = new Map<CellKey, string | null>();
 
   if (levelModel.startCell) visited.set(levelModel.startCell, null);

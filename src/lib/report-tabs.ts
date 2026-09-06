@@ -8,7 +8,7 @@ import { parseTapooLogText } from "./log-contract"
 import { answerRubric } from "./report"
 import { groupEntriesByRound, roundLabel } from "./rounds"
 import type { Analysis, LogWarning, ReportTab, ReportTabsState, TapooLog } from "./types"
-import {asTrimmedText} from "./untrusted";
+import {asTrimmedText, clamp} from "./utils";
 
 
 // analyzeLogText is the single entry point from raw text to a rendered result. It returns a
@@ -135,7 +135,7 @@ export function deleteReportTab(
     return {...state, tabs};
   }
 
-  const nextIndex = Math.min(Math.max(deletedIndex, 0), tabs.length - 1);
+  const nextIndex = clamp(deletedIndex, 0, tabs.length - 1);
   return {...state, tabs, activeTabId: tabs[nextIndex]?.id ?? null};
 }
 

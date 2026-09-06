@@ -333,6 +333,17 @@ describe("reading the model's message from a provider response", () => {
     })).toEqual({content: '{"moves":["MoveDown"]}', toolNames: ["get_prediction_rules"], reasoning: "considering"})
   })
 
+  // typeof [] is "object", so the coercion this module used to carry reported a list as a record and
+  // handed the reader a message whose every field was undefined. Consolidating on the shared asRecord,
+  // which excludes arrays, is a behaviour change: an array where an object is expected now reads as
+  // absent. Pinned here because it is the only behaviour this refactor altered.
+  it("reads an array where a message object is expected as absent, not as a record", () => {
+    // null, not an empty message: the two are read differently downstream - an empty message is a
+    // response the model gave and said nothing in, and null is no assistant message in the payload.
+    expect(assistantMessage({message: ["not", "a", "message"]})).toBeNull()
+    expect(assistantMessage({choices: [{message: ["not", "a", "message"]}]})).toBeNull()
+  })
+
   it("reads Anthropic: typed content blocks, with no message or choices at all", () => {
     // The shape that would otherwise have counted as an empty response for a whole log.
     expect(assistantMessage({

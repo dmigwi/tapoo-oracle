@@ -4,6 +4,7 @@
 // outright, which is why the adapters are pure and testable without a DOM.
 
 import type { LogWarning, GroupKind, GroupResult, Report, TapooLog } from "./types"
+import { formatCount } from "./utils"
 
 // warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
 //
@@ -22,10 +23,6 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
   if (inaccurate) return "This report may be inaccurate."
   if (incomplete) return "This report is missing important parts."
   return null
-}
-
-export function formatCount(value: number | string): string {
-  return Number(value).toLocaleString("en-US");
 }
 
 // profileCards: the two fractions, each naming the groups it counted.
