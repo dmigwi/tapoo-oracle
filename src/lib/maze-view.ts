@@ -369,15 +369,31 @@ function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame):
   // After the scale, not inside it: this is the absence of a position rather than a position on it.
   // Counted all the same, or the rows stop summing to the maze.
   //
-  // Named for what these cells are, not for what the log lacks. A cell is graded by the payload on the
-  // turn *after* the one that entered it, and Tapoo stops logging these three tools once a win or loss
-  // is confirmed - so nothing ever covers the closing turn. Wording it as an absence ("not reported",
-  // "no later reading covers") read like a fault worth worrying about; these are simply the cells the
-  // agent's last batch of moves landed on, and there is more than one of them for that reason.
+  // Named for what these cells are, not for what the log lacks - "not reported" read like a fault the
+  // reader should worry about, when this is simply how the log is shaped. A cell is graded by the
+  // payload on the turn *after* the one that entered it, so which cells are waiting depends on where
+  // the scrubber is, and one label cannot be true at both ends:
+  //
+  //   - anywhere before the end, the next turn's payload will grade them. At the very first frame that
+  //     is the start square, which no neighbour has pointed back at yet;
+  //   - at the last frame there is no next turn. Tapoo stops logging these three tools once a win or
+  //     loss is confirmed, so the closing turn's batch is never covered by anything.
+  //
+  // Saying "closing turn" at frame 0 was simply false, and a reader checking it against the caption -
+  // "Start position, before the first turn" - would have caught us in it.
   if (ungraded > 0) {
+    const atEnd = frame.totalTurns > 0 && frame.turnIndex === frame.totalTurns;
     const item = createHtmlElement("li", "maze-legend-item");
     item.append(createHtmlElement("span", "maze-legend-swatch is-ungraded"));
-    item.append(createHtmlElement("span", null, "Closing turn - cells from moves batched on the last turn - "));
+    item.append(
+      createHtmlElement(
+        "span",
+        null,
+        atEnd
+          ? "Closing turn - cells from moves batched on the last turn - "
+          : "Awaiting a reading - cells the next turn will grade - ",
+      ),
+    );
     item.append(createHtmlElement("strong", "maze-legend-count", formatCount(ungraded)));
     legend.append(item);
   }

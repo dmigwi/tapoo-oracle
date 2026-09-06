@@ -84,6 +84,30 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
     for (const [cell, status] of reported) statuses.set(cell, status);
   }
 
+  // The start square is occupied before a single move, so it is never "awaiting" anything - but at frame
+  // 0 no payload has graded it yet. Tapoo's window at turn 0 holds only that square, and a cell is
+  // graded by a *neighbour* pointing back at it, so the first grade arrives on turn 1 once the agent has
+  // stepped off.
+  //
+  // Backfilling that first grade to the earlier frames is a read, not a guess, and only here. A cell's
+  // grade is a function of how many times it has been entered, and the start square cannot be re-entered
+  // without the agent first leaving and returning - which takes moves, which is what produces the very
+  // payload being read. So the first grade any payload gives the start square is the grade it had from
+  // the outset. That argument holds for no other cell, which is why this is not a general rule.
+  const start = levelModel.startCell;
+  if (start !== null) {
+    const known = statuses.get(start);
+    if (known === undefined || known === "unvisited") {
+      for (const [, reported] of levelModel.visitStatusAfterTurn.ascending()) {
+        const first = reported.get(start);
+        if (first !== undefined && first !== "unvisited") {
+          statuses.set(start, first);
+          break;
+        }
+      }
+    }
+  }
+
   const visited = new Map<CellKey, {playerName: string | null; status: VisitStatus | null}>();
   const enter = (cell: CellKey, playerName: string | null): void => {
     // null means the log never graded this cell, and the view draws that as its own mark rather than
@@ -257,12 +281,23 @@ export function mazeLevelAgentStats(levelModel: LevelModel | null | undefined): 
   // level still has exactly one owner, so we attribute the outcome to the only agent in that case.
   const outcomeAgent = outcome.agent?.playerName;
 
-  // Unique cells entered per named agent, accumulated from their turns.
+  // Unique cells *entered* per named agent - cells.slice(1), not the whole walk.
+  //
+  // Turn.cells opens with `before`, the cell the agent was already standing on, so the whole array is
+  // "where I was, then everywhere I went". Counting all of it credits the seat with a cell it never
+  // moved into, and for turn 0 that cell is the start square - which Tapoo does not treat as the
+  // player's at all. Its own traversal history labels the start `"Self"` on every single reading and
+  // every other cell by the player's name, and its outcome record counts 17 unique cells where the walk
+  // touches 18. The one it leaves out is the square the agent was placed on.
+  //
+  // For later turns the slice changes nothing - cells[0] is already in the set from the turn before -
+  // so this is precisely the start-square correction, and it is what makes our count reconcile with
+  // playerUniqueCellsVisited.
   const cellsByAgent = new Map<string, Set<CellKey>>();
   for (const turn of levelModel.turns) {
     if (!turn.playerName) continue;
     const existing = cellsByAgent.get(turn.playerName) ?? new Set<CellKey>();
-    for (const cell of turn.cells) existing.add(cell);
+    for (const cell of turn.cells.slice(1)) existing.add(cell);
     cellsByAgent.set(turn.playerName, existing);
   }
 

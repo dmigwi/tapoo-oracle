@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
 
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {turnReports} from "./log-contract"
+import {analyzeLogText} from "./report-tabs"
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
 import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn} from "./types"
-import {must, reportWith} from "./test-support";
+import {firstRound, must, reportWith} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -296,8 +298,24 @@ describe("mazeLevelAgentStats", () => {
 
     expect(stats.agents).toEqual(["Katara"])
     expect(stats.traversalSpeeds).toEqual(["Navigator (1.0000)"])
-    // Katara's turns cover "0,0","1,0","2,0","2,1" — four unique cells.
-    expect(stats.cellsEntered).toEqual(["4 of 24 (17%)"])
+    // Entered, not occupied. Katara's turns walk "0,0","1,0","2,0","2,1", but "0,0" is the square she
+    // was placed on - Tapoo labels it "Self" in its own history and leaves it out of the count.
+    expect(stats.cellsEntered).toEqual(["3 of 24 (13%)"])
+  })
+
+  // The check that settles the semantics rather than asserting our own arithmetic back at us: Tapoo
+  // states its own figure in the outcome record, and ours has to equal it. Counting the start square
+  // made this 18 against Tapoo's 17.
+  it("reconciles with the unique-cell count Tapoo reports for the round", () => {
+    const result = analyzeLogText(JSON.stringify(fixtureData), {label: "gemma4"})
+    const round = firstRound(result)
+    const level = must(round.levels[0], "the fixture's only round")
+    const model = must(mazeReplayModel(round)[0], "a model for the round")
+    const stats = must(mazeLevelAgentStats(model), "the round's agent stats")
+
+    const reported = level.outcome?.playerUniqueCellsVisited
+    expect(reported).toBe(17)
+    expect(stats.cellsEntered[0]).toBe(`${String(reported)} of 24 (71%)`)
   })
 
   it("reports not-recorded decay when turns carry no charge", () => {
@@ -338,9 +356,10 @@ describe("mazeLevelAgentStats", () => {
     expect(stats.traversalSpeeds[0]).toMatch(/0\.9634/)
     expect(stats.traversalSpeeds[1]).toBe("not recorded")
     expect(stats.decayCharged).toEqual(["1", "2"])
-    // Katara: "0,0","1,0" → 2 cells. Bumi: "1,0","2,0" → 2 cells (1,0 counted once per agent).
-    expect(stats.cellsEntered[0]).toMatch(/^2 of/)
-    expect(stats.cellsEntered[1]).toMatch(/^2 of/)
+    // Each seat is credited only with what it moved into: Katara entered "1,0", Bumi entered "2,0".
+    // The cell each was standing on when its turn opened belongs to whoever moved there.
+    expect(stats.cellsEntered[0]).toMatch(/^1 of/)
+    expect(stats.cellsEntered[1]).toMatch(/^1 of/)
   })
 
   it("is null when there is no maze to describe", () => {

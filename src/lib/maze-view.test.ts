@@ -488,16 +488,43 @@ describe("visit status on the grid", () => {
   })
 
   // A cell no reading covers gets its own row and its own mark, after the scale rather than inside it.
-  // Named for its cause: Tapoo stops logging these tools once the round is decided, so the closing
-  // turn's cells are never graded - intended, not a gap.
-  it("names the closing turn's cells, after the scale", () => {
+  // Which cells those are depends on where the scrubber is, so the row is named for the reason that
+  // actually applies there - one label cannot be true at both ends.
+  const ungradedRow = (node: ParentNode) =>
+    queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
+      .map((item) => item.textContent ?? "")
+      .at(-1)
+
+  it("names the closing turn's cells at the end of the round", () => {
+    // Tapoo stops logging these tools once the round is decided, so nothing covers the last batch.
     const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 3)
+
+    expect(ungradedRow(node)).toMatch(/^Closing turn/)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded").length).toBeGreaterThan(0)
+  })
+
+  // The start square is stood on before a move is made, so frame 0 must show it graded rather than
+  // waiting. No payload grades it at turn 0 - Tapoo's window holds only that square, and a cell is
+  // graded by a neighbour pointing back at it - so the first grade it ever receives is backfilled,
+  // which is sound only because the square cannot be re-entered without moves that postdate it.
+  it("grades the start square at frame 0, before any move", () => {
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 0)
+
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded")).toHaveLength(0)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-oscillating")).toHaveLength(1)
+    expect(ungradedRow(node)).not.toMatch(/^Awaiting|^Closing/)
+  })
+
+  // Mid-round, a cell no payload has named yet is waiting on the next turn's reading - not on the
+  // closing turn, which has not happened.
+  it("says a reading is awaited before the round has ended", () => {
+    const node = build([statusLevel([])])
     scrubTo(node, 1)
 
-    const items = queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
-      .map((item) => item.textContent ?? "")
-    expect(items.at(-1)).toMatch(/^Closing turn/)
-    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded")).toHaveLength(1)
+    expect(ungradedRow(node)).toMatch(/^Awaiting a reading/)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded").length).toBeGreaterThan(0)
   })
 
   // The counts have to sum to the maze, or the key is describing something other than the grid beside
