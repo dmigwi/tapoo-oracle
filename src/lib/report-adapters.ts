@@ -4,6 +4,7 @@
 // outright, which is why the adapters are pure and testable without a DOM.
 
 import type { LogWarning, GroupKind, GroupResult, Report, TapooLog } from "./types"
+import { formatCount } from "./utils"
 
 // warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
 //
@@ -24,35 +25,49 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
   return null
 }
 
-export function formatCount(value: number | string): string {
-  return Number(value).toLocaleString("en-US");
-}
-
-export function profileCards(report: Report): Array<{label: string; value: string; tone: string}> {
-  const met = (groups: GroupResult[]): number => groups.filter((group) => group.met).length;
+// profileCards: the two fractions, each naming the groups it counted.
+//
+// The groups are named in full, with their code in parentheses - "Multi-step execution (C6)" - rather
+// than left as a row of codes. A card reading "5/9 (C2, C3, C6, C8, C9)" looks informative and is not:
+// the reader has to carry five codes down to the rubric tables and match them there to learn what was
+// actually demonstrated. Hovering was the cheaper fix and it is not one, because a hover does not exist
+// on touch and nothing about a code invites the attempt.
+//
+// The cost is height - five names is three lines where five codes was one - and it is paid in the one
+// place on the page where the reader is deciding what this agent did.
+//
+// Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
+// the test can then assert on the groups themselves rather than on punctuation.
+export function profileCards(
+  report: Report,
+): Array<{label: string; value: string; groups: Array<{id: string; label: string}>; tone: string}> {
+  const card = (label: string, groups: GroupResult[], tone: string) => {
+    const met = groups.filter((group) => group.met);
+    return {
+      label,
+      value: `${met.length}/${groups.length}`,
+      // Empty when nothing was met, so the view can drop the list entirely: "Violations confirmed 0/6,
+      // none" states the same zero twice.
+      groups: met.map((group) => ({id: group.id, label: group.label})),
+      tone,
+    };
+  };
 
   return [
-    {
-      label: "Capabilities demonstrated",
-      value: `${met(report.capabilities)}/${report.capabilities.length}`,
-      tone: "teal"
-    },
-    {
-      label: "Violations confirmed",
-      value: `${met(report.violations)}/${report.violations.length}`,
-      tone: "rose"
-    },
-    {label: "Predictions", value: formatCount(report.predictions), tone: "ink"},
-    {label: "Rounds", value: formatCount(report.rounds), tone: "ink"}
+    card("Capabilities demonstrated", report.capabilities, "teal"),
+    card("Violations confirmed", report.violations, "rose"),
   ];
 }
 
-// narrativeSummary states the profile in a sentence, and says plainly what a "no" means. Readers
-// reliably over-read a negative rubric answer as a claim about the model's ability, which it never
-// is - it says the behavior was not observed in this one sample.
+// narrativeSummary states the run in a sentence: which model, through which provider, at what effort,
+// over how many predictions, and how fast a win came.
+//
+// It used to close by explaining what a NO means. That explanation is the method, not the finding, and
+// it was the third place on the page to say so - the hero lede and the methodology's third stage said
+// it too. It now lives only in "How this report is generated", the section named for exactly that, so
+// the summary reads as a result rather than as a result trailing its own disclaimer.
 export function narrativeSummary(report: Report): string {
-  const capabilities = report.capabilities.filter((group) => group.met).map((group) => group.id);
-  const violations = report.violations.filter((group) => group.met).map((group) => group.id);
+  const capabilities = report.capabilities.filter((group) => group.met).length;
   const speed =
     report.traversalSpeedClass !== null && Number.isFinite(report.traversalSpeed)
       ? `Winning traversal speed ${(report.traversalSpeed as number).toFixed(4)} (${report.traversalSpeedClass}).`
@@ -65,15 +80,12 @@ export function narrativeSummary(report: Report): string {
     report.reasoningEfforts.length > 0 ? `at ${report.reasoningEfforts.join(", ")} reasoning effort` : "",
   ].filter(Boolean).join(" ");
 
+  // Which groups were met is on the cards below, so the sentence keeps only what no card says: who ran
+  // this round, through what, at what effort, over how many predictions, and how fast it finished.
   return [
-    `${report.model ?? "This agent"}${setup ? `, ${setup},` : ""} demonstrated ${capabilities.length} of ${report.capabilities.length} capabilities`,
-    capabilities.length ? `(${capabilities.join(", ")})` : "",
+    `${report.model ?? "This agent"}${setup ? `, ${setup},` : ""} demonstrated ${capabilities} of ${report.capabilities.length} capabilities`,
     `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
-    violations.length
-      ? `Confirmed violations: ${violations.join(", ")}.`
-      : "No violations confirmed.",
     speed,
-    "A negative answer means the behavior was not observed in this sample, not that the model is incapable of it."
   ]
     .filter(Boolean)
     .join(" ");
@@ -113,12 +125,17 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
 // diagnosticRows reports operational signals that are deliberately excluded from the violation
 // profile. Endpoint failures in particular can be caused by infrastructure outside the model's
 // reasoning, so the rubric notes require them to be preserved as evidence but never scored.
-export function diagnosticRows(report: Report): Array<{signal: string; count: number; scored: string}> {
+export function diagnosticRows(
+  report: Report,
+): Array<{signal: string; count: number; scoredBy: string | null}> {
+  // scoredBy is the rubric question this signal answers, or null when nothing scores it. A nullable id
+  // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code
+  // from a word was to look at the characters. The distinction is knowledge this table already has.
   return [
-    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scored: "no"},
-    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scored: "V2.Q2"},
-    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scored: "V2.Q1"},
-    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scored: "V5.Q3"}
+    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scoredBy: null},
+    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scoredBy: "V2.Q2"},
+    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scoredBy: "V2.Q1"},
+    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scoredBy: "V5.Q3"}
   ];
 }
 
@@ -134,7 +151,7 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
       // Object.fromEntries on a heterogeneous array is `any`; the annotation is what keeps that from
       // becoming the declared row type.
       Object.fromEntries<unknown>([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count] as const)]),
-      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scored] as const)]),
+      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scoredBy ?? "no"] as const)]),
     ],
   }
 }
@@ -156,24 +173,6 @@ function listOrNotRecorded(values: string[]): string {
 // Nothing here is scored. It is context for reading the verdicts above - a model given 3,000 prompt
 // tokens per turn and one given 300 are not doing the same task, and neither is a run that spent most
 // of its completion budget on reasoning tokens.
-// formatDuration reads a span of seconds the way a person would say it.
-//
-// The log counts nanoseconds, and a run of any length reported in seconds alone stops being legible
-// somewhere around a minute: one real log spent 19,174 seconds, which is five and a third hours and
-// reads as neither.
-function formatDuration(seconds: number): string {
-  if (seconds >= 3600) {
-    const hours = Math.floor(seconds / 3600);
-    return `${hours}h ${Math.round((seconds - hours * 3600) / 60)}m`;
-  }
-  if (seconds >= 60) {
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ${Math.round(seconds - minutes * 60)}s`;
-  }
-  // Below ten seconds two decimals still say something; above it they are noise.
-  return seconds >= 10 ? `${seconds.toFixed(1)}s` : `${seconds.toFixed(2)}s`;
-}
-
 export function modelOutputRows(report: Report): Array<{field: string; value: string}> {
   const {output} = report;
   const rows: Array<{field: string; value: string}> = [
@@ -192,13 +191,6 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
   tokens("Completion tokens", output.completionTokens);
   tokens("Reasoning tokens", output.reasoningTokens);
   tokens("Cached prompt tokens", output.cachedPromptTokens);
-
-  if (output.durationNs !== null) {
-    // Total, then the per-response mean: a slow provider and a long run look identical in the total.
-    const seconds = output.durationNs / 1e9;
-    const each = output.responses > 0 ? seconds / output.responses : 0;
-    rows.push({field: "Model time", value: `${formatDuration(seconds)} (${formatDuration(each)} per response)`});
-  }
 
   if (output.finishReasons.length > 0) {
     // Named and counted rather than reduced to the most common one: "length" appearing at all means the

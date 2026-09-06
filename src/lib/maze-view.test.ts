@@ -4,8 +4,9 @@
 
 import { describe, expect, it } from "vitest"
 
+import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
-import type {EncodedMaze, Level} from "./types"
+import type {CellKey, EncodedMaze, Level, VisitStatus} from "./types"
 import {at, query, queryAll, reportWith} from "./test-support";
 
 const REAL_MAZE = {
@@ -31,6 +32,7 @@ const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}
   destinationCell: "0,5",
   endCell: "2,1",
   observedExits: new Map(),
+  visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
   positions: [],
   turns: [
     { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
@@ -76,8 +78,29 @@ describe("createMazeReplay", () => {
   it("opens at the end of the round", () => {
     const node = build([level()])
 
+    // The control's own coordinate is a position, 0..n. What it *shows* is the log's turn number, the
+    // same identifier the caption and the bar tooltips use - the fixture's three turns are 0, 1, 2.
     expect(range(node).value).toBe("3")
-    expect(query(node, ".maze-readout").textContent).toBe("3 / 3")
+    expect(query(node, ".maze-readout").textContent).toBe("Turn 2 / 2")
+  })
+
+  // The whole point of the change: three surfaces, one number. Parsed from both rather than hardcoded,
+  // so they cannot drift apart again without this failing.
+  it("names the same turn in the readout, the caption and the bar tooltip", () => {
+    const node = build([level()])
+
+    for (const position of [1, 2, 3]) {
+      scrubTo(node, position)
+      const readout = /Turn (\d+) \//.exec(query(node, ".maze-readout").textContent ?? "")?.[1]
+      const captioned = /^Turn (\d+)/.exec(caption(node))?.[1]
+      const tooltip = /^Turn (\d+):/.exec(
+        queryAll<HTMLElement>(node, ".maze-bars-moves .maze-bar")[position - 1]?.title ?? "",
+      )?.[1]
+
+      expect(readout).toBeDefined()
+      expect(captioned).toBe(readout)
+      expect(tooltip).toBe(readout)
+    }
   })
 
   it("repaints when the scrubber moves", () => {
@@ -85,7 +108,9 @@ describe("createMazeReplay", () => {
 
     scrubTo(node, 0)
     expect(caption(node)).toMatch(/Start position/)
-    expect(query(node, ".maze-readout").textContent).toBe("0 / 3")
+    // Before any turn there is no turn to name, so the readout says so rather than printing a number
+    // for a frame that has none.
+    expect(query(node, ".maze-readout").textContent).toBe("Start")
     // No agent has acted yet, so no position marker is drawn.
     expect(overlayCircles(node)).toHaveLength(0)
 
@@ -388,9 +413,288 @@ describe("the bars beside the scrubber", () => {
   })
 })
 
+// The overlay is the feature: a cell's colour has to say how heavily it was worked, and it has to change
+// as the scrubber moves.
+describe("visit status on the grid", () => {
+  const statusesOf = (node: ParentNode) =>
+    queryAll<SVGRectElement>(node, ".maze-overlay rect.maze-cell").map(
+      (rect) => [...rect.classList].find((name) => name.startsWith("is-")) ?? "",
+    )
+
+  // Fixtures name the turn that CARRIED each payload, the way a log does; the store applies the offset.
+  const statusLevel = (byReportingTurn: Array<[number, Array<[string, string]>]>) => {
+    const reports = turnReports<Map<CellKey, VisitStatus>>()
+    for (const [reportingTurn, cells] of byReportingTurn) {
+      reports.record(reportingTurn, new Map(cells as Array<[CellKey, VisitStatus]>))
+    }
+    return {...level(), visitStatusAfterTurn: reports}
+  }
+
+  it("classes each visited cell by the status the log gave it", () => {
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 1)
+    expect(statusesOf(node)).toContain("is-oscillating")
+  })
+
+  // A cell nobody entered has no rect at all, so the paper shows through - which is what "unvisited"
+  // looks like, and why the scale needs no fill for it.
+  it("draws nothing for a cell that was never entered", () => {
+    const node = build([level()])
+    scrubTo(node, 1)
+    // The 4x6 maze has 24 cells; only the walked ones are painted.
+    expect(statusesOf(node).length).toBeLessThan(24)
+  })
+
+  it("re-derives the classes when the scrubber moves", () => {
+    const node = build([statusLevel([[1, [["0,0", "explored"]]], [3, [["0,0", "oscillating"]]]])])
+
+    scrubTo(node, 1)
+    expect(statusesOf(node)).toContain("is-explored")
+    expect(statusesOf(node)).not.toContain("is-oscillating")
+
+    scrubTo(node, 3)
+    expect(statusesOf(node)).toContain("is-oscillating")
+  })
+
+  // Matched case-insensitively on the status name alone: how the labels are worded and capitalised is a
+  // copy decision, and a test that pinned the prose would fail on an edit that changed nothing.
+  it("names the statuses on screen in the legend, worst last", () => {
+    // Both walked cells graded, so the row under test is the scale rather than the ungraded catch-all.
+    const node = build([statusLevel([[1, [["0,0", "oscillating"], ["1,0", "explored"]]]])])
+    scrubTo(node, 1)
+    const items = queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
+      .map((item) => item.textContent ?? "")
+
+    // The composed part, not the gloss. The name and the "cells with" stem are built at render, so a
+    // broken composition shows up here as "undefined - cells with ..."; the gloss after it is prose and
+    // pinning it made this test fail on an edit that changed nothing about the mechanism.
+    expect(items.some((text) => /^Explored - cells with \S/.test(text))).toBe(true)
+    expect(items.some((text) => /^explored/i.test(text))).toBe(true)
+    expect(items.at(-1)).toMatch(/^oscillating/i)
+    // The scale reads worst-last, so unvisited opens it.
+    expect(items.at(0)).toMatch(/^unvisited/i)
+
+    // The drift guard. The label is composed from the status, so it cannot disagree with the swatch -
+    // and this is what holds that true if anyone ever writes the names out by hand again. Read from the
+    // rendered swatch class rather than from a list here, so the assertion has an independent source.
+    for (const item of queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")) {
+      const status = [...query(item, ".maze-legend-swatch").classList]
+        .find((name) => name.startsWith("is-"))
+        ?.slice(3)
+      expect(status).toBeDefined()
+      const capitalised = `${(status ?? "").charAt(0).toUpperCase()}${(status ?? "").slice(1)}`
+      expect(item.textContent).toMatch(new RegExp(`^${capitalised} - cells with `))
+    }
+  })
+
+  // A cell no reading covers gets its own row and its own mark, after the scale rather than inside it.
+  // Which cells those are depends on where the scrubber is, so the row is named for the reason that
+  // actually applies there - one label cannot be true at both ends.
+  const ungradedRow = (node: ParentNode) =>
+    queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
+      .map((item) => item.textContent ?? "")
+      .at(-1)
+
+  it("names the closing turn's cells at the end of the round", () => {
+    // Tapoo stops logging these tools once the round is decided, so nothing covers the last batch.
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 3)
+
+    expect(ungradedRow(node)).toMatch(/^Closing turn/)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded").length).toBeGreaterThan(0)
+  })
+
+  // The start square is stood on before a move is made, so frame 0 must show it graded rather than
+  // waiting. No payload grades it at turn 0 - Tapoo's window holds only that square, and a cell is
+  // graded by a neighbour pointing back at it - so the first grade it ever receives is backfilled,
+  // which is sound only because the square cannot be re-entered without moves that postdate it.
+  it("grades the start square at frame 0, before any move", () => {
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 0)
+
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded")).toHaveLength(0)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-oscillating")).toHaveLength(1)
+    expect(ungradedRow(node)).not.toMatch(/^Awaiting|^Closing/)
+  })
+
+  // Mid-round, a cell no payload has named yet is waiting on the next turn's reading - not on the
+  // closing turn, which has not happened.
+  it("says a reading is awaited before the round has ended", () => {
+    const node = build([statusLevel([])])
+    scrubTo(node, 1)
+
+    expect(ungradedRow(node)).toMatch(/^Awaiting a reading/)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded").length).toBeGreaterThan(0)
+  })
+
+  // The counts have to sum to the maze, or the key is describing something other than the grid beside
+  // it. unvisited is the remainder: no cell in frame.visited can be unvisited.
+  it("counts unvisited as the maze area less the cells walked", () => {
+    const node = build([level()])
+    scrubTo(node, 2)
+
+    const counts = new Map(
+      queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item").map((item) => {
+        const text = item.textContent ?? ""
+        return [text.split(" ")[0]?.toLowerCase() ?? "", Number(text.split(" - ").at(-1))]
+      }),
+    )
+    const walked = queryAll(node, ".maze-overlay rect.maze-cell").length
+
+    // The fixture maze is 4x6.
+    expect([...counts.values()].reduce((sum, n) => sum + n, 0)).toBe(24)
+    expect(counts.get("unvisited")).toBe(24 - walked)
+  })
+})
+
+// The lens is a viewBox crop of the same drawing: 2r+1 cells rendered into the box that held the whole
+// grid, which is the whole of the magnification. Sized to historyWindowRadius, it is the window the
+// agent actually had.
+describe("the magnifier", () => {
+  const radiusLevel = (historyWindowRadius: number | null) => ({...level(), historyWindowRadius})
+  const button = (node: ParentNode) => query<HTMLButtonElement>(node, ".maze-magnify")
+  const lensBox = (node: ParentNode) =>
+    node.querySelector(".maze-lens-grid")?.getAttribute("viewBox") ?? null
+  const hover = (node: ParentNode, cell: string) => {
+    const hit = query(node, `.maze-hits rect[data-cell="${cell}"]`)
+    hit.dispatchEvent(new window.Event("pointerover", {bubbles: true}))
+  }
+
+  it("shows nothing until the mode is turned on", () => {
+    const node = build([radiusLevel(2)])
+
+    expect(query(node, ".maze-lens").classList.contains("is-open")).toBe(false)
+    expect(button(node).getAttribute("aria-pressed")).toBe("false")
+    expect(button(node).textContent).toBe("Magnify")
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(false)
+  })
+
+  // The label says what the button is doing, not only what it would do - the same fact aria-pressed
+  // carries, for the readers who cannot hear it.
+  it("says it is magnifying while the mode is on", () => {
+    const node = build([radiusLevel(2)])
+
+    button(node).click()
+    expect(button(node).textContent).toBe("Magnifying")
+
+    button(node).click()
+    expect(button(node).textContent).toBe("Magnify")
+  })
+
+  // Opening on the agent's cell means the mode shows something at once, and the useful thing: the
+  // window the agent had on the scrubbed turn.
+  it("opens on the agent's current cell", () => {
+    const node = build([radiusLevel(2)])
+    scrubTo(node, 3)
+    button(node).click()
+
+    // The fixture ends on "2,1": a 5-cell window is (col-2)*32, (row-2)*32, 5*32 square.
+    expect(lensBox(node)).toBe(`${(1 - 2) * 32} ${(2 - 2) * 32} ${5 * 32} ${5 * 32}`)
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(true)
+  })
+
+  it("follows the pointer to another cell", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "1,3")
+
+    expect(lensBox(node)).toBe(`${(3 - 2) * 32} ${(1 - 2) * 32} ${5 * 32} ${5 * 32}`)
+    expect(query(node, ".maze-lens-note").textContent).toMatch(/^Visited cells the agent can see from row=1, col=3/)
+  })
+
+  // Touch has no hover, so a tap has to count as one.
+  it("accepts a tap where there is no hover", () => {
+    const node = build([radiusLevel(1)])
+    button(node).click()
+    query(node, '.maze-hits rect[data-cell="2,2"]').dispatchEvent(
+      new window.Event("click", {bubbles: true}),
+    )
+
+    expect(lensBox(node)).toBe(`${(2 - 1) * 32} ${(2 - 1) * 32} ${3 * 32} ${3 * 32}`)
+  })
+
+  // An agent in a corner genuinely has fewer cells in range. Sliding the crop back inside would centre
+  // the lens on a cell it was not standing on.
+  it("lets the window run off the grid at an edge rather than clamping it", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "0,0")
+
+    expect(lensBox(node)).toBe(`${-2 * 32} ${-2 * 32} ${5 * 32} ${5 * 32}`)
+  })
+
+  // The crop is a square and the window is a diamond: at radius 2, 25 cells crop and 13 are reachable,
+  // so 12 are covered. Without this the lens would overstate how far the window reached.
+  it("covers the corners the Manhattan radius does not reach", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "2,2")
+
+    const dimmed = queryAll<SVGRectElement>(node, ".maze-lens-out")
+      .map((rect) => rect.getAttribute("data-cell"))
+    expect(dimmed).toHaveLength(12)
+    expect(dimmed).toContain("0,0")
+    expect(dimmed).not.toContain("2,0")
+  })
+
+  // The magnification is ours to choose; the window is the log's to state. Without a recorded radius the
+  // lens still magnifies but makes no claim about what the agent can see.
+  it("magnifies without claiming the agent's window when no radius was recorded", () => {
+    const node = build([radiusLevel(null)])
+    button(node).click()
+    hover(node, "2,2")
+
+    expect(lensBox(node)).not.toBeNull()
+    expect(queryAll(node, ".maze-lens-out")).toHaveLength(0)
+    // Matched on the claim, not on the words. The note here says the log "did not record how far the
+    // history window reached" - a denial that contains the same phrase as the assertion, which is why
+    // this checks for the positive form rather than for the substring.
+    expect(query(node, ".maze-lens-note").textContent).toMatch(/did not record/)
+    expect(query(node, ".maze-lens-note").textContent).not.toMatch(/^Visited cells the agent can see/)
+  })
+
+  // The lens draws the decoded structure, including walls on ground the agent never entered. Without
+  // this qualifier a reader would take those corridors for something the model had in front of it, so it
+  // is stated in both branches: it is a fact about the tool, not about whether a radius was recorded.
+  it("denies the agent the unvisited structure it draws", () => {
+    for (const radius of [2, null]) {
+      const node = build([radiusLevel(radius)])
+      button(node).click()
+      hover(node, "2,2")
+
+      expect(query(node, ".maze-lens-caveat").textContent).toMatch(/never exposed/)
+    }
+  })
+
+  // The one that fails if the lens is built in showLevel rather than paint().
+  it("redraws as the scrubber moves, without leaving its cell", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    hover(node, "1,0")
+
+    scrubTo(node, 1)
+    const early = query(node, ".maze-lens-grid").innerHTML
+    scrubTo(node, 3)
+    const late = query(node, ".maze-lens-grid").innerHTML
+
+    expect(early).not.toBe(late)
+    expect(lensBox(node)).toBe(`${(0 - 2) * 32} ${(1 - 2) * 32} ${5 * 32} ${5 * 32}`)
+  })
+
+  it("hides the lens and the cursor again when the mode is turned off", () => {
+    const node = build([radiusLevel(2)])
+    button(node).click()
+    button(node).click()
+
+    expect(query(node, ".maze-lens").classList.contains("is-open")).toBe(false)
+    expect(query(node, ".maze-figure").classList.contains("is-magnifying")).toBe(false)
+    expect(button(node).getAttribute("aria-pressed")).toBe("false")
+  })
+})
+
 describe("the decay legend", () => {
   const legend = (node: ParentNode) =>
-    queryAll<HTMLElement>(node, ".maze-legend-item").map((item) => item.textContent ?? "")
+    queryAll<HTMLElement>(node, ".maze-decay-legend .maze-legend-item").map((item) => item.textContent ?? "")
 
   const charged = (...values: Array<number | null>) => {
     const base = level()
@@ -409,6 +713,32 @@ describe("the decay legend", () => {
     expect(legend(build([charged(1, 1, 2)]))).toEqual(["base charge - 2", "invalid move - 1"])
   })
 
+  // The key describes the strip above it, and that strip fades everything ahead of the thumb - so the
+  // counts have to move with it. The round's own totals live in the level summary's Turns row, which is
+  // where a reader goes for the figure that does not move.
+  //
+  // The suite reads the default position, which is the end of the round, so every other assertion here
+  // would pass whether this followed the scrubber or not.
+  it("counts only the turns played so far", () => {
+    const node = build([charged(1, 1, 2)])
+
+    scrubTo(node, 1)
+    expect(legend(node)).toEqual(["base charge - 1"])
+
+    scrubTo(node, 2)
+    expect(legend(node)).toEqual(["base charge - 2"])
+
+    scrubTo(node, 3)
+    expect(legend(node)).toEqual(["base charge - 2", "invalid move - 1"])
+  })
+
+  it("names nothing at the start position, where no turn has been charged", () => {
+    const node = build([charged(1, 1, 2)])
+    scrubTo(node, 0)
+
+    expect(legend(node)).toEqual([])
+  })
+
   it("lists only the charges this round actually incurred", () => {
     // A legend naming a penalty that never happened describes the rules rather than the run, and the
     // run is what the reader is looking at.
@@ -416,14 +746,50 @@ describe("the decay legend", () => {
   })
 
   it("keeps the swatch colours in step with the bars", () => {
-    const swatches = queryAll<HTMLElement>(build([charged(1, 2, 3)]), ".maze-legend-swatch")
+    const swatches = queryAll<HTMLElement>(build([charged(1, 2, 3)]), ".maze-decay-legend .maze-legend-swatch")
       .map((swatch) => [...swatch.classList].find((name) => name.startsWith("is-decay-")))
 
     expect(swatches).toEqual(["is-decay-1", "is-decay-2", "is-decay-3"])
   })
 
   it("says nothing when the round reports no charge at all", () => {
-    expect(query(build([level()]), ".maze-legend").hidden).toBe(true)
+    expect(query(build([level()]), ".maze-decay-legend").hidden).toBe(true)
+  })
+
+  // The Turns row and the legend are two renderings of decayTally. This is the assertion that keeps
+  // them one partition: if either drifts, a reader adding the bottom bars up stops landing on the row.
+  it("shows the same partition in the Turns row, in the strip's own colours", () => {
+    const node = build([charged(1, 1, 2)])
+    const cell = query(node, ".maze-turns-cell")
+
+    expect(query(cell, ".maze-turns-total").textContent).toBe("3")
+    expect(queryAll<HTMLElement>(cell, ".maze-turns-part").map((part) => [
+      [...part.classList].find((name) => name.startsWith("is-decay-")),
+      query(part, ".maze-turns-count").textContent,
+      part.title,
+    ])).toEqual([
+      ["is-decay-1", "2", "base charge"],
+      ["is-decay-2", "1", "invalid move"],
+    ])
+  })
+
+  // Colour is what ties the row to the strip, and colour is exactly what a screen reader cannot relay.
+  it("names each count in words for a reader who sees no colour", () => {
+    expect(query(build([charged(1, 1, 2)]), ".maze-turns-cell").textContent)
+      .toBe("32 base charge1 invalid move")
+  })
+
+  it("keeps unreported turns visible rather than folding them into a charge", () => {
+    const parts = queryAll<HTMLElement>(build([charged(1, 2, null)]), ".maze-turns-part")
+    expect(parts.map((part) => part.title)).toEqual([
+      "base charge", "invalid move", "decay not reported",
+    ])
+  })
+
+  // A lone part is the total restated; "3 (3)" would read as a breakdown that lost two thirds of itself.
+  it("leaves the count undivided when every turn paid the same charge", () => {
+    expect(queryAll(build([charged(1, 1, 1)]), ".maze-turns-part")).toHaveLength(0)
+    expect(query(build([charged(1, 1, 1)]), ".maze-turns-total").textContent).toBe("3")
   })
 
   it("clears the previous round's legend when the selected maze is invalid", () => {
@@ -436,6 +802,6 @@ describe("the decay legend", () => {
     select.dispatchEvent(new window.Event("change", {bubbles: true}))
 
     expect(legend(node)).toEqual([])
-    expect(query(node, ".maze-legend").hidden).toBe(true)
+    expect(query(node, ".maze-decay-legend").hidden).toBe(true)
   })
 })

@@ -16,6 +16,10 @@
      hierarchy, just noise: differences too small to signal anything, yet enough to make the page
      feel assembled from parts. Every size below is chosen; nothing inherits a browser or library
      default. Anything needing a size uses one of these. */
+  /* Above hero, and used by exactly one thing: the two fractions in the behavior profile. Those are
+     what a reader came for - how many capabilities, how many violations - and the strip is the one
+     place on the page allowed to be louder than the page title. */
+  --fs-display: 3.2rem;
   --fs-hero: 2.4rem;
   --fs-figure: 2.1rem;
   --fs-h2: 1.4rem;
@@ -23,6 +27,12 @@
   --fs-body: 1.0625rem;
   --fs-small: 0.95rem;
   --fs-micro: 0.85rem;
+  /* An eighth step, added deliberately rather than as a one-off. The scale's rule is that every size is
+     chosen and reused, not that seven is the number - and the metric cards needed a size below micro
+     for text that restates, in shorter form, what the tables below state in full. At micro it read as
+     a peer of the card's own label; here it reads as an annotation to the number above it. Nothing
+     larger than a supporting clause should ever use this. */
+  --fs-nano: 0.76rem;
   /* Warm near-black. A neutral #171717 against cream paper reads as printed-on-screen rather than
      printed-on-paper, and it is the single colour covering most of the page. */
   --oracle-ink: #2a201a;
@@ -36,6 +46,11 @@
   --oracle-terracotta: #a3472d;
   --oracle-amber: #855711;
   --oracle-rose: #963c37;
+  /* The visit-status ramp. Named here rather than written at each use so the cell on the grid and the
+     swatch in the key beside it can never drift apart - they are the same statement twice. */
+  --oracle-visit-explored: color-mix(in srgb, var(--oracle-sage) 20%, var(--oracle-paper));
+  --oracle-visit-backtracking: color-mix(in srgb, var(--oracle-amber) 38%, var(--oracle-paper));
+  --oracle-visit-oscillating: color-mix(in srgb, var(--oracle-terracotta) 60%, var(--oracle-paper));
   --theme-background: var(--oracle-paper);
   --theme-background-alt: var(--oracle-surface);
   --theme-foreground: var(--oracle-ink);
@@ -54,6 +69,37 @@ body {
   /* Declared rather than inherited from the theme, so the base of the page is a step on this scale
      and every relative size below measures off it. */
   font-size: var(--fs-body);
+}
+
+/* Framework's default sheet caps prose to a reading measure, in two rules:
+
+     p, table, figure, figcaption, h1-h6, .katex-display { max-width: 640px }
+     blockquote, ol, ul                                  { max-width: 600px }
+
+   That is right for an article and wrong for this page. A report is tables, metric strips, maze
+   panels and stage lists that must span the width they are given, and its headings sit above blocks
+   that already do - a heading breaking at 640px over a paragraph running to 1320px reads as a layout
+   bug, not as measure.
+
+   Opting out was being done one selector at a time, which meant every block added since inherited a
+   cap nobody wanted and the next one would too - and the 600px rule went unnoticed entirely, because
+   a list that had opted out looked deliberate rather than rescued. Overriding both selector lists
+   once is the whole fix. It sits here, above the component rules, so anything that genuinely wants a
+   reading measure can still set its own max-width and win on order. */
+p,
+table,
+figure,
+figcaption,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+blockquote,
+ol,
+ul {
+  max-width: none;
 }
 
 #observablehq-main {
@@ -133,18 +179,19 @@ a[href] {
 }
 
 .lede {
-  max-width: none;
   margin: 1.25rem 0 0;
   color: var(--oracle-muted);
   font-size: var(--fs-body);
   line-height: 1.65;
 }
 
+/* The report's headline. Given more air than anything around it, because everything below is evidence
+   for these two numbers and a reader who stops after one screen should leave with them. */
 .analysis-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1rem;
-  margin: 1.5rem 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin: 1.75rem 0;
 }
 
 .report-workspace {
@@ -254,7 +301,6 @@ a[href] {
 
 .report-share-disclosure {
   grid-column: 1 / -1;
-  max-width: none;
   margin: 0;
   color: var(--oracle-muted);
   font-size: var(--fs-small);
@@ -280,7 +326,6 @@ a[href] {
    one long line, set the panel's minimum size, and pushed the whole page wider than the screen.
    anywhere is the one value that lets an unbreakable string shrink its container. */
 .report-source-url {
-  max-width: none;
   min-width: 0;
   overflow-wrap: anywhere;
   margin: 0;
@@ -320,7 +365,6 @@ a[href] {
 .report-workspace,
 .report-region {
   width: 100%;
-  max-width: none;
 }
 
 #observablehq-main > p:has(> .report-region),
@@ -341,26 +385,144 @@ a[href] {
   border-radius: 0.3rem;
 }
 
+/* Two columns under a full-width heading: the fraction on the left, the groups it counted on the
+   right.
+ *
+ * Stacked, the group list pushed the card to five lines of small text below the number and the two
+   cards in the strip ended up different heights. Side by side, the number keeps the reading position
+   the eye lands on first and the list fills the space beside it that was empty anyway.
+ *
+ * `auto 1fr`: the fraction takes exactly its own width - the two cards' numbers are the same size, so
+   their lists start at the same place - and the list takes the rest. A card with no groups leaves the
+   second column empty rather than restating a zero. */
 .metric {
-  padding: 1rem;
+  display: grid;
+  grid-template-areas:
+    "label label"
+    "value groups";
+  grid-template-columns: auto 1fr;
+  /* Pack the rows at the top. The two cards in a strip are stretched to a common height, and with the
+     default `stretch` the leftover height is shared out between the rows - so the card with the
+     shorter list started its number 29px further down than its neighbour, for no reason a reader
+     could see. Extra height belongs at the bottom of the card. */
+  align-content: start;
+  column-gap: 1.25rem;
+  padding: 1.35rem 1.5rem;
 }
 
-.metric span {
-  display: block;
-  color: var(--oracle-muted);
-  font-size: var(--fs-small);
+.metric > span:first-child {
+  grid-area: label;
 }
 
 .metric strong {
-  display: block;
-  margin-top: 0.25rem;
-  font-size: var(--fs-figure);
+  grid-area: value;
+  align-self: start;
+  margin-top: 0.3rem;
+  color: var(--oracle-ink);
+  font-size: var(--fs-display);
+  font-weight: 700;
+  letter-spacing: -0.03em;
   line-height: 1;
 }
 
-.metric-ink { border-top: 4px solid var(--oracle-ink); }
-.metric-teal { border-top: 4px solid var(--oracle-sage); }
-.metric-rose { border-top: 4px solid var(--oracle-rose); }
+.metric-detail {
+  grid-area: groups;
+}
+
+/* Direct children only. As `.metric span` this also caught the spans inside the group list, turning
+   every name, code and separator into its own line - five names became fifteen rows. */
+.metric > span {
+  display: block;
+  color: var(--oracle-muted);
+  /* The heading now spans the card rather than sitting above a number in a narrow column, so it can
+     carry the size it always wanted: it names what the fraction below it counts. */
+  font-size: var(--fs-body);
+}
+
+
+
+/* The groups behind the fraction, inline on the label that names them. Mono so a row of codes reads as
+   identifiers rather than as prose, and no smaller than the label it sits in - it is part of the same
+   sentence, not a footnote to it. */
+/* The groups the fraction counted, named in full. Body face, not mono: these are words to read, and
+   setting them as code would make five names look like five identifiers again - the thing spelling
+   them out exists to undo. */
+.metric-detail {
+  /* Top-aligned with the fraction, not centred against it. Centred, a three-line list pushed its first
+     row below the number while a five-line list pulled it above, so the two cards in the strip
+     disagreed about where a card starts reading. The offset lines the first row up with the numeral's
+     cap rather than its box. */
+  align-self: start;
+  margin-top: 0.75rem;
+  color: var(--oracle-muted);
+  font-size: var(--fs-nano);
+  /* Looser than the size alone would give: at this size a 1.5 leading closes the lines up into a block
+     the eye skips over, and this text exists to be read when the number above it raises a question. */
+  line-height: 1.6;
+}
+
+/* The codes hold the card's own text size instead of shrinking a further 10%. They are the one thing
+   here a reader is meant to carry to the tables below, and a mono glyph at 0.68rem is not legible. */
+.metric-detail .rubric-code {
+  font-size: 1em;
+}
+
+/* Rubric identifiers, and nothing else on the page, look like this.
+ *
+ * C2, V4, C7.Q1 are the page's cross-references: a card names one, the rubric table defines it, the
+ * diagnostics table says which question scored a signal. As plain text they read as part of the
+ * sentence around them and a reader has to work out that the code is a thing to look up. A tinted
+ * mono chip makes them findable by shape, from across the page, without reading a word.
+ *
+ * Warm tan rather than sage or rose: the same codes appear under both the capability and the violation
+ * headings, and tinting them with either colour would state a verdict the code does not carry. */
+.rubric-code {
+  padding: 0.05em 0.35em;
+  border-radius: 0.2rem;
+  background: var(--oracle-footer);
+  color: var(--oracle-ink);
+  font-family: var(--oracle-mono);
+  font-size: 0.9em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* One group per line, so the codes stack into a column down the left edge - the same reading order the
+   rubric table below opens with, and the reason the code leads the name in the first place.
+ *
+ * Run together on wrapped lines the codes started wherever the previous name happened to end, which
+ * looked like a column that had failed rather than a sentence. The cost is a line per group: five
+ * lines where three ran on. A separator is no longer needed to say where an item ends - the line
+ * break does it - so the middot is gone with it. */
+.metric-group {
+  display: block;
+}
+
+/* The tone rule reads as a heading rule over the card rather than as a hairline, and a wash of the same
+   colour carries it down through the card - enough to lift the strip off the paper the rest of the
+   report sits on, far too little to tint the text. */
+.metric-ink,
+.metric-teal,
+.metric-rose {
+  border-top-width: 5px;
+  border-top-style: solid;
+}
+
+.metric-ink {
+  border-top-color: var(--oracle-ink);
+  background: color-mix(in srgb, var(--oracle-ink) 4%, var(--oracle-surface));
+}
+
+.metric-teal {
+  border-top-color: var(--oracle-sage);
+  background: color-mix(in srgb, var(--oracle-sage) 7%, var(--oracle-surface));
+}
+
+.metric-rose {
+  border-top-color: var(--oracle-rose);
+  background: color-mix(in srgb, var(--oracle-rose) 6%, var(--oracle-surface));
+}
 
 .notice {
   padding: 1.2rem;
@@ -381,6 +543,9 @@ a[href] {
   border-top: 0;
 }
 
+/* Framework's default sheet caps p and h1-h6 at 640px for prose measure. Every block that spans the
+   page already opts out of that; the headings above those blocks were still capped, so a heading long
+   enough to wrap would break at 640px above a paragraph running the full width. */
 .oracle-summary h2,
 .events-section h2,
 .methodology-title {
@@ -390,14 +555,91 @@ a[href] {
 }
 
 .oracle-summary p {
-  max-width: none;
   font-size: var(--fs-body);
   line-height: 1.65;
 }
 
 .methodology-intro {
-  max-width: none;
   line-height: 1.65;
+}
+
+/* The round tabs, under the source line. Underline-selected rather than boxed: they sit inside a
+   section that already has a border, and a second boxed control there would compete with the report
+   tabs above for what "a tab" means on this page. */
+/* Where the report says how it was made, next to the game it is about.
+ *
+ * It sat in the footer, then in the hero. The footer is where a page puts what it does not expect to be
+ * read; the hero states it before there is a report to state it about. Here it heads the report itself,
+ * beside the round identity - which is also where the processing it describes produced something.
+ *
+ * The guidance a reader needs *before* pasting an address is not this sentence: the empty state carries
+ * it, under "Public or non-sensitive payloads only", where someone preparing a gist actually reads it. */
+.processing-note {
+  margin: 0.6rem 0 0;
+}
+
+.round-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.4rem;
+  margin: 0.7rem 0 0.3rem;
+}
+
+/* Boxed and set in the display face, at h3 size: the game identity is the subject of everything below
+   it, and as quiet underlined text it read as a caption on the filename above rather than as the thing
+   the report is about. The selected one is filled, so which game you are reading is legible without
+   comparing weights across a row. */
+/* Selected and unselected are one hue at two weights, not two unrelated colours: the pills are the same
+   kind of thing, and only one of them is being read. Pale sage tints the ones you could switch to;
+   solid sage fills the one you are on, so the state is legible from the fill alone, before the reader
+   compares any two labels. */
+.round-tab,
+.round-identity {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--oracle-sage);
+  border-radius: 999px;
+  background: var(--oracle-selected);
+  color: var(--oracle-ink);
+  font: 600 var(--fs-h3)/1.25 var(--oracle-display);
+  letter-spacing: -0.01em;
+}
+
+.round-tab {
+  /* Unselected reads as available rather than as a peer of the selected one: the sage outline is what
+     groups it with its sibling, and the lighter border keeps it from competing for the eye. */
+  border-color: color-mix(in srgb, var(--oracle-sage) 35%, transparent);
+  cursor: pointer;
+}
+
+.round-tab:hover {
+  border-color: var(--oracle-sage);
+  background: color-mix(in srgb, var(--oracle-sage) 22%, var(--oracle-selected));
+}
+
+.round-tab-active,
+.round-tab-active:hover {
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
+/* One round: the same chip, and filled like a selected tab, because that is what it is - the game being
+   read. Left unfilled it was a pale outline against pale paper, which is exactly the thing that made
+   the identity easy to miss. */
+.round-identity {
+  display: inline-block;
+  margin: 0.7rem 0 0.3rem;
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
+/* Keyboard focus has to stay visible: these are the only control on the page a reader tabs into
+   between the address bar and the rubric tables. */
+.round-tab:focus-visible {
+  outline: 2px solid var(--oracle-sage);
+  outline-offset: 2px;
 }
 
 .methodology-section summary {
@@ -417,7 +659,6 @@ a[href] {
 }
 
 .analysis-pipeline {
-  max-width: none;
   margin: 1.5rem 0;
   padding: 0;
   list-style: none;
@@ -450,7 +691,6 @@ a[href] {
 }
 
 .analysis-pipeline p {
-  max-width: none;
   margin: 0;
   line-height: 1.6;
 }
@@ -462,6 +702,7 @@ a[href] {
    paper, well past the 4.5:1 AA threshold. */
 .section-note,
 .source-line,
+.processing-note,
 .methodology-preview {
   color: var(--oracle-muted);
   font-size: var(--fs-small);
@@ -543,17 +784,10 @@ a[href] {
 
 .notice ul,
 .notice ol {
-  max-width: none;
   margin: 0;
   padding-left: 1.1rem;
 }
 
-.notice blockquote,
-.events-section blockquote,
-.events-section ol,
-.events-section ul {
-  max-width: none;
-}
 
 .notice-error {
   border-color: var(--oracle-rose);
@@ -596,7 +830,6 @@ button {
 }
 
 table {
-  max-width: none;
   font-family: var(--oracle-body);
 }
 
@@ -846,9 +1079,13 @@ td {
   background: var(--oracle-surface);
 }
 
+/* Centred over the stage it titles. The grid stops growing at 30rem and the stage centres what it
+   holds, so a left-set heading sat off to one side of the thing it names - the panel read as two
+   alignments rather than one composition. */
 .maze-heading {
   margin: 0 0 0.75rem;
   font-size: var(--fs-h2);
+  text-align: center;
 }
 
 .maze-controls:not(:empty) {
@@ -867,10 +1104,204 @@ td {
 
 /* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px
    cells into dinner plates, and the walls stop reading as a maze. */
+/* The magnifier's column: the lens above the key it shares the stage with. */
+.maze-aside {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-self: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+/* Closed, this box is the button and nothing else - no border, no padding, no height of its own. The
+   button lives inside it so that opening the lens does not move the control that opened it. */
+.maze-lens {
+  position: relative;
+  align-self: flex-start;
+}
+
+/* Open, it is the same drawing at a tighter crop - a viewBox showing five cells where the grid shows
+   eighteen, which is the whole of the magnification. Boxed so it reads as a separate instrument rather
+   than as part of the grid beside it. */
+.maze-lens.is-open {
+  padding: 0.5rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+}
+
+.maze-lens-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Into the corner the diamond leaves empty.
+ *
+ * The window is a Manhattan diamond inside a square crop, so the four corners are covered cells - real
+ * estate the view itself cannot use. Putting the control there costs nothing that was being seen, and
+ * keeps it against the thing it operates rather than floating above it.
+ *
+ * Only while open: closed, the box has no size to position against, so the button stays in normal flow
+ * and is simply the head of the column. */
+.maze-lens.is-open .maze-magnify {
+  position: absolute;
+  top: 0.1rem;
+  right: 0.1rem;
+  z-index: 1;
+}
+
+/* Square, and big enough that magnifying is worth doing.
+ *
+ * The viewBox is always (2r+1) cells on both sides, so the drawing is square by construction and
+ * `aspect-ratio` only states that out loud - it is what stops a later change to the crop quietly
+ * turning the lens into a letterbox. At 14rem a five-cell window gave cells barely larger than the
+ * grid's own, which is a magnifier that does not magnify.
+ *
+ * Sized so the stage still holds both: 30rem of grid, 1.75rem of gap and this, inside the panel a
+ * report is read in. */
+.maze-lens-grid {
+  width: 100%;
+  max-width: 18rem;
+  aspect-ratio: 1;
+  height: auto;
+}
+
+.maze-lens-note {
+  margin: 0;
+  color: var(--oracle-muted);
+  font-size: var(--fs-nano);
+  line-height: 1.5;
+}
+
+/* The qualifier on the window, on its own line and quieter than the line it qualifies.
+ *
+ * It has to be here rather than in the methodology section: the lens draws the wall structure of ground
+ * the agent never walked, and a reader looking at that structure is one glance from concluding the model
+ * had it. The correction belongs where the misreading happens. */
+.maze-lens-caveat {
+  display: block;
+  color: var(--oracle-muted);
+  opacity: 0.85;
+}
+
+/* Cells inside the square crop but outside the Manhattan diamond, covered completely.
+ *
+ * Opaque, and in the panel's own colour rather than the paper's, so what is left is the diamond floating
+ * on the panel - the shape of the window and nothing else. Dimming them was the wrong reading of the
+ * job: this lens is not showing the maze with a note about reach, it is showing what the agent had, and
+ * a cell the agent could not see should be as absent here as it was to the agent. */
+.maze-lens-out {
+  fill: var(--oracle-surface);
+}
+
+/* The standard magnifier cursor, and only while the mode is on. zoom-in rather than a custom image: it
+   is what every other magnifier on the web uses, so it needs no learning and ships no asset. */
+.maze-figure.is-magnifying {
+  cursor: zoom-in;
+}
+
+/* Sits at the head of its own column, above the panel it opens, and sized to its text rather than
+   stretched by the column's flex. */
+.maze-magnify {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--oracle-line);
+  border-radius: 0.3rem;
+  background: var(--oracle-surface);
+  color: var(--oracle-muted);
+  font: 500 var(--fs-small)/1.2 var(--oracle-body);
+  cursor: pointer;
+}
+
+/* Squared to the text it sits beside, so the icon scales with the label rather than against it. */
+.maze-magnify-icon {
+  width: 1.1em;
+  height: 1.1em;
+  flex: 0 0 auto;
+}
+
+.maze-magnify:hover {
+  border-color: var(--oracle-sage);
+  color: var(--oracle-ink);
+}
+
+.maze-magnify.is-on {
+  border-color: var(--oracle-sage);
+  background: var(--oracle-sage);
+  color: var(--oracle-surface);
+}
+
+/* The maze and its key, side by side while both fit and stacked when they do not.
+ *
+ * flex-wrap rather than a media query: what matters is whether these two fit next to each other, and
+ * that depends on the panel they are in - not on how wide the window happens to be. The key's basis is
+ * its natural width, so it drops below the grid exactly when the row can no longer hold it. */
+.maze-stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  /* Centred as a pair inside the replay panel. The grid stops growing at 30rem, so on a wide panel the
+     two would otherwise sit against the left edge with the leftover width pooling on the right - the
+     panel would look mis-set rather than roomy. Centring the line keeps the maze under the heading it
+     belongs to at every width, and when the row wraps it centres the key beneath the grid. */
+  justify-content: center;
+  gap: 0.5rem 1.75rem;
+}
+
 .maze-figure {
   display: flex;
+  /* Basis is the grid's own maximum, and it does not grow: left to absorb the row's leftover width the
+     figure pushed the key out to the far edge, reading as two unrelated blocks rather than a thing and
+     its key. It still shrinks, which is what lets the row give up and wrap. */
+  flex: 0 1 30rem;
   justify-content: center;
+  min-width: 0;
   padding: 0.5rem 0;
+}
+
+/* One status per row: three lines of "label - count" read as a list to scan down, where the decay
+   legend's single row reads as a caption. Vertically centred against the grid rather than pinned to its
+   top edge, so a three-item key sits with the maze instead of floating above it. */
+.maze-visit-legend {
+  flex: 0 1 auto;
+  flex-direction: column;
+  align-self: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+
+/* Visited cells, tinted by how heavily Tapoo says each was worked.
+ *
+ * Tapoo grades every cell by comparing its visit count with its fixed open-exit count: below is
+ * explored, equal is backtracking (every exit used once, so the direction is exhausted), above is
+ * oscillating (moves being wasted). We read that label from the log rather than recomputing it.
+ *
+ * Green -> yellow -> red is the natural reading of that scale and it is also the exact axis a red-green
+ * deficiency collapses, so as everywhere else in this file the steps are separated by lightness as well
+ * as by hue. Measured against paper: 1.32 : 1.76 : 2.59, adjacent steps 1.33 and 1.47, ends 1.96 apart;
+ * as greyscale luminance 0.676 : 0.496 : 0.321, evenly spaced and strictly ordered. A heavier mark is a
+ * worse cell, which reads without being learned.
+ *
+ * Kept to tints, not fills: the ink walls sit at 11.0 / 8.27 / 5.62 against these, and the agent trail
+ * crossing them stays at or above 2.12 even on the darkest - the trail is the second cue that a cell was
+ * entered at all, and it must not be swallowed by the thing it crosses.
+ *
+ * unvisited gets no rule. A cell nobody entered shows the paper, as it always has. */
+.maze-cell.is-explored {
+  fill: var(--oracle-visit-explored);
+}
+
+.maze-cell.is-backtracking {
+  fill: var(--oracle-visit-backtracking);
+}
+
+.maze-cell.is-oscillating {
+  fill: var(--oracle-visit-oscillating);
 }
 
 .maze-grid {
@@ -891,6 +1322,20 @@ td {
   color: var(--oracle-muted);
 }
 
+/* Centred under the strips it explains, with the same room above and below that the caption gets.
+ *
+ * The caption above the scrubber and this row below it are the same kind of line - one sentence of
+ * muted text explaining the control between them - and they were set to different rules, so the block
+ * read as a centred caption, a control, and then a caption that had drifted left. The side margin stays
+ * half a thumb, which is what keeps the row inside the track's own width. */
+.maze-decay-legend {
+  justify-content: center;
+  /* Padding, not margin: .maze-legend zeroes the padding for the visit key beside the grid, and a
+     margin here measured out to nothing against the scrubber above it. */
+  margin: 0 calc(var(--maze-thumb) / 2);
+  padding: 0.75rem 0;
+}
+
 .maze-legend[hidden] {
   display: none;
 }
@@ -901,12 +1346,55 @@ td {
   gap: 0.35rem;
 }
 
+/* Ink as well as bold: the legend sits in --oracle-muted, and a bold muted number reads as murky rather
+   than as emphasis. The colour is what separates the count from the sentence explaining it. */
+.maze-legend-count {
+  color: var(--oracle-ink);
+  font-weight: 700;
+}
+
 .maze-legend-swatch {
   width: 0.6rem;
   height: 0.6rem;
   border-radius: 0.1rem;
   background: var(--oracle-muted);
 }
+
+/* The key's swatches are the cell tints themselves, from the same tokens. They were falling through to
+   the muted default, so all three read as one grey - a key that named three colours and showed none.
+   Outlined for the same reason the lightest decay swatch is: a pale tint at 0.6rem has no height to
+   help it read against paper. */
+/* Outlined in ink, not in the pale line the decay swatches use. These four are tints of the paper they
+   sit on - unvisited *is* the surface behind the grid - so a swatch with a faint edge has nothing to
+   separate it from the card and reads as a gap where a colour should be. Ink is the same value the maze
+   draws its walls in, so the chip reads as a cell with its edges, which is exactly what it stands for. */
+.maze-legend-swatch.is-unvisited,
+.maze-legend-swatch.is-explored,
+.maze-legend-swatch.is-backtracking,
+.maze-legend-swatch.is-oscillating {
+  border: 1px solid var(--oracle-ink);
+}
+
+/* An unvisited cell is drawn with no rect at all, so what shows through it is the panel behind the
+   grid. The swatch is that same surface rather than a plain white, which would name a colour the maze
+   never draws - the ink outline above is the whole of what makes it visible. */
+.maze-legend-swatch.is-unvisited { background: var(--oracle-surface); }
+
+/* The key's mark for a cell the log never graded, matching the hatch drawn on the grid. Repeated here as
+   a gradient rather than shared with the SVG pattern: a swatch is an HTML box and a cell is an SVG rect,
+   and the two cannot take the same fill. */
+.maze-legend-swatch.is-ungraded {
+  border: 1px solid var(--oracle-ink);
+  background: repeating-linear-gradient(
+    45deg,
+    var(--oracle-line) 0 2px,
+    var(--oracle-surface) 2px 4px
+  );
+}
+
+.maze-legend-swatch.is-explored { background: var(--oracle-visit-explored); }
+.maze-legend-swatch.is-backtracking { background: var(--oracle-visit-backtracking); }
+.maze-legend-swatch.is-oscillating { background: var(--oracle-visit-oscillating); }
 
 .maze-legend-swatch.is-decay-1 { background: var(--oracle-line); }
 .maze-legend-swatch.is-decay-2 { background: var(--oracle-rose); }
@@ -918,11 +1406,109 @@ td {
   border: 1px solid var(--oracle-muted);
 }
 
+/* Text carried for a screen reader only. The Turns row leans on colour to tie itself to the strip, and
+   colour is exactly what a screen reader cannot relay - so each count also says its rule in words. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The Turns row's breakdown: the same three charges the strip under the scrubber draws, in the same
+   three colours, so the reader can add the bottom bars up and land on these numbers. Deliberately the
+   legend's vocabulary and palette rather than a second scheme of its own. */
+.maze-turns-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.4rem;
+}
+
+/* No gap on the container: a flex gap would apply around the bracket pseudo-elements too and float
+   them off the counts they enclose. The spacing lives between the parts instead. */
+.maze-turns-breakdown {
+  display: flex;
+  align-items: baseline;
+  color: var(--oracle-muted);
+}
+
+.maze-turns-part + .maze-turns-part {
+  margin-left: 0.45rem;
+}
+
+/* Brackets around the breakdown, so the row reads as "473 (371 · 93 · 9)" - the total, then what it
+   was made of. Generated like the separators: typed into the markup they would be spoken as
+   "left parenthesis" and would sit inside the copied value. */
+.maze-turns-breakdown::before,
+.maze-turns-breakdown::after {
+  color: var(--oracle-line);
+}
+
+.maze-turns-breakdown::before { content: "("; }
+.maze-turns-breakdown::after { content: ")"; }
+
+.maze-turns-part {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+/* A plus between counts, matching mazeLevelRows' text form of the same row exactly: these are parts of
+   the total beside them, and the sign is what says so. Generated rather than typed into the markup so
+   it stays out of the accessibility tree, where the counts are already separated by their spoken
+   labels. */
+.maze-turns-part + .maze-turns-part::before {
+  content: "+";
+  align-self: baseline;
+  margin-right: 0.2rem;
+}
+
+.maze-turns-swatch {
+  align-self: center;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 0.1rem;
+  background: var(--oracle-muted);
+}
+
+.maze-turns-part.is-decay-1 .maze-turns-swatch {
+  background: var(--oracle-line);
+  /* Same reason as the legend's: the lightest step needs an edge to be visible against paper. */
+  border: 1px solid var(--oracle-muted);
+}
+
+.maze-turns-part.is-decay-2 .maze-turns-swatch { background: var(--oracle-rose); }
+.maze-turns-part.is-decay-3 .maze-turns-swatch { background: var(--oracle-ink); }
+
+/* Unreported turns match the strip's unknown bar - hatched, never flat, because a cost nobody wrote
+   down is not a cost of zero. */
+.maze-turns-part.is-decay-unreported .maze-turns-swatch {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--oracle-muted) 0 1px,
+    transparent 1px 3px
+  );
+  border: 1px solid var(--oracle-muted);
+}
+
+/* Centred under the frame it describes, with the heading and the stage above it.
+ *
+ * The cost is real and accepted: this text changes on every scrub, and centred text re-centres as its
+ * length changes, so the caption drifts left and right while the thumb moves. min-height already stops
+ * it jumping vertically when a turn has no refused move; nothing stops the horizontal shift, which is
+ * the price of the panel reading as one centred composition. */
 .maze-caption {
   margin: 0.5rem 0 0.75rem;
   color: var(--oracle-muted);
   font-size: var(--fs-small);
   min-height: 1.4em;
+  text-align: center;
 }
 
 .maze-scrubber {
@@ -1135,9 +1721,23 @@ td {
 
 .maze-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 1.5rem;
   margin-top: 1.25rem;
+  align-items: start;
+}
+
+.maze-summary-heading {
+  margin: 0 0 0.5rem;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--oracle-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.maze-summary-panel--full {
+  grid-column: 1 / -1;
 }
 
 .maze-summary-table {
@@ -1165,7 +1765,43 @@ td {
   font-size: var(--fs-micro);
 }
 
+/* Per-agent stats: one card per agent, stacked vertically so five seats are as legible as one.
+   A flex row would shrink each card to 20% of the panel width at five agents — unreadable at any
+   realistic viewport. Stacking costs one screenful per agent and keeps every card full-width. */
+.maze-agent-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--oracle-line);
+}
+
+.maze-agent-panel {
+  min-width: 0;
+}
+
+.maze-agent-name {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+  font-size: var(--fs-small);
+  color: var(--oracle-ink);
+}
+
+/* The horizontal metrics table: column headers above, one value row below. Every value cell is
+   monospace — there is no "last" column, the mono rule on td:last-child does not apply here. */
+.maze-agent-table td {
+  font-family: var(--oracle-mono);
+  font-size: var(--fs-micro);
+}
+
 @media (max-width: 860px) {
+  .maze-summary {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  }
+}
+
+@media (max-width: 540px) {
   .maze-summary {
     grid-template-columns: 1fr;
   }

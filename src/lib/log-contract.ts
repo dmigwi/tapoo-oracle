@@ -13,7 +13,10 @@
 // how to read.
 
 import type {
+  CellKey,
+  TurnReports,
   EncodedMaze,
+  Move,
   LogWarning,
   AssistantMessage,
   ResponseUsage,
@@ -23,9 +26,12 @@ import type {
   TapooLog,
 } from "./types";
 
-import {asTrimmedText} from "./untrusted";
+import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, isRecord} from "./utils";
 import {indexLog} from "./log-index";
-import {mazeFromEncoded} from "./maze";
+import {cellFromGridPoint, mazeFromEncoded} from "./maze";
+// Imported as well as re-exported below: a re-export puts a name on this module's surface without
+// putting it in scope, and traversalPayloadWarnings needs to call them.
+import {cellFromLogged, isMove, statusesFromLogged, stepFrom} from "./geometry";
 
 export {
   AGENT_API_MODE,
@@ -48,8 +54,43 @@ export {
   classifyTraversalSpeed,
   isMove,
   movesFromLogged,
+  statusesFromLogged,
   stepFrom,
 } from "./geometry";
+
+// Tapoo reports a turn's outcome on the request that *follows* it, so a payload logged on turn N -
+// get_maze_structure, get_prediction_rules, get_last_prediction_outcome - covers turn N - 1.
+//
+// That offset lives on one line, inside this store, and nowhere else. It used to be a bare `- 1` beside
+// a plain Map, which meant every writer had to remember it and every reader had to trust that they had:
+// it was written `.get(turn + 1)` in one place, `reportedAt - 1` in another, and left out entirely in a
+// third, which is how the maze overlay came to draw its colours a turn behind the maze.
+//
+// `record` is the only way in and takes the turn that *carried* a payload; `get` is the only way out and
+// takes the turn it *covers*. A caller holding the offset separately is the bug this closes, so there is
+// no exported helper to hold.
+//
+// Turn 0's payload covers turn -1: there is no turn before the first, so that key holds the state the
+// round opened in and matches no turn.
+export function turnReports<T>(): TurnReports<T> {
+  const byTurn = new Map<number, T>();
+
+  return {
+    record(reportingTurn, value, merge) {
+      const turn = reportingTurn - 1;
+      const existing = byTurn.get(turn);
+      byTurn.set(turn, existing !== undefined && merge ? merge(existing, value) : value);
+    },
+    get: (turn) => byTurn.get(turn),
+    // Sorted rather than trusted to insertion order: entries do arrive in recorded order today, but a
+    // reader that walks them to a bound is relying on the ordering, not on the writer's habits.
+    ascending: () => [...byTurn].sort(([a], [b]) => a - b),
+    values: () => [...byTurn.values()],
+    get size() {
+      return byTurn.size;
+    },
+  };
+}
 
 // --- Reading a provider response ---
 
@@ -77,17 +118,16 @@ export {
 // the log and either would work, but a body that looks like a response is better evidence about that
 // body than a label written beside it.
 export function assistantMessage(payload: unknown): AssistantMessage | null {
-  const body = asRecordOrEmpty(payload);
+  const body = asRecord(payload);
 
   // Ollama, then OpenAI: both wrap a single message object.
-  const wrapped =
-    isRecord(body.message)
+  const wrapped = isRecord(body.message)
       ? body.message
       : (() => {
-          const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+          const [choice] = asArray(body.choices);
           // Only the first choice. Tapoo asks for one completion, and scoring a second would credit
           // the agent with a prediction it was never judged on.
-          const message = asRecordOrEmpty(choice).message;
+          const message = asRecord(choice).message;
           return isRecord(message) ? message : null;
         })();
 
@@ -116,7 +156,7 @@ export function assistantMessage(payload: unknown): AssistantMessage | null {
   const toolNames: string[] = [];
 
   for (const block of body.content as unknown[]) {
-    const record = asRecordOrEmpty(block);
+    const record = asRecord(block);
     if (record.type === "text" && typeof record.text === "string") content += record.text;
     else if (record.type === "thinking" && typeof record.thinking === "string") reasoning += record.thinking;
     else if (record.type === "tool_use" && typeof record.name === "string") toolNames.push(record.name);
@@ -129,17 +169,11 @@ export function assistantMessage(payload: unknown): AssistantMessage | null {
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object";
-
-const asRecordOrEmpty = (value: unknown): Record<string, unknown> =>
-  isRecord(value) ? value : {};
-
 // Ollama and OpenAI both use OpenAI's tool-call shape: a list of {function: {name}}.
 function toolNamesOf(calls: unknown): string[] {
   if (!Array.isArray(calls)) return [];
   return (calls as unknown[])
-    .map((call) => asRecordOrEmpty(asRecordOrEmpty(call).function).name)
+    .map((call) => asRecord(asRecord(call).function).name)
     .filter((name): name is string => typeof name === "string" && name !== "");
 }
 
@@ -151,13 +185,11 @@ function toolNamesOf(calls: unknown): string[] {
 // how many of the completion tokens were spent thinking, and how much of the prompt was served from
 // cache rather than re-read.
 export function responseUsage(payload: unknown): ResponseUsage {
-  const body = payload !== null && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const body = asRecord(payload);
   const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
-  const record = (value: unknown): Record<string, unknown> =>
-    value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
-  const usage = record(body.usage);
-  const [choice] = Array.isArray(body.choices) ? (body.choices as unknown[]) : [];
+  const usage = asRecord(body.usage);
+  const [choice] = asArray(body.choices);
 
   const firstString = (...values: unknown[]): string | null => {
     for (const value of values) if (typeof value === "string" && value !== "") return value;
@@ -170,12 +202,10 @@ export function responseUsage(payload: unknown): ResponseUsage {
     // Anthropic's output_tokens already includes its extended-thinking tokens, which is why they are
     // not added on top - doing so would double-count the thinking against the completion budget.
     completionTokens: num(body.eval_count) ?? num(usage.completion_tokens) ?? num(usage.output_tokens),
-    reasoningTokens: num(record(usage.completion_tokens_details).reasoning_tokens),
-    cachedPromptTokens:
-      num(record(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
-    durationNs: num(body.total_duration),
+    reasoningTokens: num(asRecord(usage.completion_tokens_details).reasoning_tokens),
+    cachedPromptTokens: num(asRecord(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
     // Ollama's done_reason, OpenAI's per-choice finish_reason, Anthropic's stop_reason.
-    finishReason: firstString(body.done_reason, record(choice).finish_reason, body.stop_reason),
+    finishReason: firstString(body.done_reason, asRecord(choice).finish_reason, body.stop_reason),
   };
 }
 
@@ -267,6 +297,7 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
 
   warnings.push(...unreadableResponseWarnings(entries));
   warnings.push(...encodedMazeWarnings(entries));
+  warnings.push(...traversalPayloadWarnings(entries));
 
   // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
   //
@@ -350,6 +381,133 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
 //
 // Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
 // from the exits the log's own tool results confirmed.
+// traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
+//
+// The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
+// be drawn as fact. `content_checksum` is fnv1a64Checksum of the content Tapoo actually sent - not of
+// the compacted form the log keeps - so it cannot be checked against what is on disk directly. It can be
+// checked by rebuilding the original, which every field needed for is either in the record or on the
+// round's "Agent level started." entry.
+//
+// Verified byte-exact against a real export: the key order, the compact separators, and cellType's
+// precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
+//
+// Checked here rather than when the maze is drawn: this pass already walks every entry in order, so a
+// damaged payload is reported once, up front, instead of being discovered by whoever happens to scrub to
+// the turn holding it. It reads the round's facts from a running cursor rather than from
+// groupEntriesByRound - rounds.ts imports this module, so borrowing its grouping would close a cycle.
+function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
+  const warnings: LogWarning[] = [];
+
+  let exits: Map<CellKey, Set<Move>> | null = null;
+  let startCell: CellKey | null = null;
+  let destinationCell: unknown = null;
+  let historyWindowRadius: unknown = null;
+  let damaged = 0;
+  let firstDamaged: string | null = null;
+
+  const cellTypeOf = (cell: CellKey): string => {
+    // start-cell and target-cell override the structural type: cell 0,0 of the snapshot log has one
+    // exit and would read dead-end, and Tapoo writes start-cell.
+    if (cell === startCell) return "start-cell";
+    if (cell === cellFromLogged(destinationCell)) return "target-cell";
+    const open = exits?.get(cell)?.size ?? 0;
+    if (open <= 1) return "dead-end";
+    return open === 2 ? "corridor" : "junction";
+  };
+
+  for (const entry of entries) {
+    const details = asRecord(entry.details);
+
+    if (entry.payload === LOG_EVENTS.levelStarted) {
+      const built = mazeFromEncoded(details.maze as EncodedMaze);
+      exits = built.ok ? built.maze.exits : null;
+      startCell = cellFromGridPoint(asRecord(details.startPosition));
+      destinationCell = details.destinationCell;
+      historyWindowRadius = details.historyWindowRadius;
+      continue;
+    }
+
+    for (const message of asArray(details.messages).map(asRecord)) {
+      if (message.role !== "tool" || typeof message.content !== "string") continue;
+      const checksum = message.content_checksum;
+      // Verify only when the round supplied every input the reconstruction needs.
+      //
+      // The checksum covers the payload Tapoo sent, which carries destinationCell and
+      // historyWindowRadius - and compaction strips both, so they can only come from the round's
+      // "Agent level started." entry. Without one, JSON.stringify simply omits the keys and the rebuilt
+      // text is a different string, so *every* payload in the round would fail and an otherwise sound
+      // log would be stamped inaccurate from top to bottom.
+      //
+      // A missing input is not evidence of damage. It means we cannot check, which is silence.
+      if (
+        typeof checksum !== "string" ||
+        exits === null ||
+        destinationCell === null ||
+        destinationCell === undefined ||
+        typeof historyWindowRadius !== "number"
+      ) {
+        continue;
+      }
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(message.content);
+      } catch {
+        continue;
+      }
+      const body = asRecord(payload);
+      if (!Array.isArray(body.filteredTraversalHistory)) continue;
+
+      const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
+        const cell = cellFromLogged(record.cell);
+        const [row, col] = (cell ?? "0,0").split(",").map(Number);
+        const openMoves: Record<string, unknown> = {};
+        for (const [move, status] of statusesFromLogged(record.openMoves)) {
+          if (!isMove(move)) continue;
+          const [toRow, toCol] = stepFrom(cell ?? "0,0", move).split(",").map(Number);
+          openMoves[move] = {row: toRow, col: toCol, visitStatus: status};
+        }
+        return {
+          playerName: record.playerName,
+          cell: {row, col},
+          cellType: cellTypeOf(cell ?? "0,0"),
+          openMoves,
+        };
+      });
+
+      const current = cellFromLogged(body.currentCell);
+      const [currentRow, currentCol] = (current ?? "0,0").split(",").map(Number);
+      const rebuilt = JSON.stringify({
+        level: entry.level,
+        currentCell: {row: currentRow, col: currentCol},
+        destinationCell,
+        historyWindowRadius,
+        filteredTraversalHistory: history,
+      });
+
+      if (fnv1a64Checksum(rebuilt) !== checksum) {
+        damaged += 1;
+        firstDamaged ??= `turn ${entry.turn ?? "?"} of game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
+      }
+    }
+  }
+
+  if (damaged > 0) {
+    // Inaccurate, not incomplete: the maze still draws, and it draws visit colours taken from a payload
+    // that does not match what Tapoo says it sent. A reader would have no way to tell.
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        damaged === 1
+          ? `A maze-structure payload at ${firstDamaged ?? "an unknown turn"} does not match its checksum, so the visit colours on the replay may not be what the agent was shown.`
+          : `${damaged} maze-structure payloads do not match their checksums, the first at ${firstDamaged ?? "an unknown turn"}, so the visit colours on the replay may not be what the agent was shown.`,
+    });
+  }
+
+  return warnings;
+}
+
 function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
   const warnings: LogWarning[] = [];
 

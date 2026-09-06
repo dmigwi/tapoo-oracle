@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, stepFrom} from "./log-contract"
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
 import {at, expectErr, expectOk, messagesOf} from "./test-support";
@@ -48,6 +50,37 @@ describe("maze geometry", () => {
       "get_prediction_rules",
       "get_last_prediction_outcome",
     ])
+  })
+})
+
+// Both logged shapes carry the status and both must be read: compacted logs write [move, status] pairs,
+// uncompacted ones nest it in the value. movesFromLogged drops it from each on purpose - it wants exits.
+describe("statusesFromLogged", () => {
+  it("reads the compacted [move, status] pairs", () => {
+    expect(statusesFromLogged([["MoveUp", "explored"], ["MoveDown", "oscillating"]])).toEqual([
+      ["MoveUp", "explored"],
+      ["MoveDown", "oscillating"],
+    ])
+  })
+
+  it("reads the uncompacted object, where the status sits inside the value", () => {
+    expect(statusesFromLogged({MoveDown: {row: 1, col: 0, visitStatus: "unvisited"}})).toEqual([
+      ["MoveDown", "unvisited"],
+    ])
+  })
+
+  // A status outside the scale is a shape we do not understand, and colouring a cell from it would be
+  // inventing a reading. Dropped rather than passed through.
+  it("drops a status the scale does not define", () => {
+    expect(statusesFromLogged([["MoveUp", "sideways"], ["MoveDown", "explored"]])).toEqual([
+      ["MoveDown", "explored"],
+    ])
+  })
+
+  it("survives the shapes a producer should never write", () => {
+    expect(statusesFromLogged(null)).toEqual([])
+    expect(statusesFromLogged("MoveUp")).toEqual([])
+    expect(statusesFromLogged([["MoveUp"], 42, null])).toEqual([])
   })
 })
 
@@ -163,6 +196,115 @@ describe("parseTapooLogExport", () => {
     expect(result.ok).toBe(true)
     expect(expectOk(result).value.entries).toHaveLength(1)
     expect(expectOk(result).warnings).toEqual([])
+  })
+})
+
+// The visit colours on the replay are read straight out of get_maze_structure payloads, so a damaged one
+// would be drawn as fact. content_checksum is over the content Tapoo sent, not the compacted form the
+// log keeps, so the check rebuilds the original and hashes that.
+// The store exists so the turn offset cannot be applied twice or forgotten. `record` takes the turn that
+// carried a payload, `get` takes the turn it covers, and nothing exposes the raw key - which is what
+// makes the bug it was extracted from unrepeatable rather than merely fixed.
+describe("turnReports", () => {
+  it("stores what a request carried under the turn it covers", () => {
+    const reports = turnReports<string>()
+    reports.record(5, "outcome of turn 4")
+
+    expect(reports.get(4)).toBe("outcome of turn 4")
+    // The turn that carried it is not a key. A reader applying the offset itself would land here.
+    expect(reports.get(5)).toBeUndefined()
+  })
+
+  // Turn 0's payload covers turn -1: there is no turn before the first, so it holds the opening state
+  // and matches no turn. rounds.ts guards on it explicitly.
+  it("keeps the opening payload under -1", () => {
+    const reports = turnReports<string>()
+    reports.record(0, "the start")
+
+    expect(reports.get(-1)).toBe("the start")
+  })
+
+  // A turn can carry more than one tool message, and the second must not erase the first.
+  it("merges when a turn carried more than one payload", () => {
+    const reports = turnReports<string[]>()
+    reports.record(3, ["a"], (existing, incoming) => [...existing, ...incoming])
+    reports.record(3, ["b"], (existing, incoming) => [...existing, ...incoming])
+
+    expect(reports.get(2)).toEqual(["a", "b"])
+    expect(reports.size).toBe(1)
+  })
+
+  it("replaces when no merge is given", () => {
+    const reports = turnReports<string>()
+    reports.record(3, "first")
+    reports.record(3, "second")
+
+    expect(reports.get(2)).toBe("second")
+  })
+
+  // Readers walk this to a bound, so the order is part of the contract rather than a side effect of
+  // however the entries happened to arrive.
+  it("returns entries ascending by the turn they cover", () => {
+    const reports = turnReports<string>()
+    for (const turn of [7, 1, 4, 0]) reports.record(turn, `carried on ${turn}`)
+
+    expect(reports.ascending().map(([turn]) => turn)).toEqual([-1, 0, 3, 6])
+    expect(reports.size).toBe(4)
+    expect(reports.values()).toHaveLength(4)
+  })
+})
+
+describe("the traversal payload checksum", () => {
+  const checksumWarnings = (log: unknown): string[] => {
+    const result = parseTapooLogText(JSON.stringify(log))
+    if (!result.ok) throw new Error(`fixture did not parse: ${result.error}`)
+    return result.warnings.map((warning) => warning.message).filter((m) => m.includes("checksum"))
+  }
+
+  // The half that matters most: a false positive here would put an accuracy warning on every clean
+  // report, and a reader who meets one on a good log stops believing the next one.
+  it("is silent on a real export, where all 16 payloads reconstruct byte-exactly", () => {
+    expect(checksumWarnings(fixtureData)).toEqual([])
+  })
+
+  // The checksum covers fields compaction strips - destinationCell and historyWindowRadius - so they can
+  // only come from the round's "Agent level started." entry. A log without one cannot be checked, and
+  // saying so by silence is the only honest answer: reporting a mismatch would stamp every payload in an
+  // otherwise sound log as damaged, on the strength of something we never had.
+  it("stays silent when the round never recorded what the reconstruction needs", () => {
+    const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    for (const entry of log.entries) {
+      const details = entry.details as Record<string, unknown> | null
+      if (details && "historyWindowRadius" in details) delete details.historyWindowRadius
+    }
+
+    expect(checksumWarnings(log)).toEqual([])
+  })
+
+  it("reports a payload whose contents no longer match what Tapoo hashed", () => {
+    const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    let tampered = 0
+    for (const entry of log.entries) {
+      const details = entry.details as {messages?: Array<Record<string, unknown>>} | null
+      for (const message of details?.messages ?? []) {
+        if (message.role !== "tool" || typeof message.content !== "string") continue
+        if (typeof message.content_checksum !== "string") continue
+        const payload = JSON.parse(message.content) as {
+          filteredTraversalHistory?: Array<{openMoves?: string[][]}>
+        }
+        const first = payload.filteredTraversalHistory?.[0]?.openMoves?.[0]
+        if (!first) continue
+        // One status flipped and nothing else: the payload still parses, and would still draw.
+        first[1] = "oscillating"
+        message.content = JSON.stringify(payload)
+        tampered += 1
+      }
+    }
+
+    expect(tampered).toBe(16)
+    expect(checksumWarnings(log)).toEqual([
+      "16 maze-structure payloads do not match their checksums, the first at turn 0 of game 2 level 1, so the visit colours on the replay may not be what the agent was shown.",
+    ])
   })
 })
 
@@ -333,6 +475,17 @@ describe("reading the model's message from a provider response", () => {
     })).toEqual({content: '{"moves":["MoveDown"]}', toolNames: ["get_prediction_rules"], reasoning: "considering"})
   })
 
+  // typeof [] is "object", so the coercion this module used to carry reported a list as a record and
+  // handed the reader a message whose every field was undefined. Consolidating on the shared asRecord,
+  // which excludes arrays, is a behaviour change: an array where an object is expected now reads as
+  // absent. Pinned here because it is the only behaviour this refactor altered.
+  it("reads an array where a message object is expected as absent, not as a record", () => {
+    // null, not an empty message: the two are read differently downstream - an empty message is a
+    // response the model gave and said nothing in, and null is no assistant message in the payload.
+    expect(assistantMessage({message: ["not", "a", "message"]})).toBeNull()
+    expect(assistantMessage({choices: [{message: ["not", "a", "message"]}]})).toBeNull()
+  })
+
   it("reads Anthropic: typed content blocks, with no message or choices at all", () => {
     // The shape that would otherwise have counted as an empty response for a whole log.
     expect(assistantMessage({
@@ -383,10 +536,17 @@ describe("reading the model's message from a provider response", () => {
 })
 
 describe("what the provider reported about its own work", () => {
-  it("reads Ollama's counts and duration", () => {
+  it("reads Ollama's counts", () => {
     expect(responseUsage({prompt_eval_count: 3234, eval_count: 35, total_duration: 1_100_956_836, done_reason: "stop"}))
       .toEqual({promptTokens: 3234, completionTokens: 35, reasoningTokens: null,
-        cachedPromptTokens: null, durationNs: 1_100_956_836, finishReason: "stop"})
+        cachedPromptTokens: null, finishReason: "stop"})
+  })
+
+  // total_duration is in the payload above and is deliberately not read. It is throttled per request and
+  // carries the test machine's network and load, so it is not the model's time and cannot compare one
+  // run against another - and a number on the page invites exactly that comparison.
+  it("does not read Ollama's wall-clock duration", () => {
+    expect(responseUsage({total_duration: 1_100_956_836})).not.toHaveProperty("durationNs")
   })
 
   it("reads OpenAI's usage block, including the two a reasoning model adds", () => {
@@ -395,7 +555,7 @@ describe("what the provider reported about its own work", () => {
         completion_tokens_details: {reasoning_tokens: 18}, prompt_tokens_details: {cached_tokens: 2304}},
       choices: [{finish_reason: "stop", message: {content: "x"}}],
     })).toEqual({promptTokens: 3250, completionTokens: 20, reasoningTokens: 18,
-      cachedPromptTokens: 2304, durationNs: null, finishReason: "stop"})
+      cachedPromptTokens: 2304, finishReason: "stop"})
   })
 
   it("reads Anthropic's usage: output_tokens is the completion side, thinking included", () => {
@@ -405,7 +565,7 @@ describe("what the provider reported about its own work", () => {
       role: "assistant", stop_reason: "end_turn",
       usage: {input_tokens: 3100, output_tokens: 240, cache_read_input_tokens: 2048},
     })).toEqual({promptTokens: 3100, completionTokens: 240, reasoningTokens: null,
-      cachedPromptTokens: 2048, durationNs: null, finishReason: "end_turn"})
+      cachedPromptTokens: 2048, finishReason: "end_turn"})
   })
 
   it("reads each provider's own name for how the model stopped", () => {
@@ -420,13 +580,12 @@ describe("what the provider reported about its own work", () => {
     const usage = responseUsage({prompt_eval_count: 10, eval_count: 2})
 
     expect(usage.reasoningTokens).toBeNull()
-    expect(usage.durationNs).toBeNull()
   })
 
   it("survives a payload that reports nothing at all", () => {
     for (const payload of [null, undefined, {}, "x", {usage: "no"}, {choices: []}]) {
       expect(responseUsage(payload)).toEqual({promptTokens: null, completionTokens: null,
-        reasoningTokens: null, cachedPromptTokens: null, durationNs: null, finishReason: null})
+        reasoningTokens: null, cachedPromptTokens: null, finishReason: null})
     }
   })
 })

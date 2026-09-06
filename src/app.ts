@@ -8,4 +8,4 @@
 // re-exports rather than implements: the page's dependency on the app is stated here and nowhere else.
 
 export { createReportTabsInput } from "./lib/report-tabs-control";
-export { renderReportSections } from "./lib/report-view";
+export { renderReportSections, stampBuildAge } from "./lib/report-view";

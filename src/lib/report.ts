@@ -44,7 +44,6 @@ export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: s
     reasoningEfforts: [...context.reasoningEfforts],
     output: {...context.output, finishReasons: [...context.output.finishReasons]},
     predictions: context.submissions.length,
-    rounds: context.outcomes.length,
     traversalSpeed: winningOutcome ? Number(winningOutcome.traversalSpeed) : null,
     traversalSpeedClass: winningOutcome ? classifyTraversalSpeed(winningOutcome.traversalSpeed) : null,
     capabilities: CAPABILITIES.map((group) => answerGroup(group, "capability")),

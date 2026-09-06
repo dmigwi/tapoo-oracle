@@ -12,6 +12,7 @@
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
 import {MOVES, cellKey, isMove, stepFrom} from "./geometry";
+import {fnv1a64Checksum} from "./utils";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} from "./types";
 
 // --- Rendered grid geometry ---
@@ -45,22 +46,6 @@ const isOpen = (token: string | undefined): boolean =>
   typeof token === "string" && token.length > 0 && token.charCodeAt(0) === 32;
 
 // --- Decoding the logged maze ---
-
-// fnv1a64Checksum is the FNV-1a 64-bit hash Tapoo stamps onto an encoded maze, over UTF-8 bytes.
-// Ported rather than imported - the alternative is trusting a structure string that may have been
-// truncated in transit and then rendering a maze that never existed.
-export function fnv1a64Checksum(text: string): string {
-  const offsetBasis = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-
-  let hash = offsetBasis;
-  for (const byte of new TextEncoder().encode(text)) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * prime);
-  }
-
-  return `0x${hash.toString(16).padStart(16, "0")}`;
-}
 
 // decodeEncodedMaze expands the compact structure string back into the exact token grid Tapoo rendered.
 //
@@ -147,10 +132,10 @@ function mazeFromDecodedGrid(
 
 // --- Reading the maze ---
 
-// shortestPathLength walks the maze breadth-first and returns the fewest moves between two cells, or
-// null when no route exists. Reported beside the agent's own path length, it is what turns "17 cells
-// visited" into "17 cells visited on a 17-move route" - the difference between efficient and lucky.
-export function shortestPathLength(
+// successPathLength walks the maze breadth-first and returns the fewest moves between two cells, or
+// null when no route exists. This is the success path length — the number of cells a player must
+// walk from start to finish without making any mistakes.
+export function successPathLength(
   maze: Maze,
   fromCell: CellKey | null | undefined,
   toCell: CellKey | null | undefined,
@@ -191,14 +176,19 @@ function mazeStats(
 ): MazeStats {
   let deadEnds = 0;
   let corridors = 0;
-  let junctions = 0;
+  let deg3 = 0;
+  let deg4 = 0;
+  let edgeSum = 0;
   for (const open of maze.exits.values()) {
+    edgeSum += open.size;
     if (open.size <= 1) {
       deadEnds += 1;
     } else if (open.size === 2) {
       corridors += 1;
+    } else if (open.size === 3) {
+      deg3 += 1;
     } else {
-      junctions += 1;
+      deg4 += 1;
     }
   }
 
@@ -208,8 +198,11 @@ function mazeStats(
     cells: maze.exits.size,
     deadEnds,
     corridors,
-    junctions,
-    shortestPath: shortestPathLength(maze, startCell, destinationCell),
+    junctions: deg3 + deg4,
+    deg3,
+    deg4,
+    edges: edgeSum / 2,
+    successPath: successPathLength(maze, startCell, destinationCell),
   };
 }
 
@@ -230,10 +223,27 @@ export function mazeFromEncoded(
     return built;
   }
 
-  return {
-    ok: true,
-    maze: built.maze,
-    grid: decoded.grid,
-    stats: mazeStats(built.maze, {startCell, destinationCell}),
-  };
+  const stats = mazeStats(built.maze, {startCell, destinationCell});
+
+  // Validate the two structural invariants that hold for any perfect maze (a spanning tree).
+  //
+  // edges == cells - 1: a connected acyclic graph on N nodes has exactly N-1 edges. More or fewer
+  // means the maze has a cycle or a disconnected region - either breaks the guarantee that every
+  // cell is reachable and that there is exactly one path between any two cells.
+  //
+  // deadEnds == deg3 + 2·deg4 + 2: follows from the handshaking lemma on a tree. Summing degrees
+  // gives 2·edges = 2·(cells-1). Expanding by degree class and eliminating corridors (deg2) yields
+  // this identity. A violation means the cell-classification counts are internally inconsistent.
+  if (stats.edges !== stats.cells - 1) {
+    return {ok: false, error: `Maze has cycles or disconnected regions: expected ${stats.cells - 1} edges for ${stats.cells} cells but found ${stats.edges}.`};
+  }
+  if (stats.deadEnds !== stats.deg3 + 2 * stats.deg4 + 2) {
+    return {ok: false, error: `Maze failed dead-end invariant: expected ${stats.deg3 + 2 * stats.deg4 + 2} dead ends (deg3=${stats.deg3}, deg4=${stats.deg4}) but found ${stats.deadEnds}.`};
+  }
+
+  if (startCell && destinationCell && stats.successPath === null) {
+    return {ok: false, error: "Maze has no navigable path from start to destination. The experiment is invalid."};
+  }
+
+  return {ok: true, maze: built.maze, grid: decoded.grid, stats};
 }

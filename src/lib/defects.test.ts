@@ -7,7 +7,7 @@ import {buildLevels} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
 import {at, must, reportWith} from "./test-support"
-import {asTrimmedText} from "./untrusted"
+import {asTrimmedText} from "./utils"
 import type {LogEntry, ReportTabsState} from "./types"
 
 // Regressions for the defects the TypeScript conversion exposed.
@@ -66,7 +66,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
     ])
     const model = must(mazeReplayModel(reportWith(...levels))[0], "a model for the round")
 
-    expect(must(model.stats, "maze stats").shortestPath).not.toBeNull()
+    expect(must(model.stats, "maze stats").successPath).not.toBeNull()
   })
 
   it("reads both shapes through one reader, and rejects anything else", () => {

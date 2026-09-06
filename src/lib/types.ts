@@ -21,6 +21,41 @@ export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
 /** Open exits as a log records them: an object keyed by move, or `[move, visitStatus]` pairs once the
  * result has been compacted for the download. */
 
+/** How heavily a cell has been worked, as Tapoo grades it.
+ *
+ * Tapoo's own rule, from get_maze_structure's description: it compares the cell's visit count with its
+ * fixed open-exit count. `explored` is below, `backtracking` is equal - every exit used once, so the
+ * direction is exhausted - and `oscillating` is above, which is moves being wasted. A dead-end reads as
+ * `backtracking` from its first visit, because nothing lies beyond a single exit.
+ *
+ * Read from the log, never derived here. The count it is computed from is not serialized, so a status
+ * we worked out ourselves could not be checked against the source - and if Tapoo's grading is ever
+ * wrong, a report that recomputed it would hide the defect instead of showing it. */
+export type VisitStatus = "unvisited" | "explored" | "backtracking" | "oscillating";
+
+/** Per-turn payloads, stored so the turn offset cannot be applied twice or forgotten.
+ *
+ * Tapoo reports a turn's outcome on the request that *follows* it. That rule used to be a bare `- 1`
+ * beside a plain Map, which meant every writer had to remember it and every reader had to trust that
+ * they had - and one of them did not, so the maze overlay ran a turn behind. Here the two are one
+ * thing: `record` is the only way in and takes the turn that *carried* the payload, `get` is the only
+ * way out and takes the turn it *covers*. There is no key to get wrong.
+ *
+ * Key -1 is the state before the first turn - what the payload logged on turn 0 covers. */
+export type TurnReports<T> = {
+  /** Store what the request on `reportingTurn` carried, under the turn it covers. `merge` combines with
+   * an existing entry when a turn carried more than one payload. */
+  record: (reportingTurn: number, value: T, merge?: (existing: T, incoming: T) => T) => void;
+  /** What is known about `turn` itself. */
+  get: (turn: number) => T | undefined;
+  /** Every entry, ascending by the turn it covers. */
+  ascending: () => Array<[number, T]>;
+  values: () => T[];
+  readonly size: number;
+};
+
+export type VisitStatusByTurn = TurnReports<Map<CellKey, VisitStatus>>;
+
 export type LogLevel = "error" | "info" | "warn";
 
 /** One entry, carrying only the fields `isLogEntry` actually verifies. `turn`, `level` and `game`
@@ -145,7 +180,10 @@ export type MazeStats = {
   deadEnds: number;
   corridors: number;
   junctions: number;
-  shortestPath: number | null;
+  deg3: number;
+  deg4: number;
+  edges: number;
+  successPath: number | null;
 };
 
 export type EncodedMaze = {
@@ -192,7 +230,7 @@ export type Context = {
    * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
    * transition key, so two turns submitting the same move with the same outcome collapse into one
    * entry; a map keyed by reporting turn cannot lose a turn that way. */
-  replayByReportingTurn: Map<number, Replay>;
+  replayByTurn: TurnReports<Replay>;
   /** Running totals of what the model produced. Accumulated rather than kept per response: the report
    * describes a sample, and 719 individual token counts are not a summary of anything. */
   output: {
@@ -201,10 +239,13 @@ export type Context = {
     completionTokens: number | null;
     reasoningTokens: number | null;
     cachedPromptTokens: number | null;
-    durationNs: number | null;
     finishReasons: Map<string, number>;
   };
   exits: Map<CellKey, Set<string>>;
+  /** Visit statuses keyed by the turn whose end they report - never by the turn that carried them, which
+   * is one later. Not cumulative: a cell appears only where a payload named it, and the view carries the
+   * last one forward. Key -1 is the state the round opened in. */
+  visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   timeline: TimelineEvent[];
   submissions: Submission[];
@@ -285,6 +326,7 @@ export type Level = {
   historyWindowRadius: number | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
+  visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   turns: Turn[];
   outcome: Outcome | null;
@@ -323,7 +365,6 @@ export type Report = {
   reasoningEfforts: string[];
   output: ModelOutput;
   predictions: number;
-  rounds: number;
   traversalSpeed: number | null;
   traversalSpeedClass: string | null;
   capabilities: GroupResult[];
@@ -355,15 +396,19 @@ export type AssistantMessage = {
 
 /** What a provider reported about one response, normalized across API shapes.
  *
- * Every field is nullable because the two providers report different subsets: Ollama gives a duration
- * and no reasoning-token count, OpenAI the reverse. A null means "this provider did not say", which is
- * a different claim from zero and is displayed differently. */
+ * Every field is nullable because the providers report different subsets: Ollama counts no reasoning or
+ * cached-prompt tokens, OpenAI and Anthropic do. A null means "this provider did not say", which is a
+ * different claim from zero and is displayed differently.
+ *
+ * Wall-clock duration is deliberately absent. Ollama reports `total_duration` per response, but the
+ * figure is throttled per request and carries the test machine's network and load along with it, so it
+ * is not the model's time and cannot compare one run against another. Reading it and captioning the
+ * caveat would still put a number on the page that invites the comparison it cannot support. */
 export type ResponseUsage = {
   promptTokens: number | null;
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedPromptTokens: number | null;
-  durationNs: number | null;
   finishReason: string | null;
 };
 
@@ -374,12 +419,29 @@ export type ModelOutput = {
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedPromptTokens: number | null;
-  durationNs: number | null;
   /** Finish reasons and their counts, in first-seen order. */
   finishReasons: Array<[string, number]>;
 };
 
-export type Analysis = Result<{source: TapooLog; warnings: LogWarning[]; report: Report}>;
+/** One round's report, with the identity that names its tab. */
+export type RoundReport = {
+  /** `game/level`. Stable across renders, so it is what a tab selection stores. */
+  key: string;
+  game: number | null;
+  level: number | null;
+  /** "Game 2 · Level 1" - what the tab says. */
+  label: string;
+  report: Report;
+};
+
+export type Analysis = Result<{
+  source: TapooLog;
+  warnings: LogWarning[];
+  /** The rounds this log recorded, in the order they were played. Never empty for a parsed log: a log
+   * that names no round at all still yields one round holding everything. Each carries its own rubric
+   * answers, because a verdict about one maze is not a verdict about the next one. */
+  rounds: RoundReport[];
+}>;
 
 // --- Maze replay ---
 
@@ -396,6 +458,11 @@ export type LevelModel = {
   destinationCell: CellKey | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
+  visitStatusAfterTurn: VisitStatusByTurn;
+  /** How far from its current cell the agent could see its own traversal history, as a Manhattan
+   * radius in cells. It bounds what the agent knew when it chose each move, so it belongs beside the
+   * round's other facts rather than with the maze's fixed shape. */
+  historyWindowRadius: number | null;
   turns: Turn[];
   outcome: Outcome | null;
   agents: string[];
@@ -405,7 +472,10 @@ export type Frame = {
   played: Turn[];
   turnIndex: number;
   totalTurns: number;
-  visited: Map<CellKey, string | null>;
+  /** Every cell entered so far, with the seat that last entered it and how Tapoo graded it as of this
+   * frame. The status is the last one reported at or before this turn, so it changes as you scrub, and
+   * null where the log never graded the cell - never a grade inferred here. */
+  visited: Map<CellKey, {playerName: string | null; status: VisitStatus | null}>;
   positions: Map<string, CellKey>;
   currentCell: CellKey | null;
   rejected: {cell: CellKey | null; move: string} | null;

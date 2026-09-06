@@ -4,18 +4,24 @@ toc: false
 ---
 
 ```js
-import {createReportTabsInput, renderReportSections} from "./app.js";
+import {createReportTabsInput, renderReportSections, stampBuildAge} from "./app.js";
 ```
 
 <section class="oracle-hero">
   <div>
     <h1>Tapoo Oracle</h1>
-    <p class="lede">Load an online <a href="https://dmigwi.github.io/tapoo/">Tapoo</a> <code>agent-api</code> JSON log URL and read the agent's behavior profile: nine capability groups and six violation groups, answered strictly YES or NO from logged evidence. Not a scorecard &mdash; no combined intelligence score is produced.</p>
+    <p class="lede">Load an online <a href="https://dmigwi.github.io/tapoo/">Tapoo</a> <code>agent-api</code> JSON log URL and read the agent's behavior profile, built only from what the log records. How that is done is set out under <em>How this report is generated</em>, beside the report itself.</p>
   </div>
 </section>
 
 ```js
 const reportTabsState = view(createReportTabsInput());
+```
+
+```js
+// The footer's build date is stamped into the HTML; how long ago that was can only be answered while
+// someone is looking, so it is finished here.
+stampBuildAge(document, new Date());
 ```
 
 ```js

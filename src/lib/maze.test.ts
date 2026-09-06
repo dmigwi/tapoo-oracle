@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {cellFromGridPoint, decodeEncodedMaze, fnv1a64Checksum, mazeFromEncoded, shortestPathLength} from "./maze"
+import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, successPathLength} from "./maze"
 import {expectErr, expectOk} from "./test-support";
 
 // The exact maze block from a real Tapoo export (v2.5.1, 6x4). Using the shipped bytes rather than a
@@ -16,16 +16,6 @@ const REAL_MAZE = {
 
 const START = "0,0"
 const DESTINATION = "0,5"
-
-describe("fnv1a64Checksum", () => {
-  it("reproduces the checksum Tapoo stamped on a real maze", () => {
-    expect(fnv1a64Checksum(REAL_MAZE.structure)).toBe(REAL_MAZE.structure_checksum)
-  })
-
-  it("changes when the structure changes", () => {
-    expect(fnv1a64Checksum(`${REAL_MAZE.structure}0`)).not.toBe(REAL_MAZE.structure_checksum)
-  })
-})
 
 describe("decodeEncodedMaze", () => {
   it("expands to the rendered grid the dimensions imply", () => {
@@ -76,8 +66,18 @@ describe("mazeFromEncoded", () => {
       deadEnds: 6,
       corridors: 14,
       junctions: 4,
-      shortestPath: 17,
+      deg3: 4,
+      deg4: 0,
+      edges: 23,
+      successPath: 17,
     })
+  })
+
+  it("satisfies structural invariants: edges == cells - 1 and deadEnds == deg3 + 2·deg4 + 2", () => {
+    const {stats} = expectOk(built)
+
+    expect(stats.edges).toBe(stats.cells - 1)
+    expect(stats.deadEnds).toBe(stats.deg3 + 2 * stats.deg4 + 2)
   })
 
   it("rejects a grid that does not match its stated dimensions", () => {
@@ -86,17 +86,24 @@ describe("mazeFromEncoded", () => {
     expect(built.ok).toBe(false)
     expect(expectErr(built).error).toMatch(/does not match its 9x9 dimensions/)
   })
+
+  it("rejects a maze where start and destination have no navigable path", () => {
+    const built = mazeFromEncoded(REAL_MAZE, { startCell: START, destinationCell: "99,99" })
+
+    expect(built.ok).toBe(false)
+    expect(expectErr(built).error).toMatch(/no navigable path/)
+  })
 })
 
-describe("shortestPathLength", () => {
+describe("successPathLength", () => {
   const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
 
   it("is zero between a cell and itself", () => {
-    expect(shortestPathLength(maze, START, START)).toBe(0)
+    expect(successPathLength(maze, START, START)).toBe(0)
   })
 
   it("is null for a cell outside the maze", () => {
-    expect(shortestPathLength(maze, START, "99,99")).toBeNull()
+    expect(successPathLength(maze, START, "99,99")).toBeNull()
   })
 })
 

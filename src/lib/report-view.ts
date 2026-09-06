@@ -10,6 +10,7 @@
 
 import { createMazeReplay } from "./maze-view";
 import {
+  diagnosticRows,
   diagnosticTableData,
   groupResultTone,
   narrativeSummary,
@@ -21,7 +22,8 @@ import {
 } from "./report-adapters";
 import { createInitialReportTabs } from "./report-tabs";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
-import type { Analysis, GroupKind, Region, ReportTab, ReportTabsState, ReportUi, TapooLog } from "./types";
+import { relativeAge } from "./utils";
+import type { Analysis, GroupKind, Region, Report, ReportTab, ReportTabsState, ReportUi, RoundReport, TapooLog } from "./types";
 
 
 // --- Shared tables ---
@@ -47,6 +49,13 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
     columns: ["id", "group", "question", "answer", "groupResult"],
     header: {id: "ID", group: "Group", question: "Fact question", answer: "Answer", groupResult: "Group result"},
     format: {
+      // The ID column is chipped here rather than by styling the cell: one class on one kind of
+      // element, so the code on a profile card and the code that defines it are the same object with
+      // the same rules. Styling the td instead meant the chip had to fight the cell - shrinking it off
+      // the column width and clipping its own background - to look like the spans everywhere else.
+      //
+      // Unconditional: every value in this column is an identifier by construction.
+      id: codeChip(html),
       groupResult: (value: string) => {
         const tone = groupResultTone(kind, value)
         return tone ? html`<span class=${tone}>${value}</span>` : value
@@ -57,17 +66,45 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
   })));
 }
 
-function diagnosticsTable({Inputs}: ReportUi, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
+// A rubric identifier - C2, V4, C7.Q1 - gets one reserved appearance wherever it is printed.
+//
+// These codes are the page's cross-references: a card names C6, the rubric table's ID column defines
+// it, and the diagnostics table says which question scores a signal. Set as ordinary text they read as
+// part of the sentence around them, and the reader has to notice that "C6" is a thing to look up. One
+// treatment, used nowhere else, makes them findable by shape alone.
+//
+// Which values are identifiers is decided by the caller, never by inspecting the text. A regex over
+// cell contents was doing the latter, and it is a guess dressed as a rule: it would chip a group whose
+// name happened to look like a code and miss an id the day the scheme gains a letter. Every call site
+// below already knows - the ID column holds nothing else, and a diagnostic carries a nullable
+// scoredBy.
+const codeChip = (html: ReportUi["html"]) => (value: unknown): unknown =>
+  html`<span class="rubric-code">${value}</span>`;
+
+function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement {
   const data = diagnosticTableData(report);
+  // One column per signal, each holding a count in one row and its scoring question in the other. The
+  // signal's own scoredBy says which cell is the identifier - an unscored signal has none, so its "no"
+  // is never mistaken for one.
+  const chip = codeChip(html);
+  const format = Object.fromEntries(
+    diagnosticRows(report)
+      .filter((row) => row.scoredBy !== null)
+      .map((row) => [
+        row.signal,
+        (value: unknown) => (value === row.scoredBy ? chip(value) : value),
+      ]),
+  );
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
     header: {measure: "Measure"},
+    format,
     sort: false,
     rows: data.rows.length
   }));
 }
 
-function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: NonNullable<Analysis & {ok: true}>["report"]): HTMLElement {
+function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): HTMLElement {
   const data = provenanceTableData(source, report);
   return enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
@@ -136,25 +173,82 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
   return "";
 }
 
-function profile({html}: ReportUi, tab: ReportTab | undefined): Region {
+// activeRound picks the round on screen, falling back to the first.
+//
+// The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
+// blanked because a key went stale would be a worse failure than showing round one.
+export function activeRound(tab: ReportTab | undefined, key: string | null): RoundReport | undefined {
   const result = tab?.result;
-  if (!tab || !result?.ok) return "";
+  if (!result?.ok) return undefined;
+  return result.rounds.find((round) => round.key === key) ?? result.rounds[0];
+}
+
+// The round tabs, directly under the source line: which game and level the verdicts below belong to,
+// and how to read another one.
+//
+// Rendered only when there is a choice to make. One round needs no tablist - its identity is stated on
+// the line above instead, where it costs no vertical space and still names the game analyzed.
+function roundTabs(
+  {html}: ReportUi,
+  rounds: RoundReport[],
+  active: RoundReport,
+  select: (key: string) => void,
+): Region {
+  if (rounds.length < 2) return "";
+
+  return html`<div class="round-tabs" role="tablist" aria-label="Game to analyze">
+      ${rounds.map(
+        (round) => html`<button
+          type="button"
+          role="tab"
+          class=${`round-tab${round.key === active.key ? " round-tab-active" : ""}`}
+          aria-selected=${String(round.key === active.key)}
+          onclick=${() => select(round.key)}
+        >${round.label}</button>`,
+      )}
+    </div>`;
+}
+
+function profile(
+  ui: ReportUi,
+  tab: ReportTab | undefined,
+  key: string | null,
+  select: (key: string) => void,
+): Region {
+  const {html} = ui;
+  const result = tab?.result;
+  const round = activeRound(tab, key);
+  if (!tab || !result?.ok || !round) return "";
+  const rounds = result.rounds;
   return html`<div class="report-region">
       <section class="events-section">
         <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
-        ${createMazeReplay(result.report)}
-      </section>
-      <section class="analysis-strip">
-        ${profileCards(result.report).map(
-          (card) => html`<article class=${`metric metric-${card.tone}`}>
-            <span>${card.label}</span>
-            <strong>${card.value}</strong>
-          </article>`
-        )}
+        ${rounds.length < 2
+          ? html`<p class="round-identity">${round.label}</p>`
+          : roundTabs(ui, rounds, round, select)}
+        <p class="processing-note">
+          Log contents are analyzed in your browser and never uploaded; a shared link carries the log
+          address to the host serving this page.
+        </p>
+        ${createMazeReplay(round.report)}
       </section>
       <section class="events-section oracle-summary">
         <h2>Behavior Profile</h2>
-        <p>${narrativeSummary(result.report)}</p>
+        <p>${narrativeSummary(round.report)}</p>
+        <span class="analysis-strip">
+        ${profileCards(round.report).map(
+          (card) => html`<article class=${`metric metric-${card.tone}`}>
+            <span>${card.label}</span>
+            <strong>${card.value}</strong>
+            ${card.groups.length > 0
+              ? html`<span class="metric-detail">${card.groups.map(
+                    (group) =>
+                      html`<span class="metric-group"><span class="rubric-code">${group.id}</span> ${group.label}</span>`,
+                  )}</span>`
+              : ""}
+          </article>`
+        )}
+        </span>
       </section>
     </div>`;
 }
@@ -171,6 +265,12 @@ function profile({html}: ReportUi, tab: ReportTab | undefined): Region {
 // true and still wrong: a page with no report loaded showed five stages of methodology above an empty
 // state telling the reader to paste a URL, explaining the treatment of evidence that does not exist
 // yet. It renders here so it appears with the thing it describes.
+//
+// It is also the one home for how the report is made. Three claims used to appear here and twice more
+// elsewhere - that no combined score is produced, that every question answers YES or NO, and what a NO
+// means - once in the hero lede and once in the profile summary. A rule stated three times reads as
+// three separate hedges rather than one method, so the lede and the summary now say what they are for
+// and leave the method to the section named after it.
 function methodology({html}: ReportUi, result: Analysis | undefined): Region {
   if (!result?.ok) return "";
   return html`<details class="events-section methodology-section">
@@ -233,40 +333,43 @@ function methodology({html}: ReportUi, result: Analysis | undefined): Region {
     </details>`;
 }
 
-function detail(ui: ReportUi, result: Analysis | undefined): Region {
-  if (!result?.ok) return "";
+function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): Region {
+  const result = tab?.result;
+  const round = activeRound(tab, key);
+  if (!result?.ok || !round) return "";
   const {html} = ui;
+  const report = round.report;
   return html`<div class="report-region">
       <section class="events-section">
         <h2>Capabilities</h2>
         <p class="section-note">AND semantics: every fact question must answer YES for its group to be demonstrated.</p>
-        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(result.report.capabilities), "capability")}</div>
+        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(report.capabilities), "capability")}</div>
       </section>
       <section class="events-section">
         <h2>Violations</h2>
         <p class="section-note">OR semantics: any fact question answering YES confirms its violation group.</p>
-        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(result.report.violations), "violation")}</div>
+        <div class="rubric-table">${rubricTable(ui, rubricQuestionRows(report.violations), "violation")}</div>
       </section>
       <section class="events-section">
         <h2>Operational Diagnostics</h2>
         <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
-        ${diagnosticsTable(ui, result.report)}
+        ${diagnosticsTable(ui, report)}
       </section>
       <section class="events-section">
         <h2>Model Output</h2>
         <p class="section-note">What the provider reported about the model's own work. Not scored: a model given ten times the prompt and a model that spent its budget reasoning are doing different tasks, and that is context for the verdicts above rather than a verdict itself.</p>
-        ${ui.Inputs.table(modelOutputRows(result.report), {
+        ${ui.Inputs.table(modelOutputRows(report), {
           columns: ["field", "value"],
           header: {field: "MEASURE", value: "VALUE"},
           sort: false,
-          rows: modelOutputRows(result.report).length,
+          rows: modelOutputRows(report).length,
           layout: "auto"
         })}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>
         <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
-        ${provenanceTable(ui, result.source, result.report)}
+        ${provenanceTable(ui, result.source, report)}
         <p class="source-line">
           The question definitions and answers above come directly from the rubric engine that
           analyzed this log.
@@ -285,11 +388,79 @@ export function renderReportSections(
   tabsState: ReportTabsState | undefined,
 ): {emptyState: Region; notices: Region; methodology: Region; profile: Region; detail: Region} {
   const tab = activeReportTab(tabsState);
+
+  // Round selection swaps the two regions in place rather than travelling through tab state.
+  //
+  // Routing it through the Observable input was the obvious design and it does not work: the state
+  // updates and the input event fires, but the runtime does not recompute the cell, so the page keeps
+  // the round it opened on. Swapping the nodes here is what the maze level select already does on this
+  // same page, and it keeps the whole feature inside this module - no page wiring, no new state field,
+  // and no chance of a stale round key outliving the log it came from.
+  let profileNode: Region = "";
+  let detailNode: Region = "";
+
+  const select = (key: string): void => {
+    const nextProfile = profile(ui, tab, key, select);
+    const nextDetail = detail(ui, tab, key);
+    // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region
+    // that was never inserted - a test rendering one half, a caller displaying only the profile - from
+    // throwing on the first click.
+    if (profileNode instanceof Element && nextProfile instanceof Element && profileNode.parentNode) {
+      profileNode.replaceWith(nextProfile);
+    }
+    if (detailNode instanceof Element && nextDetail instanceof Element && detailNode.parentNode) {
+      detailNode.replaceWith(nextDetail);
+    }
+    profileNode = nextProfile;
+    detailNode = nextDetail;
+  };
+
+  profileNode = profile(ui, tab, null, select);
+  detailNode = detail(ui, tab, null);
+
   return {
     emptyState: emptyState(ui, tab),
     notices: notices(ui, tab),
     methodology: methodology(ui, tab?.result),
-    profile: profile(ui, tab),
-    detail: detail(ui, tab?.result)
+    profile: profileNode,
+    detail: detailNode,
   };
+}
+
+// --- The build stamp ---
+
+/** The element observablehq.config.js writes, found by attribute rather than by position in the footer. */
+const STAMP = "time[data-build-age]";
+
+/** Appends "(3 days ago)" to the build stamp, if the page has one.
+ *
+ * The date itself is stamped at build time by observablehq.config.js, because that is the only moment
+ * that knows it. How long ago that was can only be answered when someone is looking, so the config
+ * writes a <time> element carrying the machine-readable instant and this fills in the human part.
+ *
+ * Split that way on purpose: a build-time string saying "0 seconds ago" would be a lie on every visit
+ * after the first, and a fully client-rendered date would leave the footer blank for a reader with
+ * scripting off. What ships in the HTML is already true and already useful; this only sharpens it.
+ *
+ * `now` is a parameter rather than read inside, so the age can be tested at a fixed instant instead of
+ * whenever the suite happens to run.
+ *
+ * Silent when the stamp is missing or its datetime does not parse: this is a footer decoration, and a
+ * page that renders everything else correctly must not fail over it.
+ */
+export function stampBuildAge(root: ParentNode, now: Date): void {
+  const stamp = root.querySelector(STAMP);
+  const iso = stamp?.getAttribute("datetime");
+  if (!stamp || !iso) return;
+
+  const built = new Date(iso);
+  if (Number.isNaN(built.getTime())) return;
+
+  // Replaced rather than appended, so a second call - a re-render, a hot reload - does not stack a
+  // second parenthetical onto the first.
+  const age = stamp.parentElement?.querySelector(".build-age") ?? null;
+  const node = age ?? document.createElement("span");
+  node.className = "build-age";
+  node.textContent = ` (${relativeAge(built, now)})`;
+  if (!age) stamp.after(node);
 }
