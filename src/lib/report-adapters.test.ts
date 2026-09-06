@@ -386,7 +386,7 @@ describe("modelOutputRows", () => {
   const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
     ...firstRound(analyzeLogText(fixtureText, {label: "fixture"})),
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
-      cachedPromptTokens: null, durationNs: null, finishReasons: [], ...output},
+      cachedPromptTokens: null, finishReasons: [], ...output},
   })
 
   const valueOf = (report: Report, field: string) =>
@@ -400,22 +400,21 @@ describe("modelOutputRows", () => {
   })
 
   it("omits what a provider did not report, rather than printing a column of 'not recorded'", () => {
-    // Ollama reports no reasoning or cached-token counts; OpenAI reports no duration.
-    const ollama = reportWithOutput({responses: 2, promptTokens: 100, completionTokens: 20, durationNs: 4e9})
+    // Ollama reports no reasoning or cached-token counts.
+    const ollama = reportWithOutput({responses: 2, promptTokens: 100, completionTokens: 20})
 
     expect(valueOf(ollama, "Reasoning tokens")).toBeUndefined()
     expect(valueOf(ollama, "Cached prompt tokens")).toBeUndefined()
-    expect(valueOf(ollama, "Model time")).toBeDefined()
   })
 
-  it("reads a long run the way a person would say it", () => {
-    // One real log spent 19,174 seconds, which is five and a third hours and reads as neither.
-    expect(valueOf(reportWithOutput({responses: 1, durationNs: 19_174e9}), "Model time"))
-      .toBe("5h 20m (5h 20m per response)")
-    expect(valueOf(reportWithOutput({responses: 1, durationNs: 154e9}), "Model time"))
-      .toBe("2m 34s (2m 34s per response)")
-    expect(valueOf(reportWithOutput({responses: 1, durationNs: 4.83e9}), "Model time"))
-      .toBe("4.83s (4.83s per response)")
+  // Wall-clock time is not reported at all. Ollama's total_duration is throttled per request and carries
+  // the machine's network and load, so it says nothing about the model - and a row showing it would be
+  // read as a speed comparison between runs, which is the one thing it cannot support.
+  it("reports no wall-clock time", () => {
+    const rows = modelOutputRows(reportWithOutput({responses: 4, promptTokens: 4000}))
+
+    expect(rows.map((row) => row.field)).not.toContain("Model time")
+    expect(rows.some((row) => /time|duration/i.test(row.field))).toBe(false)
   })
 
   it("names every finish reason with its count, including the rare one", () => {

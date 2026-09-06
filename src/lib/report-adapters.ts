@@ -173,24 +173,6 @@ function listOrNotRecorded(values: string[]): string {
 // Nothing here is scored. It is context for reading the verdicts above - a model given 3,000 prompt
 // tokens per turn and one given 300 are not doing the same task, and neither is a run that spent most
 // of its completion budget on reasoning tokens.
-// formatDuration reads a span of seconds the way a person would say it.
-//
-// The log counts nanoseconds, and a run of any length reported in seconds alone stops being legible
-// somewhere around a minute: one real log spent 19,174 seconds, which is five and a third hours and
-// reads as neither.
-function formatDuration(seconds: number): string {
-  if (seconds >= 3600) {
-    const hours = Math.floor(seconds / 3600);
-    return `${hours}h ${Math.round((seconds - hours * 3600) / 60)}m`;
-  }
-  if (seconds >= 60) {
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ${Math.round(seconds - minutes * 60)}s`;
-  }
-  // Below ten seconds two decimals still say something; above it they are noise.
-  return seconds >= 10 ? `${seconds.toFixed(1)}s` : `${seconds.toFixed(2)}s`;
-}
-
 export function modelOutputRows(report: Report): Array<{field: string; value: string}> {
   const {output} = report;
   const rows: Array<{field: string; value: string}> = [
@@ -209,13 +191,6 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
   tokens("Completion tokens", output.completionTokens);
   tokens("Reasoning tokens", output.reasoningTokens);
   tokens("Cached prompt tokens", output.cachedPromptTokens);
-
-  if (output.durationNs !== null) {
-    // Total, then the per-response mean: a slow provider and a long run look identical in the total.
-    const seconds = output.durationNs / 1e9;
-    const each = output.responses > 0 ? seconds / output.responses : 0;
-    rows.push({field: "Model time", value: `${formatDuration(seconds)} (${formatDuration(each)} per response)`});
-  }
 
   if (output.finishReasons.length > 0) {
     // Named and counted rather than reduced to the most common one: "length" appearing at all means the

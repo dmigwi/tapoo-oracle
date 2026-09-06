@@ -128,7 +128,7 @@ export function buildContext(
     replayByTurn: turnReports<Replay>(),
     output: {
       responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
-      cachedPromptTokens: null, durationNs: null, finishReasons: new Map(),
+      cachedPromptTokens: null, finishReasons: new Map(),
     },
     exits: new Map(),
     visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
@@ -298,7 +298,7 @@ export function buildContext(
       const usage = responseUsage(body)
       const totals = context.output
       totals.responses += 1
-      for (const field of ["promptTokens", "completionTokens", "reasoningTokens", "cachedPromptTokens", "durationNs"] as const) {
+      for (const field of ["promptTokens", "completionTokens", "reasoningTokens", "cachedPromptTokens"] as const) {
         const reported = usage[field]
         if (reported !== null) totals[field] = (totals[field] ?? 0) + reported
       }

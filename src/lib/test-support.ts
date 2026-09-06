@@ -98,7 +98,7 @@ export function reportWith(...levels: Level[]): Report {
     apis: [],
     reasoningEfforts: [],
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
-      cachedPromptTokens: null, durationNs: null, finishReasons: []},
+      cachedPromptTokens: null, finishReasons: []},
     predictions: 0,
     traversalSpeed: null,
     traversalSpeedClass: null,

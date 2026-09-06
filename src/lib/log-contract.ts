@@ -121,8 +121,7 @@ export function assistantMessage(payload: unknown): AssistantMessage | null {
   const body = asRecord(payload);
 
   // Ollama, then OpenAI: both wrap a single message object.
-  const wrapped =
-    isRecord(body.message)
+  const wrapped = isRecord(body.message)
       ? body.message
       : (() => {
           const [choice] = asArray(body.choices);
@@ -204,9 +203,7 @@ export function responseUsage(payload: unknown): ResponseUsage {
     // not added on top - doing so would double-count the thinking against the completion budget.
     completionTokens: num(body.eval_count) ?? num(usage.completion_tokens) ?? num(usage.output_tokens),
     reasoningTokens: num(asRecord(usage.completion_tokens_details).reasoning_tokens),
-    cachedPromptTokens:
-      num(asRecord(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
-    durationNs: num(body.total_duration),
+    cachedPromptTokens: num(asRecord(usage.prompt_tokens_details).cached_tokens) ?? num(usage.cache_read_input_tokens),
     // Ollama's done_reason, OpenAI's per-choice finish_reason, Anthropic's stop_reason.
     finishReason: firstString(body.done_reason, asRecord(choice).finish_reason, body.stop_reason),
   };

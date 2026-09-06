@@ -7,6 +7,5 @@
 // One entry, so the build has a single graph to bundle and src/index.md has a single specifier. It
 // re-exports rather than implements: the page's dependency on the app is stated here and nowhere else.
 
-export { stampBuildAge } from "./lib/build-stamp";
 export { createReportTabsInput } from "./lib/report-tabs-control";
-export { renderReportSections } from "./lib/report-view";
+export { renderReportSections, stampBuildAge } from "./lib/report-view";

@@ -239,7 +239,6 @@ export type Context = {
     completionTokens: number | null;
     reasoningTokens: number | null;
     cachedPromptTokens: number | null;
-    durationNs: number | null;
     finishReasons: Map<string, number>;
   };
   exits: Map<CellKey, Set<string>>;
@@ -397,15 +396,19 @@ export type AssistantMessage = {
 
 /** What a provider reported about one response, normalized across API shapes.
  *
- * Every field is nullable because the two providers report different subsets: Ollama gives a duration
- * and no reasoning-token count, OpenAI the reverse. A null means "this provider did not say", which is
- * a different claim from zero and is displayed differently. */
+ * Every field is nullable because the providers report different subsets: Ollama counts no reasoning or
+ * cached-prompt tokens, OpenAI and Anthropic do. A null means "this provider did not say", which is a
+ * different claim from zero and is displayed differently.
+ *
+ * Wall-clock duration is deliberately absent. Ollama reports `total_duration` per response, but the
+ * figure is throttled per request and carries the test machine's network and load along with it, so it
+ * is not the model's time and cannot compare one run against another. Reading it and captioning the
+ * caveat would still put a number on the page that invites the comparison it cannot support. */
 export type ResponseUsage = {
   promptTokens: number | null;
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedPromptTokens: number | null;
-  durationNs: number | null;
   finishReason: string | null;
 };
 
@@ -416,7 +419,6 @@ export type ModelOutput = {
   completionTokens: number | null;
   reasoningTokens: number | null;
   cachedPromptTokens: number | null;
-  durationNs: number | null;
   /** Finish reasons and their counts, in first-seen order. */
   finishReasons: Array<[string, number]>;
 };

@@ -536,10 +536,17 @@ describe("reading the model's message from a provider response", () => {
 })
 
 describe("what the provider reported about its own work", () => {
-  it("reads Ollama's counts and duration", () => {
+  it("reads Ollama's counts", () => {
     expect(responseUsage({prompt_eval_count: 3234, eval_count: 35, total_duration: 1_100_956_836, done_reason: "stop"}))
       .toEqual({promptTokens: 3234, completionTokens: 35, reasoningTokens: null,
-        cachedPromptTokens: null, durationNs: 1_100_956_836, finishReason: "stop"})
+        cachedPromptTokens: null, finishReason: "stop"})
+  })
+
+  // total_duration is in the payload above and is deliberately not read. It is throttled per request and
+  // carries the test machine's network and load, so it is not the model's time and cannot compare one
+  // run against another - and a number on the page invites exactly that comparison.
+  it("does not read Ollama's wall-clock duration", () => {
+    expect(responseUsage({total_duration: 1_100_956_836})).not.toHaveProperty("durationNs")
   })
 
   it("reads OpenAI's usage block, including the two a reasoning model adds", () => {
@@ -548,7 +555,7 @@ describe("what the provider reported about its own work", () => {
         completion_tokens_details: {reasoning_tokens: 18}, prompt_tokens_details: {cached_tokens: 2304}},
       choices: [{finish_reason: "stop", message: {content: "x"}}],
     })).toEqual({promptTokens: 3250, completionTokens: 20, reasoningTokens: 18,
-      cachedPromptTokens: 2304, durationNs: null, finishReason: "stop"})
+      cachedPromptTokens: 2304, finishReason: "stop"})
   })
 
   it("reads Anthropic's usage: output_tokens is the completion side, thinking included", () => {
@@ -558,7 +565,7 @@ describe("what the provider reported about its own work", () => {
       role: "assistant", stop_reason: "end_turn",
       usage: {input_tokens: 3100, output_tokens: 240, cache_read_input_tokens: 2048},
     })).toEqual({promptTokens: 3100, completionTokens: 240, reasoningTokens: null,
-      cachedPromptTokens: 2048, durationNs: null, finishReason: "end_turn"})
+      cachedPromptTokens: 2048, finishReason: "end_turn"})
   })
 
   it("reads each provider's own name for how the model stopped", () => {
@@ -573,13 +580,12 @@ describe("what the provider reported about its own work", () => {
     const usage = responseUsage({prompt_eval_count: 10, eval_count: 2})
 
     expect(usage.reasoningTokens).toBeNull()
-    expect(usage.durationNs).toBeNull()
   })
 
   it("survives a payload that reports nothing at all", () => {
     for (const payload of [null, undefined, {}, "x", {usage: "no"}, {choices: []}]) {
       expect(responseUsage(payload)).toEqual({promptTokens: null, completionTokens: null,
-        reasoningTokens: null, cachedPromptTokens: null, durationNs: null, finishReason: null})
+        reasoningTokens: null, cachedPromptTokens: null, finishReason: null})
     }
   })
 })
