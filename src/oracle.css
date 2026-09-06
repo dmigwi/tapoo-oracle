@@ -1221,6 +1221,18 @@ td {
    never draws - the ink outline above is the whole of what makes it visible. */
 .maze-legend-swatch.is-unvisited { background: var(--oracle-surface); }
 
+/* The key's mark for a cell the log never graded, matching the hatch drawn on the grid. Repeated here as
+   a gradient rather than shared with the SVG pattern: a swatch is an HTML box and a cell is an SVG rect,
+   and the two cannot take the same fill. */
+.maze-legend-swatch.is-ungraded {
+  border: 1px solid var(--oracle-ink);
+  background: repeating-linear-gradient(
+    45deg,
+    var(--oracle-line) 0 2px,
+    var(--oracle-surface) 2px 4px
+  );
+}
+
 .maze-legend-swatch.is-explored { background: var(--oracle-visit-explored); }
 .maze-legend-swatch.is-backtracking { background: var(--oracle-visit-backtracking); }
 .maze-legend-swatch.is-oscillating { background: var(--oracle-visit-oscillating); }

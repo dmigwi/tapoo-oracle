@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest"
 
+import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
 import type {CellKey, EncodedMaze, Level, VisitStatus} from "./types"
 import {at, query, queryAll, reportWith} from "./test-support";
@@ -31,7 +32,7 @@ const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}
   destinationCell: "0,5",
   endCell: "2,1",
   observedExits: new Map(),
-  visitStatusByTurn: new Map(),
+  visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
   positions: [],
   turns: [
     { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
@@ -77,8 +78,29 @@ describe("createMazeReplay", () => {
   it("opens at the end of the round", () => {
     const node = build([level()])
 
+    // The control's own coordinate is a position, 0..n. What it *shows* is the log's turn number, the
+    // same identifier the caption and the bar tooltips use - the fixture's three turns are 0, 1, 2.
     expect(range(node).value).toBe("3")
-    expect(query(node, ".maze-readout").textContent).toBe("3 / 3")
+    expect(query(node, ".maze-readout").textContent).toBe("Turn 2 / 2")
+  })
+
+  // The whole point of the change: three surfaces, one number. Parsed from both rather than hardcoded,
+  // so they cannot drift apart again without this failing.
+  it("names the same turn in the readout, the caption and the bar tooltip", () => {
+    const node = build([level()])
+
+    for (const position of [1, 2, 3]) {
+      scrubTo(node, position)
+      const readout = /Turn (\d+) \//.exec(query(node, ".maze-readout").textContent ?? "")?.[1]
+      const captioned = /^Turn (\d+)/.exec(caption(node))?.[1]
+      const tooltip = /^Turn (\d+):/.exec(
+        queryAll<HTMLElement>(node, ".maze-bars-moves .maze-bar")[position - 1]?.title ?? "",
+      )?.[1]
+
+      expect(readout).toBeDefined()
+      expect(captioned).toBe(readout)
+      expect(tooltip).toBe(readout)
+    }
   })
 
   it("repaints when the scrubber moves", () => {
@@ -86,7 +108,9 @@ describe("createMazeReplay", () => {
 
     scrubTo(node, 0)
     expect(caption(node)).toMatch(/Start position/)
-    expect(query(node, ".maze-readout").textContent).toBe("0 / 3")
+    // Before any turn there is no turn to name, so the readout says so rather than printing a number
+    // for a frame that has none.
+    expect(query(node, ".maze-readout").textContent).toBe("Start")
     // No agent has acted yet, so no position marker is drawn.
     expect(overlayCircles(node)).toHaveLength(0)
 
@@ -397,18 +421,17 @@ describe("visit status on the grid", () => {
       (rect) => [...rect.classList].find((name) => name.startsWith("is-")) ?? "",
     )
 
-  const statusLevel = (byTurn: Array<[number, Array<[string, string]>]>) => {
-    const base = level()
-    return {
-      ...base,
-      visitStatusByTurn: new Map(
-        byTurn.map(([turn, cells]) => [turn, new Map(cells as Array<[CellKey, VisitStatus]>)]),
-      ),
+  // Fixtures name the turn that CARRIED each payload, the way a log does; the store applies the offset.
+  const statusLevel = (byReportingTurn: Array<[number, Array<[string, string]>]>) => {
+    const reports = turnReports<Map<CellKey, VisitStatus>>()
+    for (const [reportingTurn, cells] of byReportingTurn) {
+      reports.record(reportingTurn, new Map(cells as Array<[CellKey, VisitStatus]>))
     }
+    return {...level(), visitStatusAfterTurn: reports}
   }
 
   it("classes each visited cell by the status the log gave it", () => {
-    const node = build([statusLevel([[0, [["0,0", "oscillating"]]]])])
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
     scrubTo(node, 1)
     expect(statusesOf(node)).toContain("is-oscillating")
   })
@@ -423,7 +446,7 @@ describe("visit status on the grid", () => {
   })
 
   it("re-derives the classes when the scrubber moves", () => {
-    const node = build([statusLevel([[0, [["0,0", "explored"]]], [2, [["0,0", "oscillating"]]]])])
+    const node = build([statusLevel([[1, [["0,0", "explored"]]], [3, [["0,0", "oscillating"]]]])])
 
     scrubTo(node, 1)
     expect(statusesOf(node)).toContain("is-explored")
@@ -436,7 +459,8 @@ describe("visit status on the grid", () => {
   // Matched case-insensitively on the status name alone: how the labels are worded and capitalised is a
   // copy decision, and a test that pinned the prose would fail on an edit that changed nothing.
   it("names the statuses on screen in the legend, worst last", () => {
-    const node = build([statusLevel([[0, [["0,0", "oscillating"]]]])])
+    // Both walked cells graded, so the row under test is the scale rather than the ungraded catch-all.
+    const node = build([statusLevel([[1, [["0,0", "oscillating"], ["1,0", "explored"]]]])])
     scrubTo(node, 1)
     const items = queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
       .map((item) => item.textContent ?? "")
@@ -463,8 +487,21 @@ describe("visit status on the grid", () => {
     }
   })
 
-  // The four counts have to sum to the maze, or the key is describing something other than the grid
-  // beside it. unvisited is the remainder: no cell in frame.visited can be unvisited.
+  // A cell no reading covers gets its own row and its own mark, after the scale rather than inside it.
+  // Named for its cause: Tapoo stops logging these tools once the round is decided, so the closing
+  // turn's cells are never graded - intended, not a gap.
+  it("names the closing turn's cells, after the scale", () => {
+    const node = build([statusLevel([[1, [["0,0", "oscillating"]]]])])
+    scrubTo(node, 1)
+
+    const items = queryAll<HTMLElement>(node, ".maze-visit-legend .maze-legend-item")
+      .map((item) => item.textContent ?? "")
+    expect(items.at(-1)).toMatch(/^Closing turn/)
+    expect(queryAll(node, ".maze-overlay rect.maze-cell.is-ungraded")).toHaveLength(1)
+  })
+
+  // The counts have to sum to the maze, or the key is describing something other than the grid beside
+  // it. unvisited is the remainder: no cell in frame.visited can be unvisited.
   it("counts unvisited as the maze area less the cells walked", () => {
     const node = build([level()])
     scrubTo(node, 2)

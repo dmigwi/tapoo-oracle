@@ -14,6 +14,7 @@
 
 import type {
   CellKey,
+  TurnReports,
   EncodedMaze,
   Move,
   LogWarning,
@@ -56,6 +57,40 @@ export {
   statusesFromLogged,
   stepFrom,
 } from "./geometry";
+
+// Tapoo reports a turn's outcome on the request that *follows* it, so a payload logged on turn N -
+// get_maze_structure, get_prediction_rules, get_last_prediction_outcome - covers turn N - 1.
+//
+// That offset lives on one line, inside this store, and nowhere else. It used to be a bare `- 1` beside
+// a plain Map, which meant every writer had to remember it and every reader had to trust that they had:
+// it was written `.get(turn + 1)` in one place, `reportedAt - 1` in another, and left out entirely in a
+// third, which is how the maze overlay came to draw its colours a turn behind the maze.
+//
+// `record` is the only way in and takes the turn that *carried* a payload; `get` is the only way out and
+// takes the turn it *covers*. A caller holding the offset separately is the bug this closes, so there is
+// no exported helper to hold.
+//
+// Turn 0's payload covers turn -1: there is no turn before the first, so that key holds the state the
+// round opened in and matches no turn.
+export function turnReports<T>(): TurnReports<T> {
+  const byTurn = new Map<number, T>();
+
+  return {
+    record(reportingTurn, value, merge) {
+      const turn = reportingTurn - 1;
+      const existing = byTurn.get(turn);
+      byTurn.set(turn, existing !== undefined && merge ? merge(existing, value) : value);
+    },
+    get: (turn) => byTurn.get(turn),
+    // Sorted rather than trusted to insertion order: entries do arrive in recorded order today, but a
+    // reader that walks them to a bound is relying on the ordering, not on the writer's habits.
+    ascending: () => [...byTurn].sort(([a], [b]) => a - b),
+    values: () => [...byTurn.values()],
+    get size() {
+      return byTurn.size;
+    },
+  };
+}
 
 // --- Reading a provider response ---
 

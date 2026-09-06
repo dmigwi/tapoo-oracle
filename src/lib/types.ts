@@ -33,8 +33,28 @@ export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
  * wrong, a report that recomputed it would hide the defect instead of showing it. */
 export type VisitStatus = "unvisited" | "explored" | "backtracking" | "oscillating";
 
-/** What one tool result said about one cell, and when it said it. */
-export type VisitStatusByTurn = Map<number, Map<CellKey, VisitStatus>>;
+/** Per-turn payloads, stored so the turn offset cannot be applied twice or forgotten.
+ *
+ * Tapoo reports a turn's outcome on the request that *follows* it. That rule used to be a bare `- 1`
+ * beside a plain Map, which meant every writer had to remember it and every reader had to trust that
+ * they had - and one of them did not, so the maze overlay ran a turn behind. Here the two are one
+ * thing: `record` is the only way in and takes the turn that *carried* the payload, `get` is the only
+ * way out and takes the turn it *covers*. There is no key to get wrong.
+ *
+ * Key -1 is the state before the first turn - what the payload logged on turn 0 covers. */
+export type TurnReports<T> = {
+  /** Store what the request on `reportingTurn` carried, under the turn it covers. `merge` combines with
+   * an existing entry when a turn carried more than one payload. */
+  record: (reportingTurn: number, value: T, merge?: (existing: T, incoming: T) => T) => void;
+  /** What is known about `turn` itself. */
+  get: (turn: number) => T | undefined;
+  /** Every entry, ascending by the turn it covers. */
+  ascending: () => Array<[number, T]>;
+  values: () => T[];
+  readonly size: number;
+};
+
+export type VisitStatusByTurn = TurnReports<Map<CellKey, VisitStatus>>;
 
 export type LogLevel = "error" | "info" | "warn";
 
@@ -210,7 +230,7 @@ export type Context = {
    * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
    * transition key, so two turns submitting the same move with the same outcome collapse into one
    * entry; a map keyed by reporting turn cannot lose a turn that way. */
-  replayByReportingTurn: Map<number, Replay>;
+  replayByTurn: TurnReports<Replay>;
   /** Running totals of what the model produced. Accumulated rather than kept per response: the report
    * describes a sample, and 719 individual token counts are not a summary of anything. */
   output: {
@@ -223,10 +243,10 @@ export type Context = {
     finishReasons: Map<string, number>;
   };
   exits: Map<CellKey, Set<string>>;
-  /** Visit statuses as each turn's tool result reported them, keyed by the turn that carried them. Not
-   * cumulative: a cell appears only on the turns that named it, and the view carries the last one
-   * forward. */
-  visitStatusByTurn: VisitStatusByTurn;
+  /** Visit statuses keyed by the turn whose end they report - never by the turn that carried them, which
+   * is one later. Not cumulative: a cell appears only where a payload named it, and the view carries the
+   * last one forward. Key -1 is the state the round opened in. */
+  visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   timeline: TimelineEvent[];
   submissions: Submission[];
@@ -307,7 +327,7 @@ export type Level = {
   historyWindowRadius: number | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
-  visitStatusByTurn: VisitStatusByTurn;
+  visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   turns: Turn[];
   outcome: Outcome | null;
@@ -436,7 +456,7 @@ export type LevelModel = {
   destinationCell: CellKey | null;
   endCell: CellKey | null;
   observedExits: Map<CellKey, Set<string>>;
-  visitStatusByTurn: VisitStatusByTurn;
+  visitStatusAfterTurn: VisitStatusByTurn;
   turns: Turn[];
   outcome: Outcome | null;
   agents: string[];
@@ -447,8 +467,9 @@ export type Frame = {
   turnIndex: number;
   totalTurns: number;
   /** Every cell entered so far, with the seat that last entered it and how Tapoo graded it as of this
-   * frame. The status is the last one reported at or before this turn, so it changes as you scrub. */
-  visited: Map<CellKey, {playerName: string | null; status: VisitStatus}>;
+   * frame. The status is the last one reported at or before this turn, so it changes as you scrub, and
+   * null where the log never graded the cell - never a grade inferred here. */
+  visited: Map<CellKey, {playerName: string | null; status: VisitStatus | null}>;
   positions: Map<string, CellKey>;
   currentCell: CellKey | null;
   rejected: {cell: CellKey | null; move: string} | null;

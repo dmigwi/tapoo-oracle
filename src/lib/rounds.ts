@@ -172,10 +172,11 @@ export function buildLevels(entries: LogEntry[]): Level[] {
     const actingAgents = resolveActingAgents(groupEntries)
     const first = groupEntries[0]
 
-    // Tapoo reports a prediction's outcome on exactly the next turn. A later record must never be used
-    // as a substitute: repeated move sequences could make it look compatible while attributing another
-    // turn's position, charge and applied count to this one.
-    const recordFor = (turn: number): Replay | null => context.replayByReportingTurn.get(turn + 1) ?? null
+    // Keyed by the turn it covers, so this is a plain lookup. The offset that used to live here - Tapoo
+    // reports a prediction's outcome on the request that follows it - now belongs to the store that
+    // holds these records. A later record must never be substituted: repeated move sequences could make
+    // one look compatible while attributing another turn's position, charge and applied count to this.
+    const recordFor = (turn: number): Replay | null => context.replayByTurn.get(turn) ?? null
 
     const turns = context.submissions.map((submission) => {
       // What Tapoo said about this turn, if the next turn reported it. Preferred over the derivation
@@ -247,8 +248,8 @@ export function buildLevels(entries: LogEntry[]): Level[] {
     //
     // `empty-prediction` is Tapoo's own marker for exactly this, so it is read rather than inferred.
     const predicted = new Set(turns.map((turn) => turn.turn))
-    for (const [reportedAt, replay] of context.replayByReportingTurn) {
-      const turn = reportedAt - 1
+    for (const [turn, replay] of context.replayByTurn.ascending()) {
+      // turn -1 is the payload logged on turn 0, which covers no turn.
       if (replay.predictionStatus !== "empty-prediction" || turn < 0 || predicted.has(turn)) {
         continue
       }
@@ -295,11 +296,11 @@ export function buildLevels(entries: LogEntry[]): Level[] {
     const roundCharge = outcome ? Number(outcome.decayUnitsCharged) : Number.NaN
     const roundTurns = outcome ? Number(outcome.turnCount) : Number.NaN
     const everyTurnReported =
-      Number.isFinite(roundTurns) && context.replayByReportingTurn.size === roundTurns
+      Number.isFinite(roundTurns) && context.replayByTurn.size === roundTurns
 
     if (closing && closing.decayCharged === null && everyTurnReported && Number.isFinite(roundCharge)) {
       let reportedTotal = 0
-      for (const replay of context.replayByReportingTurn.values()) {
+      for (const replay of context.replayByTurn.values()) {
         reportedTotal += typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : 0
       }
 
@@ -352,7 +353,7 @@ export function buildLevels(entries: LogEntry[]): Level[] {
         typeof started.historyWindowRadius === "number" ? started.historyWindowRadius : null,
       endCell,
       observedExits: context.exits,
-      visitStatusByTurn: context.visitStatusByTurn,
+      visitStatusAfterTurn: context.visitStatusAfterTurn,
       positions: context.positions,
       turns,
       outcome,

@@ -52,7 +52,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       destinationCell: destination,
       endCell: level.endCell,
       observedExits: level.observedExits,
-      visitStatusByTurn: level.visitStatusByTurn,
+      visitStatusAfterTurn: level.visitStatusAfterTurn,
       turns: level.turns,
       outcome: level.outcome,
       agents
@@ -67,30 +67,37 @@ export function mazeReplayModel(report: Report): LevelModel[] {
 export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
   const played = levelModel.turns.slice(0, clamp(turnIndex, 0, levelModel.turns.length));
 
-  // The status each cell last carried at or before this frame.
+  // The status each cell last carried as of this frame.
   //
-  // Statuses are reported per turn and only for the cells inside that turn's history window, so a cell
-  // walked away from keeps the last thing said about it until something says otherwise. Walking the
-  // turns in order and overwriting is what "last one wins" means; a cell never named at all falls back
-  // to "explored", which is the weakest claim the scale can make about a cell we know was entered.
+  // The map is keyed by the turn whose end a payload reports, so the bound is simply the last
+  // turn played - and -1 when none has been, which is the state the round opened in. Reading it any
+  // other way is what made the colours lag: bounded by the turn that *carried* the payload, every frame
+  // showed the world one turn before the one it was drawing.
+  //
+  // Statuses are reported only for cells inside that turn's history window, and the three payloads are
+  // model-triggered tool calls that a turn may not carry at all, so a cell keeps the last thing said
+  // about it until something says otherwise. Last one wins.
   const statuses = new Map<CellKey, VisitStatus>();
-  const lastTurn = played.at(-1)?.turn;
-  for (const [turn, reported] of [...levelModel.visitStatusByTurn].sort(([a], [b]) => a - b)) {
-    if (lastTurn !== undefined && turn > lastTurn) break;
+  const upTo = played.at(-1)?.turn ?? -1;
+  for (const [turn, reported] of levelModel.visitStatusAfterTurn.ascending()) {
+    if (turn > upTo) break;
     for (const [cell, status] of reported) statuses.set(cell, status);
   }
 
-  const visited = new Map<CellKey, {playerName: string | null; status: VisitStatus}>();
+  const visited = new Map<CellKey, {playerName: string | null; status: VisitStatus | null}>();
   const enter = (cell: CellKey, playerName: string | null): void => {
-    // A cell in this map was entered - that is what puts it here, and the walk is not a graded judgement
-    // the way the status is. So a carried-forward "unvisited" cannot stand: it was true when it was
-    // reported, and the agent has since walked the cell without any later payload naming it again. Both
-    // that and a cell no payload ever named fall back to "explored", the weakest thing the scale can say
-    // about a cell known to have been entered. Nothing in the overlay is ever drawn "unvisited"; an
-    // unvisited cell has no rect at all, and shows the paper.
+    // null means the log never graded this cell, and the view draws that as its own mark rather than
+    // guessing. It used to answer "explored" - the weakest rung of the scale, but still a grade Tapoo
+    // never issued, which is the one thing this report must not do.
+    //
+    // Two ways a walked cell has no usable grade. No payload ever named it: get_maze_structure is a
+    // tool the model chooses to call, so a cell can be walked in a turn that never asked. Or the newest
+    // reading still says "unvisited", which our own walk contradicts - true when it was written, and
+    // stale by the time the agent stepped in. Neither is a measurement.
+    //
+    // A cell that was never entered is not in this map at all: it has no rect, and shows the paper.
     const reported = statuses.get(cell);
-    const status = reported === undefined || reported === "unvisited" ? "explored" : reported;
-    visited.set(cell, {playerName, status});
+    visited.set(cell, {playerName, status: reported === undefined || reported === "unvisited" ? null : reported});
   };
 
   if (levelModel.startCell) enter(levelModel.startCell, null);

@@ -27,11 +27,13 @@ import {
   isMove,
   movesFromLogged,
   statusesFromLogged,
+  turnReports,
 } from "./log-contract"
 import {indexLog} from "./log-index"
 import {asArray, asRecord} from "./utils"
 import type {
   LogIndex,
+  Replay,
   VisitStatus,
   CellKey,
   Context,
@@ -123,13 +125,13 @@ export function buildContext(
     player: null,
     apis: new Set(),
     reasoningEfforts: new Set(),
-    replayByReportingTurn: new Map(),
+    replayByTurn: turnReports<Replay>(),
     output: {
       responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, durationNs: null, finishReasons: new Map(),
     },
     exits: new Map(),
-    visitStatusByTurn: new Map(),
+    visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
     positions: [],
     timeline: [],
     submissions: [],
@@ -208,10 +210,9 @@ export function buildContext(
           noteTool("get_maze_structure")
           // Guarded as an array: the key being present does not make the value iterable, and a
           // non-list here used to throw straight out of the report.
-          // The tool result on turn N's request describes the world at the start of turn N, which is
-          // the same moment as the replay frame that has turns 0..N-1 played. So the statuses harvested
-          // here belong to this turn with no offset applied.
-          const statuses = context.visitStatusByTurn.get(currentTurn) ?? new Map<CellKey, VisitStatus>()
+          // Built for this payload, then handed to the store, which is what knows the turn it covers. A
+          // turn can carry more than one tool message, so the store merges rather than overwrites.
+          const statuses = new Map<CellKey, VisitStatus>()
 
           for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
             const cell = cellFromLogged(record.cell)
@@ -226,7 +227,12 @@ export function buildContext(
             }
           }
 
-          if (statuses.size > 0) context.visitStatusByTurn.set(currentTurn, statuses)
+          if (statuses.size > 0) {
+            context.visitStatusAfterTurn.record(currentTurn, statuses, (existing, incoming) => {
+              for (const [cell, status] of incoming) existing.set(cell, status)
+              return existing
+            })
+          }
         }
 
         if ("currentCell" in payload) {
@@ -261,7 +267,7 @@ export function buildContext(
           //
           // A turn re-reads the same result on each of its requests, so writing it repeatedly is
           // idempotent - no turn was ever observed reporting two different values.
-          context.replayByReportingTurn.set(currentTurn, payload)
+          context.replayByTurn.record(currentTurn, payload)
 
           if (payload.lastMoveStatus !== null) {
             const key = JSON.stringify([
@@ -684,7 +690,7 @@ function resourceWaste(context: Context): Record<string, boolean> {
   // The label has neither problem: Tapoo counts every entry, against the fixed exit count, for every
   // cell - and every visited cell is named by some window, so the harvest is complete for exactly the
   // cells this question is about.
-  const oscillated = [...context.visitStatusByTurn.values()].some((cells) =>
+  const oscillated = [...context.visitStatusAfterTurn.values()].some((cells) =>
     [...cells.values()].some((status) => status === "oscillating"),
   )
 
@@ -707,7 +713,7 @@ function resourceWaste(context: Context): Record<string, boolean> {
     })
   }
 
-  const excessVisits = context.visitStatusByTurn.size > 0 ? oscillated : derivedExcessVisits()
+  const excessVisits = context.visitStatusAfterTurn.size > 0 ? oscillated : derivedExcessVisits()
 
   // Q3. Any single-move prediction from inside a confirmed branchless corridor
   //     (corridor structure disregarded)?

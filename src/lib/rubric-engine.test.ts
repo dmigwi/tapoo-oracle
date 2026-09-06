@@ -334,7 +334,7 @@ describe("V5.Q1, excess visits", () => {
     })
     const context = buildContext(entries)
 
-    expect(context.visitStatusByTurn.size).toBe(0)
+    expect(context.visitStatusAfterTurn.size).toBe(0)
     expect(context.exits.get("0,0")).toEqual(new Set(["MoveDown"]))
     expect(answer(entries)).toBe(false)
   })
@@ -358,27 +358,33 @@ describe("harvesting visit statuses", () => {
   it("credits the status to the cell the move reaches, not to the cell that reported it", () => {
     const context = buildContext(structure(0, [1, 1], [["MoveUp", "backtracking"], ["MoveRight", "oscillating"]]))
 
-    expect([...must(context.visitStatusByTurn.get(0), "turn 0's statuses")]).toEqual([
+    // Stored under -1: turn 0's payload describes the world before the first turn.
+    expect([...must(context.visitStatusAfterTurn.get(-1), "the opening statuses")]).toEqual([
       ["0,1", "backtracking"],
       ["1,2", "oscillating"],
     ])
     // The reporting cell learns nothing about itself from its own entry.
-    expect(context.visitStatusByTurn.get(0)?.has("1,1")).toBe(false)
+    expect(context.visitStatusAfterTurn.get(-1)?.has("1,1")).toBe(false)
   })
 
-  it("keeps each turn's observations under that turn", () => {
+  // The rule, asserted where it is applied. A payload logged on turn N describes turn N - 1, and every
+  // consumer looks up the turn it wants - so a `+ 1` reappearing anywhere downstream contradicts this.
+  it("stores a payload under the turn it describes, not the turn that carried it", () => {
     const context = buildContext([
       ...structure(0, [1, 1], [["MoveUp", "explored"]]),
       ...structure(1, [1, 1], [["MoveUp", "oscillating"]]),
+      ...structure(2, [1, 1], [["MoveUp", "backtracking"]]),
     ])
 
-    expect(context.visitStatusByTurn.get(0)?.get("0,1")).toBe("explored")
-    expect(context.visitStatusByTurn.get(1)?.get("0,1")).toBe("oscillating")
+    expect(context.visitStatusAfterTurn.ascending().map(([turn]) => turn)).toEqual([-1, 0, 1])
+    expect(context.visitStatusAfterTurn.get(-1)?.get("0,1")).toBe("explored")
+    expect(context.visitStatusAfterTurn.get(0)?.get("0,1")).toBe("oscillating")
+    expect(context.visitStatusAfterTurn.get(1)?.get("0,1")).toBe("backtracking")
   })
 
   it("records nothing for a turn whose payload carried no status", () => {
     const context = buildContext(structure(0, [1, 1], []))
-    expect(context.visitStatusByTurn.has(0)).toBe(false)
+    expect(context.visitStatusAfterTurn.size).toBe(0)
   })
 })
 

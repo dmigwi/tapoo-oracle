@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, parseTapooLogText, statusesFromLogged, stepFrom} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
 import {at, expectErr, expectOk, messagesOf} from "./test-support";
@@ -202,6 +202,58 @@ describe("parseTapooLogExport", () => {
 // The visit colours on the replay are read straight out of get_maze_structure payloads, so a damaged one
 // would be drawn as fact. content_checksum is over the content Tapoo sent, not the compacted form the
 // log keeps, so the check rebuilds the original and hashes that.
+// The store exists so the turn offset cannot be applied twice or forgotten. `record` takes the turn that
+// carried a payload, `get` takes the turn it covers, and nothing exposes the raw key - which is what
+// makes the bug it was extracted from unrepeatable rather than merely fixed.
+describe("turnReports", () => {
+  it("stores what a request carried under the turn it covers", () => {
+    const reports = turnReports<string>()
+    reports.record(5, "outcome of turn 4")
+
+    expect(reports.get(4)).toBe("outcome of turn 4")
+    // The turn that carried it is not a key. A reader applying the offset itself would land here.
+    expect(reports.get(5)).toBeUndefined()
+  })
+
+  // Turn 0's payload covers turn -1: there is no turn before the first, so it holds the opening state
+  // and matches no turn. rounds.ts guards on it explicitly.
+  it("keeps the opening payload under -1", () => {
+    const reports = turnReports<string>()
+    reports.record(0, "the start")
+
+    expect(reports.get(-1)).toBe("the start")
+  })
+
+  // A turn can carry more than one tool message, and the second must not erase the first.
+  it("merges when a turn carried more than one payload", () => {
+    const reports = turnReports<string[]>()
+    reports.record(3, ["a"], (existing, incoming) => [...existing, ...incoming])
+    reports.record(3, ["b"], (existing, incoming) => [...existing, ...incoming])
+
+    expect(reports.get(2)).toEqual(["a", "b"])
+    expect(reports.size).toBe(1)
+  })
+
+  it("replaces when no merge is given", () => {
+    const reports = turnReports<string>()
+    reports.record(3, "first")
+    reports.record(3, "second")
+
+    expect(reports.get(2)).toBe("second")
+  })
+
+  // Readers walk this to a bound, so the order is part of the contract rather than a side effect of
+  // however the entries happened to arrive.
+  it("returns entries ascending by the turn they cover", () => {
+    const reports = turnReports<string>()
+    for (const turn of [7, 1, 4, 0]) reports.record(turn, `carried on ${turn}`)
+
+    expect(reports.ascending().map(([turn]) => turn)).toEqual([-1, 0, 3, 6])
+    expect(reports.size).toBe(4)
+    expect(reports.values()).toHaveLength(4)
+  })
+})
+
 describe("the traversal payload checksum", () => {
   const checksumWarnings = (log: unknown): string[] => {
     const result = parseTapooLogText(JSON.stringify(log))

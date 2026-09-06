@@ -61,6 +61,28 @@ const cellXY = (cell: CellKey): {row: number; col: number; x: number; y: number}
 // drawWalls renders the static maze once. Every edge a cell has no exit through becomes a line, so
 // interior walls are drawn twice - once from each side - which costs nothing and avoids having to
 // special-case the outer boundary.
+// The mark for a cell the log never graded. Diagonal hatching, the same idea the decay strip uses for a
+// charge nobody reported and for the reason its comment gives: a missing measurement is not a
+// measurement of nothing, and it must not borrow a colour from the scale.
+//
+// A pattern rather than the strip's repeating-linear-gradient, because an SVG `fill` cannot take a CSS
+// gradient. The id is document-scoped, so it is namespaced rather than called something like "hatch" -
+// there is one replay per page today, and that is not a thing to rely on.
+const UNGRADED_PATTERN = "tapoo-maze-ungraded";
+
+function ungradedHatch(): SVGElement {
+  const defs = createSvgElement("defs");
+  const pattern = createSvgElement("pattern", {
+    id: UNGRADED_PATTERN, width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)"
+  });
+  pattern.append(
+    createSvgElement("rect", {width: 6, height: 6, fill: "var(--oracle-surface)"}),
+    createSvgElement("line", {x1: 0, y1: 0, x2: 0, y2: 6, stroke: "var(--oracle-line)", "stroke-width": 2}),
+  );
+  defs.append(pattern);
+  return defs;
+}
+
 function drawWalls(svg: SVGElement, maze: Maze): void {
   const walls = createSvgElement("g", {stroke: "var(--oracle-ink)", "stroke-width": 2, "stroke-linecap": "square"});
   for (const [cell, open] of maze.exits) {
@@ -316,8 +338,10 @@ function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame):
   legend.replaceChildren();
 
   const counts = new Map<VisitStatus, number>();
+  let ungraded = 0;
   for (const {status} of frame.visited.values()) {
-    counts.set(status, (counts.get(status) ?? 0) + 1);
+    if (status === null) ungraded += 1;
+    else counts.set(status, (counts.get(status) ?? 0) + 1);
   }
 
   const cells = model.stats?.cells;
@@ -339,6 +363,22 @@ function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame):
     // watches move as they scrub.
     item.append(createHtmlElement("span", null, `${visitLabel(status, gloss)} - `));
     item.append(createHtmlElement("strong", "maze-legend-count", formatCount(count)));
+    legend.append(item);
+  }
+
+  // After the scale, not inside it: this is the absence of a position rather than a position on it.
+  // Counted all the same, or the rows stop summing to the maze.
+  //
+  // Named for what these cells are, not for what the log lacks. A cell is graded by the payload on the
+  // turn *after* the one that entered it, and Tapoo stops logging these three tools once a win or loss
+  // is confirmed - so nothing ever covers the closing turn. Wording it as an absence ("not reported",
+  // "no later reading covers") read like a fault worth worrying about; these are simply the cells the
+  // agent's last batch of moves landed on, and there is more than one of them for that reason.
+  if (ungraded > 0) {
+    const item = createHtmlElement("li", "maze-legend-item");
+    item.append(createHtmlElement("span", "maze-legend-swatch is-ungraded"));
+    item.append(createHtmlElement("span", null, "Closing turn - cells from moves batched on the last turn - "));
+    item.append(createHtmlElement("strong", "maze-legend-count", formatCount(ungraded)));
     legend.append(item);
   }
 
@@ -367,7 +407,12 @@ function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) =>
     });
     // A class rather than an inline fill, so the ramp lives with the rest of the palette and can be
     // reasoned about as one scale instead of a constant buried in a draw call.
-    rect.setAttribute("class", `maze-cell is-${status}`);
+    // is-ungraded, not a status: the log never graded this cell, and the hatch says so rather than
+    // borrowing the mildest colour on the scale.
+    rect.setAttribute("class", `maze-cell ${status === null ? "is-ungraded" : `is-${status}`}`);
+    // The pattern is referenced by url(), which a stylesheet cannot express as cleanly as the flat
+    // tints - so this one fill is set here while the rest of the ramp lives in the palette.
+    if (status === null) rect.setAttribute("fill", `url(#${UNGRADED_PATTERN})`);
     overlay.append(rect);
   }
 
@@ -541,7 +586,11 @@ function agentStatsRow(stats: AgentLevelStats): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
 
   const metrics: Array<{label: string; key: keyof AgentLevelStats}> = [
-    {label: "New cells progress", key: "cellsEntered"},
+    // "Unique", not "new" and not bare "cells entered". The value counts each cell once however often
+    // the agent went back to it, and this report is largely about how often they did - a label reading
+    // "cells entered" beside an oscillating count would invite the two to be compared as if they
+    // measured the same thing. "Unique" is also the log's own word: playerUniqueCellsVisited.
+    {label: "Unique cells", key: "cellsEntered"},
     {label: "Decay units charged", key: "decayCharged"},
     {label: "Traversal speed", key: "traversalSpeeds"},
   ];
@@ -641,7 +690,11 @@ export function createMazeReplay(report: Report): HTMLElement {
     const frame = mazeFrameAt(active, Number(range.value));
     if (overlay) drawFrame(overlay, frame, colorOf);
     caption.textContent = turnNarrative(frame, active);
-    readout.textContent = `${frame.turnIndex} / ${frame.totalTurns}`;
+    // The log's own turn number, the same identifier the caption and the bar tooltips use - read from
+    // frame.turn so the two cannot drift. It used to be `turnIndex / totalTurns`, a count of turns
+    // played, so the readout said "16 / 16" beside a caption reading "Turn 15".
+    const last = active.turns.at(-1)?.turn;
+    readout.textContent = frame.turn === null || last === undefined ? "Start" : `Turn ${frame.turn.turn} / ${last}`;
     range.setAttribute("aria-valuetext", turnNarrative(frame, active));
 
     // The strips and the slider have to agree about where you are. Toggling classes on kept references
@@ -713,6 +766,7 @@ export function createMazeReplay(report: Report): HTMLElement {
       role: "img",
       "aria-label": `${model.maze.rows} by ${model.maze.cols} maze with the traversal drawn on it`
     });
+    svg.append(ungradedHatch());
     drawWalls(svg, model.maze);
     overlay = createSvgElement("g", {class: "maze-overlay"});
     svg.append(overlay);
