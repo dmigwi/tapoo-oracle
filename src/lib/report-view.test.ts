@@ -7,8 +7,9 @@ import {html} from "htl"
 import {describe, expect, it} from "vitest"
 
 import {createInitialLogTabs, roundReportFor} from "./log-tabs"
-import {activeLogTab, renderReportSections, stampBuildAge} from "./report-view"
-import type {LogEntry, Region, LogTab, LogTabsState} from "./types"
+import {roundLabel} from "./rounds"
+import {activeLogTab, activeRound, renderReportSections, stampBuildAge} from "./report-view"
+import type {LogEntry, RegionView, LogTab, LogTabsState} from "./types"
 import {analyzeLogText, query, queryAll, rendered} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
@@ -111,7 +112,7 @@ const loadedTab = (): LogTab => {
 
 const stateWith = (...tabs: LogTab[]): LogTabsState =>
   ({...createInitialLogTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
-const text = (node: Region) => (node === "" ? "" : node.textContent ?? "")
+const text = (node: RegionView) => (node === "" ? "" : node.textContent ?? "")
 
 describe("activeLogTab", () => {
   it("finds the tab the state marks active", () => {
@@ -266,6 +267,34 @@ describe("profile", () => {
   })
 })
 
+// Both branches of the round lookup, which nothing exercised directly: the render only ever reaches it
+// with null on the first pass and an identity the tabs just drew on the second.
+describe("activeRound", () => {
+  const labelOf = (round: ReturnType<typeof activeRound>) =>
+    round === undefined ? undefined : roundLabel(round.identity)
+
+  it("takes the first round when nothing is selected", () => {
+    expect(labelOf(activeRound(twoRoundTab(), null))).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  it("takes the round an identity names", () => {
+    expect(labelOf(activeRound(twoRoundTab(), {game: 3, level: 2}))).toBe("Game 3 \u00b7 Level 2")
+  })
+
+  // An identity can only come from a round tab this module drew, so one that matches nothing means the
+  // tabs and the analysis have gone out of step - a bug here, not anything a reader did. It used to
+  // fall back to the first round, which looked entirely correct and said nothing about having been
+  // asked for another.
+  it("throws on an identity naming no round, rather than quietly showing the first", () => {
+    expect(() => activeRound(twoRoundTab(), {game: 99, level: 99})).toThrow(/no round 99\/99/)
+  })
+
+  it("has no round for a tab that carries no report", () => {
+    expect(activeRound(undefined, null)).toBeUndefined()
+    expect(activeRound({id: "x", url: "u", label: "l", status: "empty"}, null)).toBeUndefined()
+  })
+})
+
 // The other half of the split: opening a log does not answer every round in it.
 describe("when a round is answered", () => {
   const rounds = (tab: LogTab) => {
@@ -279,7 +308,7 @@ describe("when a round is answered", () => {
   it("carries unanswered slices out of the parse", () => {
     const slices = rounds(twoRoundTab())
 
-    expect(slices.map((slice) => slice.label)).toEqual(["Game 2 \u00b7 Level 1", "Game 3 \u00b7 Level 2"])
+    expect(slices.map((slice) => roundLabel(slice.identity))).toEqual(["Game 2 \u00b7 Level 1", "Game 3 \u00b7 Level 2"])
     for (const slice of slices) {
       expect(slice).not.toHaveProperty("report")
       expect(slice.entries.length).toBeGreaterThan(0)
@@ -415,6 +444,61 @@ describe("round tabs", () => {
     const node = mount(loadedTab())
     expect(labels(node)).toEqual([])
     expect(query(node, ".round-identity").textContent).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  // A click on the tab already selected is ignored, because re-rendering the round on screen rebuilds
+  // the maze replay: the scrubber goes back to the end and the magnifier switches off. A reader who
+  // clicks where they already are should keep their place.
+  it("ignores a click on the round already showing", () => {
+    const host = mount(twoRoundTab())
+    const before = query(host, ".maze-replay")
+    const scrubber = query<HTMLInputElement>(host, 'input[type="range"]')
+    scrubber.value = "1"
+    scrubber.dispatchEvent(new window.Event("input", {bubbles: true}))
+
+    queryAll<HTMLButtonElement>(host, ".round-tab")[0]?.click()
+
+    expect(query(host, ".maze-replay")).toBe(before)
+    expect(query<HTMLInputElement>(host, 'input[type="range"]').value).toBe("1")
+  })
+
+  // The guard is only safe while the key it compares against is the round actually on screen, and that
+  // key comes from one callback the render fires. Nothing about `key === activeKey` says so, and the
+  // ways it can rot are silent in both directions: a callback that never fires leaves the key null, so
+  // the guard never matches and every click rebuilds; a key set from the click instead of the render
+  // leaves it naming a round that is not drawn, so the guard matches the wrong one and swallows a real
+  // switch.
+  //
+  // So this asserts the invariant rather than either symptom - for every round: clicking it draws it,
+  // and clicking it again does nothing. A guard that has stopped tracking fails one half or the other.
+  it("draws the round clicked, and redraws nothing when it is clicked again", () => {
+    const host = mount(twoRoundTab())
+    const labels = queryAll<HTMLElement>(host, ".round-tab").map((button) => button.textContent)
+    expect(labels).toHaveLength(2)
+
+    for (const label of labels) {
+      const tab = queryAll<HTMLButtonElement>(host, ".round-tab").find((b) => b.textContent === label)
+      tab?.click()
+
+      // What was asked for is what is drawn - the premise the tracked key depends on.
+      expect(query(host, ".round-tab-active").textContent).toBe(label)
+
+      const drawn = query(host, ".maze-replay")
+      queryAll<HTMLButtonElement>(host, ".round-tab").find((b) => b.textContent === label)?.click()
+      expect(query(host, ".maze-replay")).toBe(drawn)
+      expect(query(host, ".round-tab-active").textContent).toBe(label)
+    }
+  })
+
+  // And a click on a different round still works, which is what the guard must not break.
+  it("still switches to a round that is not showing", () => {
+    const host = mount(twoRoundTab())
+    const before = query(host, ".maze-replay")
+
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+
+    expect(query(host, ".maze-replay")).not.toBe(before)
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 3 \u00b7 Level 2")
   })
 
   it("opens on the first round", () => {

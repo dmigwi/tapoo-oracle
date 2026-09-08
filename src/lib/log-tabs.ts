@@ -14,31 +14,42 @@ import type { Analysis, LogWarning, LogTab, LogTabsState, RoundReport, RoundSlic
 import {asTrimmedText, clamp} from "./utils";
 
 
-/** buildReportAnalysis answers the rubric for a parsed log: one report per round, not one per log.
+/** buildReportAnalysis cuts a parsed log into rounds: one slice per round, not one report per log.
  *
  * A Tapoo log is a sequence of independent games: a new maze, a new start cell, a fresh decay budget.
  * Aggregating them produced verdicts that belonged to no maze in particular - a capability answered YES
  * because round 3 showed it, printed above round 1's replay - and a "Rounds" count that existed only to
- * admit the report was a blend. Answering the rubric per round costs one extra pass over entries
- * already in memory and makes every verdict on screen a statement about the maze beside it.
+ * admit the report was a blend. A round is now the unit a verdict is about, so every answer on screen
+ * is a statement about the maze beside it.
  *
- * The step both loaders share, and the only one that turns a log into verdicts. Exported so a test can
- * reach it from text without a network - see analyzeLogText in test-support.ts. */
+ * It answers nothing itself. A slice is entries and an identity, which costs no rubric pass - that is
+ * roundReportFor's job, done for the round a reader opened rather than for all of them at load.
+ *
+ * The step both loaders share. Exported so a test can reach it from text without a network - see
+ * analyzeLogText in test-support.ts. */
 export function buildReportAnalysis(source: TapooLog, warnings: LogWarning[], label: string): Analysis {
-  const rounds: RoundSlice[] = groupEntriesByRound(source.entries).map(({key, game, level, entries}) => ({
-    key,
-    game,
-    level,
-    label: roundLabel({game, level}),
-    reportLabel: `${label} - ${roundLabel({game, level})}`,
+  const [first, ...rest]: RoundSlice[] = groupEntriesByRound(source.entries).map(({identity, entries}) => ({
+    identity,
+    reportLabel: `${label} - ${roundLabel(identity)}`,
     entries,
   }));
+
+  // The one place the "at least one round" invariant is enforced, rather than every render guarding
+  // against a state that cannot happen.
+  //
+  // It cannot: parseTapooLogText refuses a log with no readable entries, and groupEntriesByRound yields
+  // a group for any non-empty list - a log that never names a round still gets one holding everything.
+  // Checked here anyway, because this is where the claim is made, and a failure says so out loud instead
+  // of rendering a page with nothing on it.
+  if (!first) {
+    return {ok: false, error: "This log analyzed to no rounds, so there is nothing to report."};
+  }
 
   return {
     ok: true,
     source,
     warnings,
-    rounds,
+    rounds: [first, ...rest],
   };
 }
 
@@ -185,26 +196,39 @@ export function deleteLogTab(
 const fetchOptions = (fetchText?: (url: string) => Promise<string>) =>
   fetchText ? {fetchText} : undefined;
 
-/** loadTabFields fetches one URL and turns it into the fields a tab carries.
+/** What loading one URL produced: either an address that never validated, or the fields a log tab
+ * takes from it.
+ *
+ * Two arms rather than one shape with optional fields, so a caller cannot read `fields` off a failure:
+ * narrowing on `unvalidated` is what hands it the other three. The same reason Result is a union - see
+ * its note in types.ts.
+ *
+ * Not Result itself, though, and the difference is worth knowing: `ok: false` would read as "the load
+ * failed", and here a load that failed is a *success* - it carries the error inside `fields`, because
+ * the URL validated and the reader gets a tab they can retry. `unvalidated` means only that the address
+ * never validated. */
+type LoadedLogTabFields =
+  | {unvalidated: string}
+  | {label: string; url: string; fields: Partial<LogTab>};
+
+/** loadLogTabFields fetches one URL and turns it into the fields a log tab carries.
+ *
+ * A log tab, specifically: it fetches, and a round tab is never fetched - it is a slice of a log
+ * already in memory.
  *
  * The half both loaders share, extracted because it is the half where a divergence would be a bug: the
  * two used to build `{status, result, loadedUrl, error}` separately, and nothing would have caught them
  * disagreeing about whether a failed reload keeps its stale report. They already disagreed harmlessly -
  * one wrote `loaded.url ?? state.draftUrl` for the label, the other `loaded.url ?? ""`.
  *
- * `unvalidated` is the one outcome the callers must handle differently, so it is returned rather than
- * folded in: a URL that never validated has no tab to attach an error to on the add path, which is why
- * that path leaves it in the draft field, while the reload path has a tab sitting right there.
- */
-type LoadedTabFields =
-  | {unvalidated: string}
-  | {unvalidated?: undefined; label: string; url: string; fields: Partial<LogTab>};
-
-async function loadTabFields(
+ * `unvalidated` is returned rather than folded in because it is the one outcome the two callers handle
+ * differently: it has no tab to attach an error to on the add path, so that path leaves it in the draft
+ * field, while the reload path has a tab sitting right there. */
+async function loadLogTabFields(
   url: unknown,
   index: number,
   fetchText?: (url: string) => Promise<string>,
-): Promise<LoadedTabFields> {
+): Promise<LoadedLogTabFields> {
   const loaded = await loadTapooLogFromUrl(url, fetchOptions(fetchText));
   if (!loaded.ok && !loaded.url) {
     return {unvalidated: loaded.error};
@@ -235,8 +259,8 @@ export async function loadNewLogTabFromUrl(
   state: LogTabsState,
   fetchText?: (url: string) => Promise<string>,
 ): Promise<LogTabsState> {
-  const loaded = await loadTabFields(state.draftUrl, state.tabs.length, fetchText);
-  if (loaded.unvalidated !== undefined) {
+  const loaded = await loadLogTabFields(state.draftUrl, state.tabs.length, fetchText);
+  if ("unvalidated" in loaded) {
     return {
       ...state,
       isAdding: true,
@@ -268,7 +292,7 @@ export async function loadNewLogTabFromUrl(
 /** Reloads an existing tab from the URL it currently holds, replacing its report in place.
  *
  * The retry a reader reaches for when a load failed - the tab keeps its address, so trying again is
- * one click rather than retyping. It builds its fields through the same loadTabFields the add path
+ * one click rather than retyping. It builds its fields through the same loadLogTabFields the add path
  * uses, so a report that arrives by retry cannot differ from one that arrived first time.
  *
  * A URL that never validated clears the tab's report rather than leaving a stale one beside a fresh
@@ -278,10 +302,9 @@ export async function loadLogTabFromUrl(
   tabId: string,
   fetchText?: (url: string) => Promise<string>,
 ): Promise<LogTabsState> {
-  const tab = state.tabs.find((candidate) => candidate.id === tabId);
   const index = state.tabs.findIndex((candidate) => candidate.id === tabId);
-  const loaded = await loadTabFields(tab?.url, index, fetchText);
-  if (loaded.unvalidated !== undefined) {
+  const loaded = await loadLogTabFields(state.tabs[index]?.url, index, fetchText);
+  if ("unvalidated" in loaded) {
     return updateLogTab(state, tabId, {
       status: "error",
       error: loaded.unvalidated,

@@ -10,7 +10,7 @@
 // readable and cheap, and a reader should be able to trust it without knowing the rubric.
 
 import {EVENT_CLASSES, KNOWN_EVENTS, levelClassOf} from "./log-events";
-import type {LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpan} from "./types";
+import type {GameIdentity, LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpan} from "./types";
 
 /** True when every entry carries a turn number.
  *
@@ -21,12 +21,25 @@ import type {LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpan} from "./typ
 const hasTurnNumbers = (entries: LogEntry[]): boolean =>
   entries.length > 0 && entries.every((entry) => typeof entry.turn === "number");
 
-/** turnIdentityKey names a turn completely.
+/** gameIdentityKey serialises a round identity to the `"game/level"` string a Map or an `===` needs.
+ *
+ * Derived, never stored: an identity carrying its own key would be two representations of the same two
+ * numbers, free to disagree - and they did, a Level once reporting key "7/3" beside `game: null`.
+ *
+ * `?` for a field the log never stamped, not `0`. A log that names no round at all is a real case - it
+ * yields one round holding everything - and keying that "0/0" made it indistinguishable from a genuine
+ * game 0 level 0, which is the one thing a key must never be. */
+export const gameIdentityKey = ({game, level}: GameIdentity): string => `${game ?? "?"}/${level ?? "?"}`;
+
+/** turnIdentityKey names a turn completely: its round, then its number within that round.
  *
  * Tapoo resets turn numbers for every round, so the complete identity is (game, level, turn). Modern
- * logs stamp all three fields; null preserves the limited identity available in older logs. */
-export function turnIdentityKey({game, level, turn}: TurnIdentity): string {
-  return `${game ?? "?"}/${level ?? "?"}/${turn}`;
+ * logs stamp all three fields; `?` preserves the limited identity available in older logs.
+ *
+ * Built on gameIdentityKey rather than repeating its format, so the two cannot drift on what an
+ * unstamped field looks like - which they had, one writing `?` and the other `0`. */
+export function turnIdentityKey(identity: TurnIdentity): string {
+  return `${gameIdentityKey(identity)}/${identity.turn}`;
 }
 
 // turnSpans cuts the entries into half-open ranges, one per turn.

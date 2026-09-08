@@ -6,6 +6,7 @@ import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENV
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
 import {groupEntriesByRound} from "./rounds"
+import {fnv1a64Checksum} from "./utils"
 import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
@@ -482,6 +483,134 @@ describe("the encoded maze payload", () => {
     ])
 
     expect(expectOk(must(maze, "a decoded maze")).stats.cells).toBe(24)
+  })
+})
+
+// What a round told the agent, and whether it told it the same thing throughout.
+describe("the prompts and tool descriptions a round carried", () => {
+  const sum = (text: string) => fnv1a64Checksum(text)
+  const PROMPT = "You are Katara, and you start this level primed for success."
+  const DESC = "Get current/destination cells and the nearby explored maze structure in one call."
+
+  const request = (messages: unknown[], tools: unknown[] = []) =>
+    entry({payload: LOG_EVENTS.request, details: {messages, tools}})
+  const systemMessage = (content: string, checksum = sum(content)) =>
+    ({role: "system", content, content_checksum: checksum})
+  const tool = (name: string, description: string, checksum = sum(description)) =>
+    ({name, description, description_checksum: checksum})
+
+  // The half that matters most: a false positive here would put an accuracy warning on every clean
+  // report. The real export carries 128 prompt and description appearances and raises none.
+  it("says nothing about a round whose prompts and descriptions are intact", () => {
+    expect(parseGameRound((fixtureData as unknown as {entries: LogEntry[]}).entries).warnings).toEqual([])
+  })
+
+  it("checks a prompt logged in full against its own checksum", () => {
+    const warnings = parseGameRound([request([systemMessage(PROMPT, "0xdeadbeefdeadbeef")])]).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).impact).toBe("inaccurate")
+    expect(at(warnings, 0).message).toMatch(/does not match its own checksum/)
+  })
+
+  it("checks a tool description the same way", () => {
+    const warnings = parseGameRound([request([], [tool("get_maze_structure", DESC, "0xdeadbeefdeadbeef")])]).warnings
+
+    expect(at(warnings, 0).message).toMatch(/does not match its own checksum/)
+  })
+
+  // A later appearance is trimmed to 25 characters and an ellipsis, so hashing it would fail on every
+  // log. It is checked against the full text logged under the same checksum instead.
+  it("accepts a trimmed repeat of a prompt it has already seen in full", () => {
+    const trimmed = `${PROMPT.slice(0, 25)}...`
+    const warnings = parseGameRound([
+      request([systemMessage(PROMPT)]),
+      request([systemMessage(trimmed, sum(PROMPT))]),
+    ]).warnings
+
+    expect(warnings).toEqual([])
+  })
+
+  it("reports a trimmed repeat that is not the text it claims to be", () => {
+    const warnings = parseGameRound([
+      request([systemMessage(PROMPT)]),
+      request([systemMessage("Something else entirely...", sum(PROMPT))]),
+    ]).warnings
+
+    expect(at(warnings, 0).message).toMatch(/under one checksum/)
+  })
+
+  // A checksum whose full text never appears cannot be checked at all - and that is ordinary, not
+  // damage: the real export carries 30 such stubs, because Tapoo logs a prompt in full once and only
+  // stubs it after it changes. Saying nothing is the only honest answer.
+  it("stays silent on a stub whose full text the round never carried", () => {
+    const warnings = parseGameRound([request([systemMessage("You are Katara and your...", "0xfeedfacefeedface")])]).warnings
+
+    expect(warnings).toEqual([])
+  })
+
+  // The one thing a round must not do: describe the same tool two ways. Its turns were then answering
+  // different instructions, and the tool-use verdicts compare them as if they were not.
+  it("reports a tool described two different ways within one round", () => {
+    const warnings = parseGameRound([
+      request([], [tool("get_maze_structure", DESC)]),
+      request([], [tool("get_maze_structure", `${DESC} And something new.`)]),
+    ]).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).impact).toBe("inaccurate")
+    expect(at(warnings, 0).message).toMatch(/describes the tool get_maze_structure 2 different ways/)
+  })
+
+  // The system prompt is not held to that, and must not be: it is rewritten as the player's speed class
+  // changes, so a real 16-turn round carries three. Requiring one per round would warn on every log.
+  it("accepts a system prompt that changes during the round", () => {
+    const second = "You are Katara and your traversal speed is now Navigator."
+    const warnings = parseGameRound([
+      request([systemMessage(PROMPT)]),
+      request([systemMessage(second)]),
+    ]).warnings
+
+    expect(warnings).toEqual([])
+  })
+
+  // Tapoo assigns four personas - the opening Default, then Trailblazer, Navigator and Backtracker as
+  // the traversal speed moves between brackets - so a round cannot honestly carry a fifth system
+  // prompt. A fifth means this file and the producer disagree about how many personas exist.
+  it("accepts the four personas a round can carry", () => {
+    const four = [0, 1, 2, 3].map((n) => request([systemMessage(`You are Katara, persona ${n}.`)]))
+
+    expect(parseGameRound(four).warnings).toEqual([])
+  })
+
+  it("reports a fifth, and points at the persona set it disagrees with", () => {
+    const five = [0, 1, 2, 3, 4].map((n) => request([systemMessage(`You are Katara, persona ${n}.`)]))
+    const warnings = parseGameRound(five).warnings
+
+    expect(warnings).toHaveLength(1)
+    expect(at(warnings, 0).impact).toBe("inaccurate")
+    expect(at(warnings, 0).message).toMatch(/carries 5 distinct system prompts, but Tapoo defines 4/)
+    expect(at(warnings, 0).message).toMatch(/dmigwi\.github\.io\/tapoo\/prompts\.html/)
+  })
+
+  // Counted on the system prompt, not the user message: that one is the same fixed instruction on every
+  // request - one checksum across all 32 in the snapshot - so it carries no persona to count.
+  it("does not count the user message, which never changes", () => {
+    const many = [0, 1, 2, 3, 4, 5].map((n) =>
+      request([{role: "user", content: `Turn ${n}.`, content_checksum: sum(`Turn ${n}.`)}]),
+    )
+
+    expect(parseGameRound(many).warnings).toEqual([])
+  })
+
+  // A tool result is compacted rather than trimmed, so it neither hashes nor ends in an ellipsis.
+  // traversalPayloadWarnings reconstructs those; treating them as prompts would warn on every log.
+  it("leaves tool results to the reconstruction that can check them", () => {
+    const warnings = parseGameRound([
+      request([{role: "tool", content: '{"currentCell":[0,0]}', content_checksum: "0xdeadbeefdeadbeef"}]),
+    ]).warnings
+
+    expect(warnings).toEqual([])
   })
 })
 

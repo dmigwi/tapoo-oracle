@@ -8,8 +8,12 @@
 import { LOG_EVENTS, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
 import { buildContext } from "./rubric-engine"
+import { gameIdentityKey } from "./log-index"
 import { asArray, asRecord } from "./utils"
-import type { CellKey, Context, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
+
+// Re-exported: a caller naming a round reaches for this file, and that is still where it looks.
+export { gameIdentityKey } from "./log-index"
+import type { CellKey, Context, EncodedMaze, GameIdentity, Level, LogEntry, Replay, Turn } from "./types"
 
 // resolveActingAgents maps each turn number to the raw playerName that acted on it.
 //
@@ -81,16 +85,14 @@ function reportedMoves(record: Replay | null): string[] | null {
 
 /** One played round's entries, with the identity the log stamped on them. */
 export type RoundGroup = {
-  /** `game/level`, the identity used everywhere a round is addressed. */
-  key: string;
-  game: number | null;
-  level: number | null;
+  /** Which round these entries belong to. */
+  identity: GameIdentity;
   entries: LogEntry[];
 };
 
 /** roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
  * "2/1" beside a filename reads as a fraction or a date before it reads as a round. */
-export function roundLabel({game, level}: {game: number | null; level: number | null}): string {
+export function roundLabel({game, level}: GameIdentity): string {
   const parts = [
     typeof game === "number" ? `Game ${game}` : null,
     typeof level === "number" ? `Level ${level}` : null,
@@ -107,7 +109,7 @@ export function roundLabel({game, level}: {game: number | null; level: number | 
 export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
   // An entry that does not name its round belongs to the round in progress.
   //
-  // Reading `entry.game ?? 0` per entry instead filed every such entry under a fabricated round "0/0".
+  // Reading `entry.game ?? "?"` per entry instead filed every such entry under a fabricated round "?/?".
   // On a log that stamps game and level only on its round boundaries, that split one real round in two:
   // a round holding the encoded maze and no turns, and a phantom round holding all the turns and no
   // maze. The reader saw a replay whose scrubber ran 0 to 0 and a Turns column reading zero, on a log
@@ -130,11 +132,11 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
       continue
     }
 
-    const key = `${game ?? 0}/${level ?? 0}`
+    const key = gameIdentityKey({game, level})
     // Identity comes from the running cursor, not from the group's first entry: on a log that stamps
     // game and level only on round boundaries, the first entry of a group often carries neither, and a
     // tab labelled from it would read "Whole log" beside fourteen properly named siblings.
-    const group = groups.get(key) ?? {key, game, level, entries: []}
+    const group = groups.get(key) ?? {identity: {game, level}, entries: []}
     if (group.entries.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
       group.entries.push(...beforeFirstRound.splice(0))
     }
@@ -144,7 +146,7 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
 
   // A log that never names a round at all: one round, everything in it, as before.
   if (beforeFirstRound.length > 0) {
-    groups.set("0/0", {key: "0/0", game: null, level: null, entries: beforeFirstRound})
+    groups.set(gameIdentityKey({game: null, level: null}), {identity: {game: null, level: null}, entries: beforeFirstRound})
   }
 
   return [...groups.values()]
@@ -159,7 +161,7 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
 export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
   const groups = groupEntriesByRound(entries)
 
-  return groups.map(({key, entries: groupEntries}) => {
+  return groups.map(({identity, entries: groupEntries}) => {
     // The caller's context when it has one, which is now the common case: answerRubric has already
     // built a context over exactly these entries, and building a second identical one was the largest
     // avoidable cost of opening a log.
@@ -169,12 +171,11 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
     // all of them. Nothing here reads context.label, which is the only field that would differ.
     const context = answered !== undefined && groups.length === 1
       ? answered
-      : buildContext(groupEntries, { label: key })
+      : buildContext(groupEntries, { label: gameIdentityKey(identity) })
     const started = asRecord(
       groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
     )
     const actingAgents = resolveActingAgents(groupEntries)
-    const first = groupEntries[0]
 
     // Keyed by the turn it covers, so this is a plain lookup. The offset that used to live here - Tapoo
     // reports a prediction's outcome on the request that follows it - now belongs to the store that
@@ -343,9 +344,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
 
     const startPosition = (started.startPosition ?? null)
     const level: Level = {
-      key,
-      game: first?.game ?? null,
-      level: first?.level ?? null,
+      identity,
       encodedMaze: (started.maze ?? null) as EncodedMaze | null,
       startPosition,
       startCell: cellFromGridPoint(startPosition),

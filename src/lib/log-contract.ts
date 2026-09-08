@@ -398,6 +398,153 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
   return warnings;
 }
 
+/** How a round names itself in a warning. The entries all belong to one round, so any of them can say
+ * which - and the ones that carry the ids are the round's own boundaries. */
+const roundName = (entries: LogEntry[]): string => {
+  const named = entries.find((entry) => typeof entry.game === "number" || typeof entry.level === "number");
+  return `Game ${named?.game ?? "-"} level ${named?.level ?? "-"}`;
+};
+
+// How a downloaded log shortens a repeated string: the first 25 characters and an ellipsis.
+//
+// Tapoo writes each system prompt, user message and tool description in full the first time it appears
+// in a round and stubs every later appearance, because they repeat on every request and a real log has
+// hundreds. The checksum beside a stub is of the *full* text, so a stub cannot be hashed - but it can
+// still be checked against the full text logged earlier under the same checksum.
+const COMPACT_HEAD = 25;
+const COMPACT_TAIL = "...";
+const compacted = (full: string): string => `${full.slice(0, COMPACT_HEAD)}${COMPACT_TAIL}`;
+
+/** How many distinct system prompts one round can honestly carry.
+ *
+ * Tapoo rewrites the agent's persona as its traversal speed moves between brackets, and there are four
+ * forms: the opening Default - "you start this level primed for success", before any speed has been
+ * measured - and then Trailblazer, Navigator and Backtracker, one per bracket. They are set out at
+ * https://dmigwi.github.io/tapoo/prompts.html.
+ *
+ * So a round has at most four distinct system-prompt checksums. A fifth is not a slow agent or a long
+ * round; it means this file and the producer disagree about how many personas exist, and every count
+ * here that assumes four is then describing something else. The snapshot log carries three - Default,
+ * Navigator, Backtracker - never having reached Trailblazer mid-round. */
+const PERSONA_FORMS = 4;
+
+// promptWarnings checks that a round told the agent one consistent story.
+//
+// Three questions, and only one of them is "did the prompt change":
+//
+// **A tool's description must not change within a round.** Every appearance of a tool carries a
+// description_checksum, and a round where one tool has two of them gave the agent two different
+// accounts of the same tool - so its turns were not answering the same instructions, and comparing
+// them across the round compares two experiments.
+//
+// **Text logged in full must match the checksum beside it.** A prompt and a tool description are logged
+// verbatim the first time they appear in a round, so unlike a tool *result* - which is compacted before
+// it is written, and which traversalPayloadWarnings reconstructs - this one can simply be hashed. All
+// five in the snapshot log do.
+//
+// **Text logged as a stub can only be checked against itself.** Later appearances are trimmed to
+// COMPACT_HEAD characters and an ellipsis, so hashing them is meaningless; what they must still be is
+// the truncation of the full text logged earlier under the same checksum.
+//
+// The *system prompt* is deliberately not held to one-per-round. It changes mid-round by design: it
+// opens "You are Katara, and you start this level primed for success" and is rewritten as the player's
+// speed class changes, so a real 16-turn round carries three - Trailblazer, Navigator, then
+// Backtracker. Requiring one prompt per round would put an accuracy warning on every clean log.
+//
+// Tool *results* are excluded here for the same reason they are hashed elsewhere: their content is
+// compacted rather than truncated, so it neither hashes nor ends in an ellipsis, and mistaking that for
+// damage would warn on every log ever written.
+function promptWarnings(entries: LogEntry[], round: string): LogWarning[] {
+  const warnings: LogWarning[] = [];
+  const toolSums = new Map<string, Set<string>>();
+  const byChecksum = new Map<string, string[]>();
+  const personas = new Set<string>();
+  let damaged = 0;
+
+  const note = (checksum: unknown, text: unknown): void => {
+    if (typeof checksum !== "string" || typeof text !== "string") return;
+    byChecksum.set(checksum, [...(byChecksum.get(checksum) ?? []), text]);
+    // Trimmed text cannot be hashed, and a full text that happens to end in an ellipsis is only skipped
+    // - the heuristic errs towards checking less, never towards warning wrongly.
+    if (text.endsWith(COMPACT_TAIL)) return;
+    if (fnv1a64Checksum(text) !== checksum) damaged += 1;
+  };
+
+  for (const entry of entries) {
+    if (entry.payload !== LOG_EVENTS.request) continue;
+    const details = asRecord(entry.details);
+
+    for (const message of asArray(details.messages).map(asRecord)) {
+      // Not a tool result: that is a compacted payload, checked by reconstruction rather than by hash.
+      if (message.role === "tool") continue;
+      note(message.content_checksum, message.content);
+      // The persona travels in the system prompt, which is why the count is taken here and not from the
+      // user message: that one is the same fixed instruction on every request of the round - one
+      // checksum across all 32 in the snapshot - so it carries no persona to count.
+      if (message.role === "system" && typeof message.content_checksum === "string") {
+        personas.add(message.content_checksum);
+      }
+    }
+
+    for (const tool of asArray(details.tools).map(asRecord)) {
+      const name = asTrimmedText(tool.name);
+      const checksum = tool.description_checksum;
+      note(checksum, tool.description);
+      if (!name || typeof checksum !== "string") continue;
+      toolSums.set(name, new Set([...(toolSums.get(name) ?? []), checksum]));
+    }
+  }
+
+  for (const [name, sums] of toolSums) {
+    if (sums.size < 2) continue;
+    // Inaccurate, not incomplete: nothing is missing. The round's tool-use verdicts compare turns that
+    // were working from different descriptions of the same tool.
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        `${round} describes the tool ${name} ${sums.size} different ways, so its turns did not all see ` +
+        "the same instructions and the tool-use answers compare turns that were told different things.",
+    });
+  }
+
+  if (personas.size > PERSONA_FORMS) {
+    // Inaccurate rather than incomplete: nothing is missing. What is wrong is this file's model of the
+    // producer, and anything downstream that reasons about personas is reasoning from the wrong number.
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        `${round} carries ${personas.size} distinct system prompts, but Tapoo defines ${PERSONA_FORMS} ` +
+        "agent personas (Default, Trailblazer, Navigator, Backtracker). Either the persona set has " +
+        "changed - see https://dmigwi.github.io/tapoo/prompts.html - or the prompt is varying for some " +
+        "reason this analyzer does not model.",
+    });
+  }
+
+  if (damaged > 0) {
+    const desc = "so what the agent was shown is not what this log records."
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        damaged === 1
+          ? `${round} carries a prompt or tool description that does not match its own checksum, ${desc}`
+          : `${round} carries ${damaged} prompts or tool descriptions that do not match their own checksums, ${desc}`,
+    });
+  }
+
+  for (const [checksum, texts] of byChecksum) {
+    const full = texts.reduce((longest, text) => (text.length > longest.length ? text : longest), "");
+    if (texts.every((text) => text === full || text === compacted(full))) continue;
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        `${round} logs two different prompts or tool descriptions under one checksum (${checksum}), ` +
+        "so what the agent was shown cannot be recovered from this log.",
+    });
+  }
+
+  return warnings;
+}
+
 /** parseGameRound reads one round's entries: its maze, and whether what the log carries about that
  * round arrived intact.
  *
@@ -442,6 +589,7 @@ export function parseGameRound(entries: LogEntry[]): GameRound {
   }
 
   const warnings: LogWarning[] = [];
+  warnings.push(...promptWarnings(entries, roundName(entries)));
   warnings.push(...traversalPayloadWarnings(entries));
   return {maze, warnings};
 }

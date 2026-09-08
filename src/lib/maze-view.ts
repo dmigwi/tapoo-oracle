@@ -10,7 +10,7 @@
 // document is hidden.
 
 import { cellFromKey, getCellKey, isMove } from "./log-contract"
-import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
+import { DECAY_REASONS, MOST_DECAY, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
 
@@ -804,7 +804,7 @@ export function createMazeReplay(report: Report): HTMLElement {
   const select = createHtmlElement("select", "maze-level-select");
   select.setAttribute("aria-label", "Level to replay");
   models.forEach((model, index) => {
-    const option = createHtmlElement("option", null, model.label) as HTMLOptionElement;
+    const option = createHtmlElement("option", null, levelSelectLabel(model, models.length > 1)) as HTMLOptionElement;
     option.value = String(index);
     select.append(option);
   });
@@ -1007,10 +1007,13 @@ export function createMazeReplay(report: Report): HTMLElement {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
       // silently dropping the grid would read as "this round had nothing worth showing".
       //
-      // Stated as plainly as the warning banner states its own findings. "Maze unavailable" was the
-      // heading here, and it read as a temporary condition - something that might load in a moment -
-      // rather than as a payload that arrived wrong or never arrived at all. The reader is looking at
-      // the space the traversal should occupy, so this is where they learn what is missing from it.
+      // And reported *only* here. parseGameRound decodes the same maze and hands back the failure
+      // without raising a warning of its own, because a notice above the round tabs said the same thing
+      // less well: the reader is looking at the space the traversal should occupy, which is where they
+      // can see what is missing from it.
+      //
+      // "Maze unavailable" was the heading, and it read as a temporary condition - something that might
+      // load in a moment - rather than as a payload that arrived wrong or never arrived at all.
       const notice = createHtmlElement("div", "notice notice-error");
       notice.append(
         createHtmlElement("strong", null, "The encoded maze payload is missing or inaccurate")

@@ -20,9 +20,7 @@ const REAL_MAZE = {
 type LevelOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}): Level => ({
-  key: `${game}/${lvl}`,
-  game,
-  level: lvl,
+  identity: {game, level: lvl},
   encodedMaze,
   startCell: "0,0",
   startPosition: null,

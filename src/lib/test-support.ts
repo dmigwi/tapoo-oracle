@@ -1,6 +1,6 @@
 import {parseTapooLogText} from "./log-contract";
 import {buildReportAnalysis, roundReportFor} from "./log-tabs";
-import type {Analysis, Level, LogWarning, Region, Report} from "./types";
+import type {Analysis, Level, LogWarning, RegionView, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -9,13 +9,10 @@ import type {Analysis, Level, LogWarning, Region, Report} from "./types";
 /** The report for a single-round log's only round.
  *
  * Most fixtures are one round, and reaching through `rounds[0]` at every call site would bury what is
- * actually being asserted. A fixture that grows a second round fails here rather than silently
- * asserting against whichever round happened to be first. */
+ * actually being asserted. No emptiness check: Analysis.rounds is a non-empty tuple, so the first round
+ * is a round. */
 export function firstRound(result: Analysis): Report {
-  const ok = expectOk(result);
-  const round = ok.rounds[0];
-  if (!round) throw new Error("analysis carries no rounds");
-  return roundReportFor(round).report;
+  return roundReportFor(expectOk(result).rounds[0]).report;
 }
 
 /** Narrows a discriminated result to its success arm, failing the test if it is not one.
@@ -77,10 +74,10 @@ export function at<T>(items: readonly T[], index: number): T {
 
 /** A rendered region as an element, failing the test when the section rendered nothing.
  *
- * `Region` is `Element | ""` because a section that has nothing to say renders nothing, and the page
+ * `RegionView` is `Element | ""` because a section that has nothing to say renders nothing, and the page
  * interpolates the empty string rather than an empty node. A test reaching into a region has already
  * asserted it rendered; this states that once instead of at every property. */
-export function rendered(region: Region): HTMLElement {
+export function rendered(region: RegionView): HTMLElement {
   if (region === "") {
     throw new Error("expected a rendered region, got the empty one");
   }
@@ -116,15 +113,18 @@ export function messagesOf(warnings: LogWarning[]): string[] {
   return warnings.map((warning) => warning.message);
 }
 
-/** analyzeLogText answers the rubric for a log given as raw text, skipping the download.
+/** analyzeLogText slices a log given as raw text into rounds, skipping the download.
  *
  * A test fixture, and it lives here rather than in log-tabs.ts because nothing in the app calls it.
- * The app's own path is a URL: loadTapooLogFromUrl fetches and parses, then buildReportAnalysis answers.
+ * The app's own path is a URL: loadTapooLogFromUrl fetches and parses, then buildReportAnalysis slices.
  * A copy of that composition sat in log-tabs.ts describing itself as "the single entry point from
  * raw text to a rendered result", which no production caller had ever used.
  *
  * It composes the same two steps the loaders do, so a suite that exercises it exercises the real
- * pipeline - everything but the fetch, which is what a fixture on disk is standing in for. */
+ * pipeline - everything but the fetch, which is what a fixture on disk is standing in for.
+ *
+ * It answers no rubric: like the app, that waits for roundReportFor. A test wanting verdicts asks
+ * firstRound below, which resolves one. */
 export function analyzeLogText(
   text: unknown,
   {label = "online log", sourceUrl}: {label?: string; sourceUrl?: string} = {},

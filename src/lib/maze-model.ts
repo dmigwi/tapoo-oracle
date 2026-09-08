@@ -1,5 +1,10 @@
 // The maze replay's own model: one round turned into something drawable.
 //
+// The replay shapes its own data rather than drawing on report-adapters, which shapes the report's. The
+// two answer to different readers - a grid and a scrubber against a table of verdicts - and the rule
+// that adapters live in one module was costing a reach into a file about reports for functions only the
+// maze calls.
+//
 // Pure and document-free, which is why it is tested in node while the view beside it needs jsdom.
 
 import { classifyTraversalSpeed } from "./log-contract"
@@ -7,11 +12,14 @@ import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
 
-// The maze replay owns its own data shaping. These were in oracle.js, under the rule that oracle
-// holds adapters and view modules hold DOM - but nothing outside this file uses them, and the split
-// meant reaching into a module about reports for two functions only the maze calls. Pure and
-// document-free, so they stay testable without a DOM.
-
+/** levelSelectLabel names a round in the replay's level picker.
+ *
+ * Not roundLabel: the picker sits under a heading that already says this is the maze replay, so it
+ * leads with the level and mentions the game only when there is more than one to tell apart. Derived
+ * from the identity rather than stored on the model, because it is a rendering of two numbers the model
+ * already carries - and a stored copy is a second thing to keep in step. */
+export const levelSelectLabel = ({identity}: LevelModel, many: boolean): string =>
+  `Level ${identity.level}${many ? ` (game ${identity.game})` : ""}`;
 
 /** mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
  * be drawn.
@@ -41,10 +49,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
     }
 
     return {
-      key: level.key,
-      game: level.game,
-      level: level.level,
-      label: `Level ${level.level}${levels.length > 1 ? ` (game ${level.game})` : ""}`,
+      identity: level.identity,
       maze: built.ok ? built.maze : null,
       error: built.ok ? null : built.error,
       stats: built.ok ? built.stats : null,

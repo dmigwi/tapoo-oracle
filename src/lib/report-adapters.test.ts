@@ -139,6 +139,21 @@ describe("report URL tabs", () => {
     expect(next.pendingTabId).toBe("replacement")
   })
 
+  // The invariant the type now states: a parsed log always yields at least one round, so nothing
+  // downstream has to render around "loaded, but no rounds". A log that names no round at all still
+  // gets one holding everything.
+  it("always yields at least one round", () => {
+    const result = analyzeLogText(fixtureText, {label: "fixture"})
+
+    expect(expectOk(result).rounds.length).toBeGreaterThan(0)
+    expect(expectOk(analyzeLogText(JSON.stringify({
+      name: "tapoo",
+      version: "2.5.1",
+      mode: "agent-api",
+      entries: [{epochMs: 1, time: "t", log: "info", payload: "Agent request.", details: {}}],
+    }))).rounds).toHaveLength(1)
+  })
+
   it("loads a draft URL into a new log tab", async () => {
     let state = addLogTab(createInitialLogTabs(), "first")
     state = {...state, draftUrl: "https://example.com/first.json"}

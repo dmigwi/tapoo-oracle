@@ -142,7 +142,7 @@ async function loadDraftLogTab({getState, setState, fetchText}: WorkspaceIo): Pr
 // The address is the tab's, not the draft field's, so a reader whose load failed retries without
 // retyping it - the case this exists for is a host that was briefly unreachable, where the URL was
 // never the problem. Routed through loadLogTabFromUrl, which builds its fields with the same
-// loadTabFields the add path uses, so a report that arrives by retry is the report that would have
+// loadLogTabFields the add path uses, so a report that arrives by retry is the report that would have
 // arrived first time.
 //
 // Stale completions are dropped the way the draft loader drops them: if the tab is gone by the time

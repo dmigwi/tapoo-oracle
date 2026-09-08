@@ -106,18 +106,25 @@ export type LogEntry = {
 
 // --- Log index ---
 
-/** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
-export type TurnSpan = {
-  game: number | null;
-  level: number | null;
-  turn: number;
-  start: number;
-  end: number;
-};
+/** Which game and level a round is - the two facts that name it, and the only two.
+ *
+ * Carried as a record rather than as the `"game/level"` string it serialises to: a round used to hold
+ * the key *and* the two numbers it was built from, three fields for two facts, with nothing keeping the
+ * string in step with the numbers beside it - and they did diverge, a Level reporting key "7/3" beside
+ * `game: null`. The string is derived by gameIdentityKey wherever one is needed - a Map key, a message
+ * naming the round - and stored nowhere.
+ *
+ * The base of the turn types below, because a turn is named by the round it belongs to plus its number.
+ * Everything that identifies a round in this codebase is this record. */
+export type GameIdentity = {game: number | null; level: number | null};
 
-/** The three fields that name a turn uniquely. Turn numbers restart every round, so a turn number
- * alone is ambiguous across a log holding more than one. */
-export type TurnIdentity = Pick<TurnSpan, "game" | "level" | "turn">;
+/** The three fields that name a turn uniquely: its round, and its number within that round. Turn
+ * numbers restart every round, so a turn number alone is ambiguous across a log holding more than
+ * one. */
+export type TurnIdentity = GameIdentity & {turn: number};
+
+/** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
+export type TurnSpan = TurnIdentity & {start: number; end: number};
 
 /** How the turn spans were arrived at.
  *
@@ -382,9 +389,9 @@ export type Turn = {
  * Named for the level it played, but keyed by (game, level) - a retry is a different round with a
  * brand-new maze, and merging two would draw a path crossing walls that exist in neither. */
 export type Level = {
-  key: string;
-  game: number | null;
-  level: number | null;
+  /** Which round this is. The key it used to carry beside these two numbers is derived by
+   * gameIdentityKey where one is wanted - the two disagreed once, and one fact cannot. */
+  identity: GameIdentity;
   encodedMaze: EncodedMaze | null;
   startPosition: {x?: number; y?: number} | null;
   startCell: CellKey | null;
@@ -502,15 +509,14 @@ export type ModelOutput = {
  * This is what an Analysis carries, so opening a log of fourteen rounds does not answer fourteen
  * rubrics to show one. A slice becomes a RoundReport when somebody looks at it. */
 export type RoundSlice = {
-  /** `game/level`. Stable across renders, so it is what a round-tab selection stores. */
-  key: string;
-  game: number | null;
-  level: number | null;
-  /** "Game 2 · Level 1" - what the round tab says. */
-  label: string;
+  /** Which round this is. What a round-tab selection carries, and what the tab's text is derived from. */
+  identity: GameIdentity;
   /** "gemma4.json - Game 2 · Level 1" - what the round's own report is named, so a warning or an error
-   * raised while answering names the round *and* the file it came from. Kept apart from `label`
-   * because the tab has the file above it already and repeating it there would not fit. */
+   * raised while answering names the round *and* the file it came from.
+   *
+   * The one label kept rather than derived, because it composes the identity with something the
+   * identity does not know: the file the round was read from. The tab's own text is just
+   * roundLabel(identity), so it is derived at render instead of stored beside the identity it repeats. */
   reportLabel: string;
   entries: LogEntry[];
 };
@@ -523,21 +529,23 @@ export type RoundReport = RoundSlice & {report: Report; round: GameRound};
 export type Analysis = Result<{
   source: TapooLog;
   warnings: LogWarning[];
-  /** The rounds this log recorded, in the order they were played. Never empty for a parsed log: a log
-   * that names no round at all still yields one round holding everything. Unanswered: each is answered
-   * when it is opened, because a verdict about one maze is not a verdict about the next one and a
-   * reader is looking at one of them. */
-  rounds: RoundSlice[];
+  /** The rounds this log recorded, in the order they were played.
+   *
+   * A non-empty tuple, because it genuinely cannot be empty: the parse refuses a log with no readable
+   * entries, and a log that names no round at all still yields one round holding everything. Saying so
+   * in the type means a reader of `rounds[0]` gets a round rather than `RoundSlice | undefined`, and the
+   * "what if there are none" branch - which rendered a blank page and said nothing - stops existing.
+   *
+   * Unanswered: each is answered when it is opened, because a verdict about one maze is not a verdict
+   * about the next one, and a reader is looking at one of them. */
+  rounds: [RoundSlice, ...RoundSlice[]];
 }>;
 
 // --- Maze replay ---
 
 /** The view's own model of a round. */
 export type LevelModel = {
-  key: string;
-  game: number | null;
-  level: number | null;
-  label: string;
+  identity: GameIdentity;
   maze: Maze | null;
   error: string | null;
   stats: MazeStats | null;
@@ -629,4 +637,4 @@ export type InputsApi = {
 export type ReportUi = {html: Html; Inputs: InputsApi};
 
 /** A rendered region: an element, or the empty string when a section renders nothing. */
-export type Region = Element | "";
+export type RegionView = Element | "";

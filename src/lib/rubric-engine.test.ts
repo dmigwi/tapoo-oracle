@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import {LOG_EVENTS} from "./log-contract"
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {answerRubric} from "./report"
-import {buildLevels} from "./rounds"
+import {buildLevels, gameIdentityKey} from "./rounds"
 import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
 import type {GroupResult, Level, LogEntry, LogLevel, Report} from "./types"
 import {at, must} from "./test-support";
@@ -95,6 +95,29 @@ describe("parsePrediction", () => {
 // The context answerRubric builds is handed to buildLevels instead of a second identical one being
 // built over the same entries. That is only sound if the two produce the same levels, so this pins it
 // against the real fixture rather than trusting the argument.
+// A round's identity is the running cursor's, not its first entry's - Tapoo stamps game and level only
+// at round boundaries, so the entries that open a group often carry neither.
+//
+// Level used to read them off `groupEntries[0]` while taking its key from the group, so on such a log
+// the same record said "7/3" and `game: null, level: null` at once. The maze replay builds its level
+// select from those numbers, so it read "Level null". One identity, one answer.
+describe("a round's identity on a log that labels only its boundaries", () => {
+  it("takes game and level from the round, not from the entry that opens it", () => {
+    const entries = [
+      {epochMs: 1, log: "info", payload: LOG_EVENTS.request, details: {}},
+      {epochMs: 2, log: "info", payload: LOG_EVENTS.levelStarted, details: {}, game: 7, level: 3, turn: 0},
+      {epochMs: 3, log: "info", payload: LOG_EVENTS.request, details: {}, turn: 1},
+    ] as unknown as LogEntry[]
+
+    const level = must(buildLevels(entries)[0], "a level")
+
+    expect(level.identity).toEqual({game: 7, level: 3})
+    expect(gameIdentityKey(level.identity)).toBe("7/3")
+    // The entry the group opens with says neither, which is the whole point.
+    expect(entries[0]).not.toHaveProperty("game")
+  })
+})
+
 describe("buildLevels reusing the caller's context", () => {
   // A Level carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
   // compares function identity and fails on two runs that agree completely. Projected to data instead.
@@ -559,7 +582,7 @@ describe("buildLevels", () => {
       ...round(2, 1, '{"moves":["MoveUp"]}'),
     ])
 
-    expect(report.levels.map((level) => level.key)).toEqual(["1/1", "2/1"])
+    expect(report.levels.map((level) => gameIdentityKey(level.identity))).toEqual(["1/1", "2/1"])
     expect(firstLevel(report).startCell).toBe("0,0")
   })
 

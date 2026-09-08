@@ -1,7 +1,7 @@
 import {describe, expect, it} from "vitest"
 
 import {LOG_EVENTS} from "./log-events"
-import {buildLevels} from "./rounds"
+import {buildLevels, gameIdentityKey} from "./rounds"
 import {at} from "./test-support"
 import type {LogEntry, LogLevel} from "./types"
 
@@ -26,7 +26,7 @@ const prediction = (moves: string[], turn: number, round: {game?: number; level?
 
 describe("which round an entry belongs to", () => {
   // The bug this exists for: `entry.game ?? 0` was read per entry, so an entry that did not name its
-  // round was filed under a fabricated round "0/0" rather than the one in progress. On a log that
+  // round was filed under a fabricated round "?/?" rather than the one in progress. On a log that
   // stamps game and level only on its round boundaries - which is most of a large log - that split one
   // real round in two: a round with the encoded maze and no turns, and a phantom round with every turn
   // and no maze.
@@ -46,7 +46,7 @@ describe("which round an entry belongs to", () => {
     const levels = buildLevels(roundMarkersOnly)
 
     expect(levels).toHaveLength(1)
-    expect(at(levels, 0).key).toBe("6/54")
+    expect(gameIdentityKey(at(levels, 0).identity)).toBe("6/54")
   })
 
   it("gives that round both its maze and its turns, not one each", () => {
@@ -59,7 +59,7 @@ describe("which round an entry belongs to", () => {
   })
 
   it("invents no round that the log never recorded", () => {
-    expect(buildLevels(roundMarkersOnly).map((level) => level.key)).not.toContain("0/0")
+    expect(buildLevels(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
   })
 
   it("still separates rounds that do name themselves", () => {
@@ -70,7 +70,7 @@ describe("which round an entry belongs to", () => {
       prediction(["MoveUp"], 1),
     ])
 
-    expect(levels.map((level) => level.key)).toEqual(["6/54", "6/55"])
+    expect(levels.map((level) => gameIdentityKey(level.identity))).toEqual(["6/54", "6/55"])
     expect(levels.every((level) => level.turns.length === 1)).toBe(true)
   })
 

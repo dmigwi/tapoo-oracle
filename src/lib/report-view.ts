@@ -21,9 +21,10 @@ import {
   warningHeadline,
 } from "./report-adapters";
 import { createInitialLogTabs, roundReportFor } from "./log-tabs";
+import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
-import type { Analysis, GroupKind, Region, Report, LogTab, LogTabsState, ReportUi, RoundReport, RoundSlice, TapooLog } from "./types";
+import type { Analysis, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog } from "./types";
 
 
 // --- Shared tables ---
@@ -125,7 +126,7 @@ export function activeLogTab(tabsState: LogTabsState | undefined): LogTab | unde
 
 // --- Page sections, in reading order ---
 
-function emptyState({html}: ReportUi, tab: LogTab | undefined): Region {
+function emptyState({html}: ReportUi, tab: LogTab | undefined): RegionView {
   if (tab?.status === "loaded" || tab?.status === "error") return "";
   return html`<section class="notice empty-report-state">
       <strong>Load an online JSON report URL</strong>
@@ -162,7 +163,7 @@ function emptyState({html}: ReportUi, tab: LogTab | undefined): Region {
 // was told that game 2's maze failed its checksum, a caveat about a report they were not reading, while
 // game 1's own sat in the same list looking equally unrelated. They now render beside the round they
 // describe; see roundNotices.
-function notices({html}: ReportUi, tab: LogTab | undefined): Region {
+function notices({html}: ReportUi, tab: LogTab | undefined): RegionView {
   const result = tab?.result;
   if (tab?.status === "error") {
     return html`<section class="notice notice-error">
@@ -186,29 +187,46 @@ function notices({html}: ReportUi, tab: LogTab | undefined): Region {
 // round only means anything next to the control that chose it. Above the tabs a reader met "Game 3 ·
 // Level 2 ..." before knowing there were rounds to choose between, and the label was the only thing
 // connecting the two. Under them, the label is confirmation rather than the whole explanation.
-function roundNotices({html}: ReportUi, round: RoundReport): Region {
+function roundNotices({html}: ReportUi, round: RoundReport): RegionView {
   const warnings = round.round.warnings;
   if (warnings.length === 0) return "";
 
   return html`<section class="notice notice-warn notice-round">
       <strong>${warningHeadline(warnings)}</strong>
-      <p class="notice-round-label">${round.label}</p>
+      <p class="notice-round-label">${roundLabel(round.identity)}</p>
       <ul>${warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
     </section>`;
 }
 
-/** activeRound picks the round on screen, falling back to the first.
+/** activeRound picks the round on screen.
  *
- * The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
- * blanked because a key went stale would be a worse failure than showing round one. */
-export function activeRound(tab: LogTab | undefined, key: string | null): RoundReport | undefined {
+ * A null identity is "nothing selected yet", not one that might match a round - every first render
+ * passes it - so it takes the first round without searching for it.
+ *
+ * Undefined means one thing only: this tab has no report to show a round from. A parsed log always has
+ * at least one round - Analysis.rounds says so in its type - so "loaded but roundless" is not a state
+ * a caller has to render around.
+ *
+ * Throws on an identity naming no round, because that is a programming error rather than anything a
+ * reader did: every identity reaching here came off a round tab this module drew, so a miss means the
+ * tabs and the analysis have gone out of step. It used to fall back to the first round, which read as
+ * correct - the report rendered, the first tab highlighted - and said nothing about having been asked
+ * for another. The same reasoning as stepFrom, which throws on a key it did not build. */
+export function activeRound(tab: LogTab | undefined, wanted: GameIdentity | null): RoundReport | undefined {
   const result = tab?.result;
   if (!result?.ok) return undefined;
-  const slice = result.rounds.find((round) => round.key === key) ?? result.rounds[0];
+  const rounds = result.rounds;
+  const slice =
+    wanted === null
+      ? rounds[0]
+      : rounds.find((round) => gameIdentityKey(round.identity) === gameIdentityKey(wanted));
+  if (slice === undefined) {
+    throw new Error(`no round ${gameIdentityKey(wanted as GameIdentity)} in this report`);
+  }
   // Answered here, not when the log was opened. Every consumer of a round comes through this function,
   // so this is the one place that has to know the rubric pass is deferred - and roundReportFor
   // memoizes, so asking twice in one render costs one pass.
-  return slice === undefined ? undefined : roundReportFor(slice);
+  return roundReportFor(slice);
 }
 
 // The round tabs, directly under the source line: which game and level the verdicts below belong to,
@@ -220,40 +238,50 @@ function roundTabs(
   {html}: ReportUi,
   rounds: RoundSlice[],
   active: RoundSlice,
-  select: (key: string) => void,
-): Region {
+  selectorCallback: (identity: GameIdentity) => void,
+): RegionView {
   if (rounds.length < 2) return "";
 
+  const activeKey = gameIdentityKey(active.identity);
   return html`<div class="round-tabs" role="tablist" aria-label="Game to analyze">
-      ${rounds.map(
-        (round) => html`<button
+      ${rounds.map((round) => {
+        const selected = gameIdentityKey(round.identity) === activeKey;
+        return html`<button
           type="button"
           role="tab"
-          class=${`round-tab${round.key === active.key ? " round-tab-active" : ""}`}
-          aria-selected=${String(round.key === active.key)}
-          onclick=${() => select(round.key)}
-        >${round.label}</button>`,
-      )}
+          class=${`round-tab${selected ? " round-tab-active" : ""}`}
+          aria-selected=${String(selected)}
+          onclick=${() => selectorCallback(round.identity)}
+        >${roundLabel(round.identity)}</button>`;
+      })}
     </div>`;
 }
 
 function profile(
   ui: ReportUi,
   tab: LogTab | undefined,
-  key: string | null,
-  select: (key: string) => void,
-): Region {
+  wanted: GameIdentity | null,
+  selectorCallback: (identity: GameIdentity) => void,
+  roundKeyCallback: (drawn: GameIdentity) => void = () => {},
+): RegionView {
   const {html} = ui;
   const result = tab?.result;
-  const round = activeRound(tab, key);
-  if (!tab || !result?.ok || !round) return "";
+  // Nothing loaded yet, or a tab that failed: emptyState and notices carry those, and this renders
+  // nothing. There is deliberately no third arm for "loaded but no round" - result.ok now guarantees a
+  // round, so a blank profile can only ever mean a blank tab.
+  const round = activeRound(tab, wanted);
+  if (!tab || !result?.ok || round === undefined) return "";
+  // Which round this actually drew, which is not always what it was handed: a null identity means the
+  // first round. The caller needs the resolved answer, and asking activeRound for it a second time
+  // would be a second place applying the same rule.
+  roundKeyCallback(round.identity);
   const rounds = result.rounds;
   return html`<div class="report-region">
       <section class="events-section">
         <p class="source-line">Analyzing <strong>${tab.label}</strong></p>
         ${rounds.length < 2
-          ? html`<p class="round-identity">${round.label}</p>`
-          : roundTabs(ui, rounds, round, select)}
+          ? html`<p class="round-identity">${roundLabel(round.identity)}</p>`
+          : roundTabs(ui, rounds, round, selectorCallback)}
         ${roundNotices(ui, round)}
         <p class="processing-note">
           Log contents are analyzed in your browser and never uploaded; a shared link carries the log
@@ -298,7 +326,7 @@ function profile(
 // means - once in the hero lede and once in the profile summary. A rule stated three times reads as
 // three separate hedges rather than one method, so the lede and the summary now say what they are for
 // and leave the method to the section named after it.
-function methodology({html}: ReportUi, result: Analysis | undefined): Region {
+function methodology({html}: ReportUi, result: Analysis | undefined): RegionView {
   if (!result?.ok) return "";
   return html`<details class="events-section methodology-section">
       <summary>
@@ -362,10 +390,10 @@ function methodology({html}: ReportUi, result: Analysis | undefined): Region {
 
 // detail is the evidence itself: the rubric tables, the diagnostics, and the provenance of the log
 // they were read from.
-function detail(ui: ReportUi, tab: LogTab | undefined, key: string | null): Region {
+function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | null): RegionView {
   const result = tab?.result;
-  const round = activeRound(tab, key);
-  if (!result?.ok || !round) return "";
+  const round = activeRound(tab, wanted);
+  if (!result?.ok || round === undefined) return "";
   const {html} = ui;
   const report = round.report;
   return html`<div class="report-region">
@@ -415,7 +443,7 @@ function detail(ui: ReportUi, tab: LogTab | undefined, key: string | null): Regi
 export function renderReportSections(
   ui: ReportUi,
   tabsState: LogTabsState | undefined,
-): {emptyState: Region; notices: Region; methodology: Region; profile: Region; detail: Region} {
+): {emptyState: RegionView; notices: RegionView; methodology: RegionView; profile: RegionView; detail: RegionView} {
   const tab = activeLogTab(tabsState);
 
   // Round selection swaps the two regions in place rather than travelling through tab state.
@@ -425,14 +453,36 @@ export function renderReportSections(
   // the round it opened on. Swapping the nodes here is what the maze level select already does on this
   // same page, and it keeps the whole feature inside this module - no page wiring, no new state field,
   // and no chance of a stale round key outliving the log it came from.
-  let profileNode: Region = "";
-  let detailNode: Region = "";
+  let profileNode: RegionView = "";
+  let detailNode: RegionView = "";
 
-  const select = (key: string): void => {
+  // The round on screen, so a click on the tab already selected can be ignored.
+  //
+  // Written by profile() and nowhere else, because what a render is *handed* is not always what it
+  // draws: a null identity means the first round. Setting this from the identity going in would leave
+  // it naming a round that is not on screen, and the next click on the round that *is* would then
+  // re-render it - the case the guard exists to prevent.
+  //
+  // Nothing can reach that divergence today: every identity reaching selectorCallback comes off a tab
+  // this render drew, and an identity naming no round now throws rather than quietly drawing another.
+  // So this is structure rather than a fix for an observed bug - it keeps the guard correct if a second
+  // caller or a keyboard handler ever passes an identity the tabs did not.
+  let activeKey: string | null = null;
+  const roundKeyCallback = (drawn: GameIdentity): void => { activeKey = gameIdentityKey(drawn) };
+
+  // Named for what it is: a callback the round tabs fire, not part of the render. Nothing below runs
+  // until a reader picks a round. It is declared above the first render only because profile() is handed
+  // it and it needs profileNode to replace, so the two refer to each other and one has to come first.
+  const selectorCallback = (identity: GameIdentity): void => {
+    // Only for a round that is not already showing. Re-rendering the round the reader is looking at
+    // rebuilds the maze replay from scratch, which sends the scrubber back to the end and turns the
+    // magnifier off - so a click meaning "I am already here" silently threw away where they were.
+    if (gameIdentityKey(identity) === activeKey) return;
+
     // The round's caveats live inside the profile region, so they are swapped with it and cannot be
     // left behind naming the round the page opened on.
-    const nextProfile = profile(ui, tab, key, select);
-    const nextDetail = detail(ui, tab, key);
+    const nextProfile = profile(ui, tab, identity, selectorCallback, roundKeyCallback);
+    const nextDetail = detail(ui, tab, identity);
     // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region
     // that was never inserted - a test rendering one half, a caller displaying only the profile - from
     // throwing on the first click.
@@ -446,7 +496,7 @@ export function renderReportSections(
     detailNode = nextDetail;
   };
 
-  profileNode = profile(ui, tab, null, select);
+  profileNode = profile(ui, tab, null, selectorCallback, roundKeyCallback);
   detailNode = detail(ui, tab, null);
 
   return {

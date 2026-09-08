@@ -21,9 +21,7 @@ type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome
 
 const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
   historyWindowRadius = null}: LevelOverrides = {}): Level => ({
-  key: "2/1",
-  game: 2,
-  level: 1,
+  identity: {game: 2, level: 1},
   encodedMaze,
   startCell: "0,0",
   startPosition: null,
