@@ -20,10 +20,10 @@ import {
   rubricQuestionRows,
   warningHeadline,
 } from "./report-adapters";
-import { createInitialReportTabs } from "./report-tabs";
+import { createInitialLogTabs, roundReportFor } from "./log-tabs";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
-import type { Analysis, GroupKind, Region, Report, ReportTab, ReportTabsState, ReportUi, RoundReport, TapooLog } from "./types";
+import type { Analysis, GroupKind, Region, Report, LogTab, LogTabsState, ReportUi, RoundReport, RoundSlice, TapooLog } from "./types";
 
 
 // --- Shared tables ---
@@ -115,17 +115,17 @@ function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): 
 
 // --- Which report is showing ---
 
-/** activeReportTab is the tab the rest of the page is about. The state can arrive before the input has
+/** activeLogTab is the log tab the rest of the page is about. The state can arrive before the input has
  * produced one, so the shape is normalized rather than assumed - it returns undefined instead of
  * throwing, and every caller renders an empty state from that. */
-export function activeReportTab(tabsState: ReportTabsState | undefined): ReportTab | undefined {
-  const state = tabsState?.tabs ? tabsState : createInitialReportTabs();
+export function activeLogTab(tabsState: LogTabsState | undefined): LogTab | undefined {
+  const state = tabsState?.tabs ? tabsState : createInitialLogTabs();
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
 }
 
 // --- Page sections, in reading order ---
 
-function emptyState({html}: ReportUi, tab: ReportTab | undefined): Region {
+function emptyState({html}: ReportUi, tab: LogTab | undefined): Region {
   if (tab?.status === "loaded" || tab?.status === "error") return "";
   return html`<section class="notice empty-report-state">
       <strong>Load an online JSON report URL</strong>
@@ -155,7 +155,14 @@ function emptyState({html}: ReportUi, tab: ReportTab | undefined): Region {
     </section>`;
 }
 
-function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
+// The export's own caveats, at the top of the page where they bound everything below them: a mode the
+// rubric was not written for, a build the report cannot name, entries that did not decode.
+//
+// A round's caveats are not here. They used to be - pooled into this one list - and a reader on game 1
+// was told that game 2's maze failed its checksum, a caveat about a report they were not reading, while
+// game 1's own sat in the same list looking equally unrelated. They now render beside the round they
+// describe; see roundNotices.
+function notices({html}: ReportUi, tab: LogTab | undefined): Region {
   const result = tab?.result;
   if (tab?.status === "error") {
     return html`<section class="notice notice-error">
@@ -163,25 +170,45 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
       <span>${tab.error}</span>
     </section>`;
   }
-  if (result?.ok && result.warnings.length > 0) {
-    // The headline states the cost in the reader's own terms before the caveats explain it. A person
-    // who reads nothing else should still come away knowing the report below is not to be quoted as-is.
-    return html`<section class="notice notice-warn">
-        <strong>${warningHeadline(result.warnings)}</strong>
-        <ul>${result.warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
-      </section>`;
-  }
-  return "";
+  if (!result?.ok || result.warnings.length === 0) return "";
+
+  // The headline states the cost in the reader's own terms before the caveats explain it. A person
+  // who reads nothing else should still come away knowing the report below is not to be quoted as-is.
+  return html`<section class="notice notice-warn">
+      <strong>${warningHeadline(result.warnings)}</strong>
+      <ul>${result.warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
+    </section>`;
+}
+
+// One round's caveats, rendered under the round tabs that select it.
+//
+// Placed here rather than with the export's notices at the top of the page, because a caveat about one
+// round only means anything next to the control that chose it. Above the tabs a reader met "Game 3 ·
+// Level 2 ..." before knowing there were rounds to choose between, and the label was the only thing
+// connecting the two. Under them, the label is confirmation rather than the whole explanation.
+function roundNotices({html}: ReportUi, round: RoundReport): Region {
+  const warnings = round.round.warnings;
+  if (warnings.length === 0) return "";
+
+  return html`<section class="notice notice-warn notice-round">
+      <strong>${warningHeadline(warnings)}</strong>
+      <p class="notice-round-label">${round.label}</p>
+      <ul>${warnings.map((warning) => html`<li>${warning.message}</li>`)}</ul>
+    </section>`;
 }
 
 /** activeRound picks the round on screen, falling back to the first.
  *
  * The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
  * blanked because a key went stale would be a worse failure than showing round one. */
-export function activeRound(tab: ReportTab | undefined, key: string | null): RoundReport | undefined {
+export function activeRound(tab: LogTab | undefined, key: string | null): RoundReport | undefined {
   const result = tab?.result;
   if (!result?.ok) return undefined;
-  return result.rounds.find((round) => round.key === key) ?? result.rounds[0];
+  const slice = result.rounds.find((round) => round.key === key) ?? result.rounds[0];
+  // Answered here, not when the log was opened. Every consumer of a round comes through this function,
+  // so this is the one place that has to know the rubric pass is deferred - and roundReportFor
+  // memoizes, so asking twice in one render costs one pass.
+  return slice === undefined ? undefined : roundReportFor(slice);
 }
 
 // The round tabs, directly under the source line: which game and level the verdicts below belong to,
@@ -191,8 +218,8 @@ export function activeRound(tab: ReportTab | undefined, key: string | null): Rou
 // the line above instead, where it costs no vertical space and still names the game analyzed.
 function roundTabs(
   {html}: ReportUi,
-  rounds: RoundReport[],
-  active: RoundReport,
+  rounds: RoundSlice[],
+  active: RoundSlice,
   select: (key: string) => void,
 ): Region {
   if (rounds.length < 2) return "";
@@ -212,7 +239,7 @@ function roundTabs(
 
 function profile(
   ui: ReportUi,
-  tab: ReportTab | undefined,
+  tab: LogTab | undefined,
   key: string | null,
   select: (key: string) => void,
 ): Region {
@@ -227,6 +254,7 @@ function profile(
         ${rounds.length < 2
           ? html`<p class="round-identity">${round.label}</p>`
           : roundTabs(ui, rounds, round, select)}
+        ${roundNotices(ui, round)}
         <p class="processing-note">
           Log contents are analyzed in your browser and never uploaded; a shared link carries the log
           address to the host serving this page.
@@ -334,7 +362,7 @@ function methodology({html}: ReportUi, result: Analysis | undefined): Region {
 
 // detail is the evidence itself: the rubric tables, the diagnostics, and the provenance of the log
 // they were read from.
-function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): Region {
+function detail(ui: ReportUi, tab: LogTab | undefined, key: string | null): Region {
   const result = tab?.result;
   const round = activeRound(tab, key);
   if (!result?.ok || !round) return "";
@@ -386,9 +414,9 @@ function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): R
  * reading order stays visible in the markdown rather than being buried in this file. */
 export function renderReportSections(
   ui: ReportUi,
-  tabsState: ReportTabsState | undefined,
+  tabsState: LogTabsState | undefined,
 ): {emptyState: Region; notices: Region; methodology: Region; profile: Region; detail: Region} {
-  const tab = activeReportTab(tabsState);
+  const tab = activeLogTab(tabsState);
 
   // Round selection swaps the two regions in place rather than travelling through tab state.
   //
@@ -401,6 +429,8 @@ export function renderReportSections(
   let detailNode: Region = "";
 
   const select = (key: string): void => {
+    // The round's caveats live inside the profile region, so they are swapped with it and cannot be
+    // left behind naming the round the page opened on.
     const nextProfile = profile(ui, tab, key, select);
     const nextDetail = detail(ui, tab, key);
     // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region

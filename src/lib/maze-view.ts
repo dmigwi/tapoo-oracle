@@ -9,7 +9,7 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { cellKey, isMove } from "./log-contract"
+import { cellFromKey, getCellKey, isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, decayTally, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
@@ -51,8 +51,11 @@ const createHtmlElement = (
   return node;
 };
 
+// cellXY is the key's coordinates plus where they land on the canvas. cellFromKey does the reading -
+// this file used to split the string itself, which is the duplication that let a key and a drawing
+// disagree about what row meant.
 const cellXY = (cell: CellKey): {row: number; col: number; x: number; y: number} => {
-  const [row = 0, col = 0] = cell.split(",").map(Number);
+  const {row, col} = cellFromKey(cell);
   return {row, col, x: col * CELL, y: row * CELL};
 };
 
@@ -146,7 +149,7 @@ function hitLayer(maze: Maze): SVGElement {
       const rect = createSvgElement("rect", {
         x: col * CELL, y: row * CELL, width: CELL, height: CELL, fill: "transparent"
       });
-      rect.setAttribute("data-cell", cellKey(row, col));
+      rect.setAttribute("data-cell", getCellKey({row, col}));
       layer.append(rect);
     }
   }
@@ -179,7 +182,7 @@ function scrim(cell: CellKey, radius: number): SVGElement {
       if (Math.abs(r - row) + Math.abs(c - col) <= radius) continue;
       const rect = createSvgElement("rect", {x: c * CELL, y: r * CELL, width: CELL, height: CELL});
       rect.setAttribute("class", "maze-lens-out");
-      rect.setAttribute("data-cell", cellKey(r, c));
+      rect.setAttribute("data-cell", getCellKey({row: r, col: c}));
       layer.append(rect);
     }
   }
@@ -987,7 +990,7 @@ export function createMazeReplay(report: Report): HTMLElement {
     if (from === null) return;
     const {row, col} = cellXY(from);
     const [rowStep, colStep] = step;
-    const next = cellKey(row + rowStep, col + colStep);
+    const next = getCellKey({row: row + rowStep, col: col + colStep});
     if (active.maze?.exits.has(next)) focusCell(next);
   });
 

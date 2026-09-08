@@ -11,9 +11,9 @@
 //
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
-import {MOVES, cellKey, isMove, stepFrom} from "./geometry";
+import {MOVES, getCellKey, isMove, stepFrom} from "./geometry";
 import {fnv1a64Checksum} from "./utils";
-import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} from "./types";
+import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, OpenCellExits, Result} from "./types";
 
 // --- Rendered grid geometry ---
 
@@ -34,7 +34,10 @@ export function cellFromGridPoint(point: {x?: number; y?: number} | null | undef
     return null;
   }
 
-  return cellKey(Math.floor((y - 1) / RENDER_CELL_STEP), Math.floor((x - 1) / RENDER_CELL_STEP));
+  return getCellKey({
+    row: Math.floor((y - 1) / RENDER_CELL_STEP),
+    col: Math.floor((x - 1) / RENDER_CELL_STEP),
+  });
 }
 
 // isOpen reports whether a rendered token is a gap rather than a wall.
@@ -91,9 +94,9 @@ export function decodeEncodedMaze(encoded: EncodedMaze | null | undefined): Resu
 
 // mazeFromDecodedGrid reduces the rendered token grid to the logical wall graph the report reasons about.
 //
-// The result is deliberately the same shape as buildContext's context.exits - Map of "row,col" to a Set
-// of move names - so a cell's true exits and the exits the agent was actually shown can be compared
-// directly, which is the whole point of drawing the maze beside the profile.
+// The result is OpenCellExits, the same type buildContext's context.exits carries, so a cell's true
+// exits and the exits the agent was actually shown can be compared directly - which is the whole point
+// of drawing the maze beside the profile.
 function mazeFromDecodedGrid(
   grid: string[][],
   dimensions: EncodedMaze["dimensions"],
@@ -112,7 +115,7 @@ function mazeFromDecodedGrid(
     return {ok: false, error: `Encoded maze does not match its ${rows}x${cols} dimensions.`};
   }
 
-  const exits = new Map<CellKey, Set<Move>>();
+  const exits: OpenCellExits = new Map();
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
       const y = RENDER_CELL_STEP * row + 1;
@@ -123,7 +126,7 @@ function mazeFromDecodedGrid(
           open.add(move);
         }
       }
-      exits.set(cellKey(row, col), open);
+      exits.set(getCellKey({row, col}), open);
     }
   }
 

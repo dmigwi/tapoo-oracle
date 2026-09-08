@@ -17,14 +17,15 @@
 
 import type {
   CellKey,
+  OpenCellExits,
   TurnReports,
   EncodedMaze,
-  Move,
+  GameRound,
   LogWarning,
+  MazeResult,
   AssistantMessage,
   ResponseUsage,
   LogEntry,
-  LogParseResult,
   LogTextResult,
   TapooLog,
 } from "./types";
@@ -34,7 +35,7 @@ import {indexLog} from "./log-index";
 import {cellFromGridPoint, mazeFromEncoded} from "./maze";
 // Imported as well as re-exported below: a re-export puts a name on this module's surface without
 // putting it in scope, and traversalPayloadWarnings needs to call them.
-import {cellFromLogged, isMove, statusesFromLogged, stepFrom} from "./geometry";
+import {cellFromKey, cellFromLogged, cellKeyFromLogged, statusesFromLogged, stepFrom} from "./geometry";
 
 export {
   AGENT_API_MODE,
@@ -52,11 +53,13 @@ import {AGENT_API_MODE, LOG_ENVELOPE_NAME, LOG_EVENTS, LOG_LEVELS} from "./log-e
 // Re-exported: every caller of these is reading the log contract, and that is still where they look.
 export {
   MOVES,
+  cellFromKey,
   cellFromLogged,
-  cellKey,
+  cellKeyFromLogged,
   classifyTraversalSpeed,
+  getCellKey,
   isMove,
-  movesFromLogged,
+  openMovesFromLogged,
   statusesFromLogged,
   stepFrom,
 } from "./geometry";
@@ -229,15 +232,251 @@ function isLogEntry(value: unknown): value is LogEntry {
   );
 }
 
-/** parseTapooLogExport validates a parsed JSON value against the envelope contract and returns a
- * discriminated result rather than throwing, because the failure is reported to a person: the app
- * renders it beside the input the reader typed.
+
+// unreadableResponseWarnings reports responses whose body this contract could not read at all.
+//
+// This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
+// predictions and zero turns because every response was written in a provider shape the contract did
+// not know, and nothing said so: each one was counted as an "empty response", which is a thing that
+// legitimately happens, and 719 of them in a row looked no different from 719 quiet failures.
+//
+// The signal is precise rather than heuristic. Across every real log to hand - Ollama and OpenAI,
+// 1,744 responses - not one has an unreadable *shape*; the 49 blank ones all have a readable message
+// holding no text, which is a model stopping early and not a contract gap. So a single unreadable body
+// means a shape this file does not handle, and that is worth saying on the first occurrence.
+//
+// Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
+// but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
+function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
+  const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
+  const unreadable = responses.filter((entry) => {
+    const details = entry.details;
+    const payload = details !== null && typeof details === "object" && "payload" in details
+      ? details.payload
+      : null;
+    return assistantMessage(payload) === null;
+  }).length;
+
+  if (unreadable === 0) {
+    return [];
+  }
+
+  const all = unreadable === responses.length;
+  return [{
+    impact: "inaccurate",
+    message:
+      `${unreadable} of ${responses.length} model ${responses.length === 1 ? "response" : "responses"} ` +
+      `could not be read: the body is not in a shape this analyzer recognises. ` +
+      `${all ? "No prediction in this log was scored" : "Those turns were not scored"}, so a capability ` +
+      "answered NO may only mean the evidence for it was unreadable.",
+  }];
+}
+
+// traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
+//
+// The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
+// be drawn as fact. `content_checksum` is fnv1a64Checksum of the content Tapoo actually sent - not of
+// the compacted form the log keeps - so it cannot be checked against what is on disk directly. It can be
+// checked by rebuilding the original, which every field needed for is either in the record or on the
+// round's "Agent level started." entry.
+//
+// Verified byte-exact against a real export: the key order, the compact separators, and cellType's
+// precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
+//
+// Given one round's entries, by parseGameRound. It still runs a cursor rather than assuming a single
+// maze: a group keyed game/level holds a replay of that level too, and each opening resets the facts the
+// reconstruction needs. The cursor also predates the split - it used to walk the whole log - which is
+// why the per-round call needs no other change.
+//
+// Checked when the round is opened rather than when its maze is drawn: a damaged payload is reported
+// once, above the report, instead of being discovered by whoever happens to scrub to the turn holding
+// it.
+function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
+  const warnings: LogWarning[] = [];
+
+  let exits: OpenCellExits | null = null;
+  let startCell: CellKey | null = null;
+  let destinationCell: unknown = null;
+  let historyWindowRadius: unknown = null;
+  let damaged = 0;
+  let firstDamaged: string | null = null;
+
+  const cellTypeOf = (cell: CellKey): string => {
+    // start-cell and target-cell override the structural type: cell 0,0 of the snapshot log has one
+    // exit and would read dead-end, and Tapoo writes start-cell.
+    if (cell === startCell) return "start-cell";
+    if (cell === cellKeyFromLogged(destinationCell)) return "target-cell";
+    const open = exits?.get(cell)?.size ?? 0;
+    if (open <= 1) return "dead-end";
+    return open === 2 ? "corridor" : "junction";
+  };
+
+  for (const entry of entries) {
+    const details = asRecord(entry.details);
+
+    if (entry.payload === LOG_EVENTS.levelStarted) {
+      const built = mazeFromEncoded(details.maze as EncodedMaze);
+      exits = built.ok ? built.maze.exits : null;
+      startCell = cellFromGridPoint(asRecord(details.startPosition));
+      destinationCell = details.destinationCell;
+      historyWindowRadius = details.historyWindowRadius;
+      continue;
+    }
+
+    for (const message of asArray(details.messages).map(asRecord)) {
+      if (message.role !== "tool" || typeof message.content !== "string") continue;
+      const checksum = message.content_checksum;
+      // Verify only when the round supplied every input the reconstruction needs.
+      //
+      // The checksum covers the payload Tapoo sent, which carries destinationCell and
+      // historyWindowRadius - and compaction strips both, so they can only come from the round's
+      // "Agent level started." entry. Without one, JSON.stringify simply omits the keys and the rebuilt
+      // text is a different string, so *every* payload in the round would fail and an otherwise sound
+      // log would be stamped inaccurate from top to bottom.
+      //
+      // A missing input is not evidence of damage. It means we cannot check, which is silence.
+      if (
+        typeof checksum !== "string" ||
+        exits === null ||
+        destinationCell === null ||
+        destinationCell === undefined ||
+        typeof historyWindowRadius !== "number"
+      ) {
+        continue;
+      }
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(message.content);
+      } catch {
+        continue;
+      }
+      const body = asRecord(payload);
+      if (!Array.isArray(body.filteredTraversalHistory)) continue;
+
+      const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
+        const key = cellKeyFromLogged(record.cell) ?? "0,0";
+        const openMoves: Record<string, unknown> = {};
+        for (const [move, status] of statusesFromLogged(record.openMoves)) {
+          openMoves[move] = {...cellFromKey(stepFrom(key, move)), visitStatus: status};
+        }
+        return {
+          playerName: record.playerName,
+          cell: cellFromKey(key),
+          cellType: cellTypeOf(key),
+          openMoves,
+        };
+      });
+
+      const rebuilt = JSON.stringify({
+        level: entry.level,
+        currentCell: cellFromLogged(body.currentCell) ?? {row: 0, col: 0},
+        destinationCell,
+        historyWindowRadius,
+        filteredTraversalHistory: history,
+      });
+
+      if (fnv1a64Checksum(rebuilt) !== checksum) {
+        damaged += 1;
+        firstDamaged ??= `turn ${entry.turn ?? "?"} of game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
+      }
+    }
+  }
+
+  if (damaged > 0) {
+    // Inaccurate, not incomplete: the maze still draws, and it draws visit colours taken from a payload
+    // that does not match what Tapoo says it sent. A reader would have no way to tell.
+    warnings.push({
+      impact: "inaccurate",
+      message:
+        damaged === 1
+          ? `A maze-structure payload at ${firstDamaged ?? "an unknown turn"} does not match its checksum, so the visit colours on the replay may not be what the agent was shown.`
+          : `${damaged} maze-structure payloads do not match their checksums, the first at ${firstDamaged ?? "an unknown turn"}, so the visit colours on the replay may not be what the agent was shown.`,
+    });
+  }
+
+  return warnings;
+}
+
+/** parseGameRound reads one round's entries: its maze, and whether what the log carries about that
+ * round arrived intact.
  *
- * The check is strict on identity (name, entry shape) and deliberately lenient on version, because
- * rejecting an unrecognized app version would make the analyzer useless against the very logs most
- * worth inspecting - those from a build that is ahead of it. Unknown versions analyze, with a
- * warning attached, rather than being refused. */
-export function parseTapooLogExport(value: unknown): LogParseResult {
+ * The round half of the contract. parseTapooLog answers for the file - is this a Tapoo export, are the
+ * entries readable - and this answers for a round: what its maze decodes to, and whether every
+ * get_maze_structure result still hashes to the `content_checksum` Tapoo stamped on it before
+ * compaction. Both are statements about *this* round, so they travel with it instead of pooling into a
+ * list that names the log; a caveat about game 2 sitting above game 1's report told a reader nothing
+ * they could act on and hid game 1's own.
+ *
+ * Called per round, and only for a round somebody is reading. The checksum reconstruction is the
+ * expensive half of reading a log - a JSON round-trip and a byte-at-a-time hash per tool result - and a
+ * file of fourteen rounds was paying all fourteen to show one.
+ *
+ * A maze that is absent or will not decode is *returned*, not warned about. It used to raise a warning
+ * too, and that put the same finding in two places: the replay already says so where the reader is
+ * looking at the empty space the traversal should occupy, and says it far better - what is missing,
+ * what it costs, and that the rubric verdicts still stand. Two notices for one fault made the round
+ * look twice as broken and gave the reader nothing the second one did not already have.
+ *
+ * The verdicts do stand either way: no rubric question reads this payload. The corridor questions
+ * answer from the exits the log's own tool results confirmed. */
+export function parseGameRound(entries: LogEntry[]): GameRound {
+  let maze: MazeResult | null = null;
+
+  // The first level-started maze, decoded with the round's own start and destination - the same two the
+  // replay decodes with, so what comes back here is what the replay would build.
+  //
+  // Per entry, not once, because a group keyed game/level holds a replay of that level too and each
+  // opening carries its own maze. The first is the one buildLevels reads, so it is the one returned.
+  for (const entry of entries) {
+    if (entry.payload !== LOG_EVENTS.levelStarted) continue;
+    if (maze !== null) break;
+
+    const details = asRecord(entry.details);
+    if (details.maze === null || details.maze === undefined) continue;
+
+    maze = mazeFromEncoded(details.maze as EncodedMaze, {
+      startCell: cellFromGridPoint(asRecord(details.startPosition)),
+      destinationCell: cellKeyFromLogged(details.destinationCell),
+    });
+  }
+
+  const warnings: LogWarning[] = [];
+  warnings.push(...traversalPayloadWarnings(entries));
+  return {maze, warnings};
+}
+
+/** parseTapooLogText is the ingress point: every log the app reads enters here, and nothing else in
+ * this module takes a log from outside.
+ *
+ * Text in, because text is what arrives - a fetch body, a paste, a file. The JSON parse and the
+ * envelope contract used to be two exported functions with a LogParseResult passed between them, and
+ * nothing ever called the second half on its own: it was one operation split across a type that existed
+ * only to carry the halfway point.
+ *
+ * Returns a discriminated result rather than throwing, because every failure here is reported to a
+ * person - the app renders it beside the input the reader typed - and none of them is exceptional.
+ *
+ * Strict on identity (name, entry shape) and deliberately lenient on version: refusing an unrecognized
+ * build would make the analyzer useless against exactly the logs most worth inspecting, those from a
+ * Tapoo newer than this app. An unknown version analyzes, with a warning attached.
+ *
+ * Its successful output is the normalized shape every downstream query uses: name, version, mode,
+ * downloadedAt, readable entries, and the index built over them. What it does *not* do is read a round -
+ * see parseGameRound. */
+export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
+  const trimmed = asTrimmedText(text);
+  if (!trimmed) {
+    return {ok: false, error: "Load a Tapoo agent-api log from an online JSON URL to begin."};
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed);
+  } catch (error) {
+    return {ok: false, error: `Not valid JSON: ${error instanceof Error ? error.message : String(error)}`};
+  }
+
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {ok: false, error: "Expected a Tapoo log export object at the top level."};
   }
@@ -300,21 +539,9 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
   const index = indexLog(entries);
 
   warnings.push(...unreadableResponseWarnings(entries));
-  warnings.push(...encodedMazeWarnings(entries));
-  warnings.push(...traversalPayloadWarnings(entries));
 
-  // Neither unknownEvents nor levelDisagreements is reported here, deliberately.
-  //
-  // These warnings reach the reader under "Read with care", which is for caveats about the *log* - a
-  // non-agent-api mode, a missing build version, entries that did not decode - things that genuinely
-  // bound how much the verdicts are worth. An event the rubric has no question for is a gap in this
-  // code, and a level contradicting its own payload is a bug in the producer. Neither is something a
-  // reader can act on, and showing them there asks someone to distrust a report over an unimplemented
-  // feature.
-  //
-  // The right home for "this event is not scored" is a fact question that scores it. Until there is
-  // one, both stay available on the index for tests and for whoever adds that question - which is how
-  // the two unscored events in a real glm-5.1 log were found in the first place.
+  // Only the export's own caveats. A round's are parseGameRound's; unknownEvents and
+  // levelDisagreements are deliberately not warnings at all - each says why.
 
   const log: TapooLog = {
     name: envelope.name,
@@ -325,247 +552,5 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
     index,
   };
 
-  return {ok: true, value: log, warnings};
-}
-
-// unreadableResponseWarnings reports responses whose body this contract could not read at all.
-//
-// This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
-// predictions and zero turns because every response was written in a provider shape the contract did
-// not know, and nothing said so: each one was counted as an "empty response", which is a thing that
-// legitimately happens, and 719 of them in a row looked no different from 719 quiet failures.
-//
-// The signal is precise rather than heuristic. Across every real log to hand - Ollama and OpenAI,
-// 1,744 responses - not one has an unreadable *shape*; the 49 blank ones all have a readable message
-// holding no text, which is a model stopping early and not a contract gap. So a single unreadable body
-// means a shape this file does not handle, and that is worth saying on the first occurrence.
-//
-// Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
-// but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
-function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
-  const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
-  const unreadable = responses.filter((entry) => {
-    const details = entry.details;
-    const payload = details !== null && typeof details === "object" && "payload" in details
-      ? details.payload
-      : null;
-    return assistantMessage(payload) === null;
-  }).length;
-
-  if (unreadable === 0) {
-    return [];
-  }
-
-  const all = unreadable === responses.length;
-  return [{
-    impact: "inaccurate",
-    message:
-      `${unreadable} of ${responses.length} model ${responses.length === 1 ? "response" : "responses"} ` +
-      `could not be read: the body is not in a shape this analyzer recognises. ` +
-      `${all ? "No prediction in this log was scored" : "Those turns were not scored"}, so a capability ` +
-      "answered NO may only mean the evidence for it was unreadable.",
-  }];
-}
-
-// traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
-//
-// The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
-// be drawn as fact. `content_checksum` is fnv1a64Checksum of the content Tapoo actually sent - not of
-// the compacted form the log keeps - so it cannot be checked against what is on disk directly. It can be
-// checked by rebuilding the original, which every field needed for is either in the record or on the
-// round's "Agent level started." entry.
-//
-// Verified byte-exact against a real export: the key order, the compact separators, and cellType's
-// precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
-//
-// Checked here rather than when the maze is drawn: this pass already walks every entry in order, so a
-// damaged payload is reported once, up front, instead of being discovered by whoever happens to scrub to
-// the turn holding it. It reads the round's facts from a running cursor rather than from
-// groupEntriesByRound - rounds.ts imports this module, so borrowing its grouping would close a cycle.
-function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
-  const warnings: LogWarning[] = [];
-
-  let exits: Map<CellKey, Set<Move>> | null = null;
-  let startCell: CellKey | null = null;
-  let destinationCell: unknown = null;
-  let historyWindowRadius: unknown = null;
-  let damaged = 0;
-  let firstDamaged: string | null = null;
-
-  const cellTypeOf = (cell: CellKey): string => {
-    // start-cell and target-cell override the structural type: cell 0,0 of the snapshot log has one
-    // exit and would read dead-end, and Tapoo writes start-cell.
-    if (cell === startCell) return "start-cell";
-    if (cell === cellFromLogged(destinationCell)) return "target-cell";
-    const open = exits?.get(cell)?.size ?? 0;
-    if (open <= 1) return "dead-end";
-    return open === 2 ? "corridor" : "junction";
-  };
-
-  for (const entry of entries) {
-    const details = asRecord(entry.details);
-
-    if (entry.payload === LOG_EVENTS.levelStarted) {
-      const built = mazeFromEncoded(details.maze as EncodedMaze);
-      exits = built.ok ? built.maze.exits : null;
-      startCell = cellFromGridPoint(asRecord(details.startPosition));
-      destinationCell = details.destinationCell;
-      historyWindowRadius = details.historyWindowRadius;
-      continue;
-    }
-
-    for (const message of asArray(details.messages).map(asRecord)) {
-      if (message.role !== "tool" || typeof message.content !== "string") continue;
-      const checksum = message.content_checksum;
-      // Verify only when the round supplied every input the reconstruction needs.
-      //
-      // The checksum covers the payload Tapoo sent, which carries destinationCell and
-      // historyWindowRadius - and compaction strips both, so they can only come from the round's
-      // "Agent level started." entry. Without one, JSON.stringify simply omits the keys and the rebuilt
-      // text is a different string, so *every* payload in the round would fail and an otherwise sound
-      // log would be stamped inaccurate from top to bottom.
-      //
-      // A missing input is not evidence of damage. It means we cannot check, which is silence.
-      if (
-        typeof checksum !== "string" ||
-        exits === null ||
-        destinationCell === null ||
-        destinationCell === undefined ||
-        typeof historyWindowRadius !== "number"
-      ) {
-        continue;
-      }
-
-      let payload: unknown;
-      try {
-        payload = JSON.parse(message.content);
-      } catch {
-        continue;
-      }
-      const body = asRecord(payload);
-      if (!Array.isArray(body.filteredTraversalHistory)) continue;
-
-      const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
-        const cell = cellFromLogged(record.cell);
-        const [row, col] = (cell ?? "0,0").split(",").map(Number);
-        const openMoves: Record<string, unknown> = {};
-        for (const [move, status] of statusesFromLogged(record.openMoves)) {
-          if (!isMove(move)) continue;
-          const [toRow, toCol] = stepFrom(cell ?? "0,0", move).split(",").map(Number);
-          openMoves[move] = {row: toRow, col: toCol, visitStatus: status};
-        }
-        return {
-          playerName: record.playerName,
-          cell: {row, col},
-          cellType: cellTypeOf(cell ?? "0,0"),
-          openMoves,
-        };
-      });
-
-      const current = cellFromLogged(body.currentCell);
-      const [currentRow, currentCol] = (current ?? "0,0").split(",").map(Number);
-      const rebuilt = JSON.stringify({
-        level: entry.level,
-        currentCell: {row: currentRow, col: currentCol},
-        destinationCell,
-        historyWindowRadius,
-        filteredTraversalHistory: history,
-      });
-
-      if (fnv1a64Checksum(rebuilt) !== checksum) {
-        damaged += 1;
-        firstDamaged ??= `turn ${entry.turn ?? "?"} of game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
-      }
-    }
-  }
-
-  if (damaged > 0) {
-    // Inaccurate, not incomplete: the maze still draws, and it draws visit colours taken from a payload
-    // that does not match what Tapoo says it sent. A reader would have no way to tell.
-    warnings.push({
-      impact: "inaccurate",
-      message:
-        damaged === 1
-          ? `A maze-structure payload at ${firstDamaged ?? "an unknown turn"} does not match its checksum, so the visit colours on the replay may not be what the agent was shown.`
-          : `${damaged} maze-structure payloads do not match their checksums, the first at ${firstDamaged ?? "an unknown turn"}, so the visit colours on the replay may not be what the agent was shown.`,
-    });
-  }
-
-  return warnings;
-}
-
-// encodedMazeWarnings validates the encoded maze each level-started entry should carry.
-//
-// This belongs with the rest of the contract validation rather than downstream in the view: whether a
-// payload in this JSON is present and well-formed is the same question as whether the envelope has a
-// mode or an entry has a payload, and it is answered once, here, on the way in.
-//
-// Validation is also what decides the impact, because it is what knows the difference:
-//
-//   absent  -> incomplete. The log never carried a maze. Nothing is wrong; a section is missing.
-//   invalid -> inaccurate. A payload was provided and it is not what it claims to be - a structure
-//              that fails its own checksum arrived damaged, and "damaged" is a statement about the
-//              data's accuracy, not about how much of it there is.
-//
-// Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
-// from the exits the log's own tool results confirmed.
-function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
-  const warnings: LogWarning[] = [];
-
-  for (const entry of entries) {
-    if (entry.payload !== LOG_EVENTS.levelStarted) continue;
-
-    const details = entry.details;
-    const maze = details !== null && typeof details === "object" && "maze" in details
-      ? details.maze
-      : null;
-    const round = `Game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
-    const cost = "so it has no traversal replay and no maze statistics";
-
-    if (maze === null || maze === undefined) {
-      warnings.push({
-        impact: "incomplete",
-        message: `${round} carries no encoded maze, ${cost}.`,
-      });
-      continue;
-    }
-
-    const built = mazeFromEncoded(maze as EncodedMaze);
-    if (!built.ok) {
-      warnings.push({
-        impact: "inaccurate",
-        message: `${round} carries an encoded maze that did not decode, ${cost}. ${built.error}`,
-      });
-    }
-  }
-
-  return warnings;
-}
-
-/** parseTapooLogText is the raw JSON ingress point: every log the app reads enters here. Its successful
- * output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
- * downloadedAt, and readable entries. */
-export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
-  const trimmed = asTrimmedText(text);
-  if (!trimmed) {
-    return {ok: false, error: "Load a Tapoo agent-api log from an online JSON URL to begin."};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch (error) {
-    return {ok: false, error: `Not valid JSON: ${error instanceof Error ? error.message : String(error)}`};
-  }
-
-  const result = parseTapooLogExport(parsed);
-  if (!result.ok) {
-    return {ok: false, error: result.error};
-  }
-
-  return {
-    ok: true,
-    source: sourceUrl ? {...result.value, sourceUrl} : result.value,
-    warnings: result.warnings,
-  };
+  return {ok: true, source: sourceUrl ? {...log, sourceUrl} : log, warnings};
 }

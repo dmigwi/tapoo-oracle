@@ -5,11 +5,11 @@
 // time, because a retry of a level is a different maze and merging the two would draw a path crossing
 // walls that exist in neither.
 
-import { LOG_EVENTS, cellFromLogged, isMove, stepFrom } from "./log-contract"
+import { LOG_EVENTS, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
 import { buildContext } from "./rubric-engine"
 import { asArray, asRecord } from "./utils"
-import type { CellKey, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
+import type { CellKey, Context, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
 
 // resolveActingAgents maps each turn number to the raw playerName that acted on it.
 //
@@ -156,9 +156,20 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
  * round with a brand-new maze, so keying on level would merge two mazes into one and draw a path
  * crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
  * exits from one maze must never leak into another. */
-export function buildLevels(entries: LogEntry[]): Level[] {
-  return groupEntriesByRound(entries).map(({key, entries: groupEntries}) => {
-    const context = buildContext(groupEntries, { label: key })
+export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
+  const groups = groupEntriesByRound(entries)
+
+  return groups.map(({key, entries: groupEntries}) => {
+    // The caller's context when it has one, which is now the common case: answerRubric has already
+    // built a context over exactly these entries, and building a second identical one was the largest
+    // avoidable cost of opening a log.
+    //
+    // Only when there is one group. With several, each needs its own - positions and exits from one
+    // maze leaking into another is the bug this file exists to prevent - and the caller's context spans
+    // all of them. Nothing here reads context.label, which is the only field that would differ.
+    const context = answered !== undefined && groups.length === 1
+      ? answered
+      : buildContext(groupEntries, { label: key })
     const started = asRecord(
       groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
     )
@@ -188,7 +199,7 @@ export function buildLevels(entries: LogEntry[]): Level[] {
         reported.length === submission.moves.length &&
         reported.every((move, index) => move === submission.moves[index])
 
-      const startCell = trusted ? cellFromLogged(record.lastReplayStartCell) : null
+      const startCell = trusted ? cellKeyFromLogged(record.lastReplayStartCell) : null
       const appliedIndex = record?.lastAppliedMoveIndex
       const applied = trusted
         ? typeof appliedIndex === "number"
@@ -341,7 +352,7 @@ export function buildLevels(entries: LogEntry[]): Level[] {
       // Read through the contract's reader rather than assumed to be {row, col}: the same field
       // arrives compacted as [row, col] in a downloaded log, and reading it directly is what left the
       // destination undrawn and the shortest route reported as "no route found".
-      destinationCell: cellFromLogged(started.destinationCell),
+      destinationCell: cellKeyFromLogged(started.destinationCell),
       historyWindowRadius:
         typeof started.historyWindowRadius === "number" ? started.historyWindowRadius : null,
       endCell,

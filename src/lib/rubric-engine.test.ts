@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {answerRubric} from "./report"
+import {buildLevels} from "./rounds"
 import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
-import type {GroupResult, LogEntry, LogLevel, Report} from "./types"
+import type {GroupResult, Level, LogEntry, LogLevel, Report} from "./types"
 import {at, must} from "./test-support";
 
 // A log is a sequence of entries, and every question below is answered from what those entries do or
@@ -87,6 +89,51 @@ describe("parsePrediction", () => {
   it("returns null for empty or absent content", () => {
     expect(parsePrediction("   ")).toBeNull()
     expect(parsePrediction(undefined)).toBeNull()
+  })
+})
+
+// The context answerRubric builds is handed to buildLevels instead of a second identical one being
+// built over the same entries. That is only sound if the two produce the same levels, so this pins it
+// against the real fixture rather than trusting the argument.
+describe("buildLevels reusing the caller's context", () => {
+  // A Level carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
+  // compares function identity and fails on two runs that agree completely. Projected to data instead.
+  const shape = (levels: Level[]) =>
+    levels.map((level) => ({
+      ...level,
+      observedExits: [...level.observedExits].map(([cell, moves]) => [cell, [...moves].sort()]),
+      visitStatusAfterTurn: level.visitStatusAfterTurn
+        .ascending()
+        .map(([turn, cells]) => [turn, [...cells]]),
+    }))
+
+  it("produces the same levels whether or not it is given one", () => {
+    const entries = fixtureData.entries as LogEntry[]
+    const context = buildContext(entries, {label: "fixture"})
+
+    expect(shape(buildLevels(entries, context))).toEqual(shape(buildLevels(entries)))
+  })
+
+  // The reuse is refused when the entries hold more than one round: the caller's context spans all of
+  // them, and a level built from it would carry another maze's positions and exits.
+  it("ignores a context that spans more than one round", () => {
+    // Each round submits its own move, so a context spanning both would give round 1 round 2's turn -
+    // exactly the leak buildLevels exists to prevent. With one submission each, a spanning context
+    // hands every level two turns instead of one.
+    // Written out rather than through `entry` above, which pins level and game to 1.
+    const at = (game: number, level: number, turn: number, payload: string, details?: unknown): LogEntry =>
+      ({epochMs: (clock += 1000), time: "2026-08-31T09-00-00+02-00", level, game, turn, log: "info", payload, details})
+    const round = (game: number, level: number, move: string) => [
+      at(game, level, 0, LOG_EVENTS.levelStarted, {level}),
+      at(game, level, 1, LOG_EVENTS.response, {payload: {message: {content: `{"moves":["${move}"]}`}}}),
+    ]
+    const twoRounds = [...round(1, 1, "MoveUp"), ...round(1, 2, "MoveDown")]
+    const spanning = buildContext(twoRounds, {label: "two"})
+
+    const perRound = shape(buildLevels(twoRounds))
+    expect(perRound).toHaveLength(2)
+    expect(perRound.map((level) => level.turns.length)).toEqual([1, 1])
+    expect(shape(buildLevels(twoRounds, spanning))).toEqual(perRound)
   })
 })
 

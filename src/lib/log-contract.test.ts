@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, cellKey, classifyTraversalSpeed, parseTapooLogExport, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {LogEntry} from "./types"
-import {at, expectErr, expectOk, messagesOf} from "./test-support";
+import {groupEntriesByRound} from "./rounds"
+import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
-// a numeric payload, an unknown level - which is exactly the shape parseTapooLogExport is asked to
+// a numeric payload, an unknown level - which is exactly the shape parseTapooLogText is asked to
 // reject. Typing the overrides as a valid entry would make those cases unwriteable.
 const entry = (over: Record<string, unknown> = {}) => ({
   epochMs: 1788000000000,
@@ -31,12 +32,16 @@ const envelope = (over = {}) => ({
   ...over,
 })
 
+// Every parse goes in through text, because that is the only way in: the envelope contract used to be a
+// second exported function taking already-parsed JSON, and nothing but this file ever called it so.
+const parse = (value: unknown) => parseTapooLogText(JSON.stringify(value))
+
 describe("maze geometry", () => {
   it("steps a cell by each move's delta", () => {
-    expect(stepFrom(cellKey(2, 3), "MoveUp")).toBe("1,3")
-    expect(stepFrom(cellKey(2, 3), "MoveDown")).toBe("3,3")
-    expect(stepFrom(cellKey(2, 3), "MoveLeft")).toBe("2,2")
-    expect(stepFrom(cellKey(2, 3), "MoveRight")).toBe("2,4")
+    expect(stepFrom(getCellKey({row: 2, col: 3}), "MoveUp")).toBe("1,3")
+    expect(stepFrom(getCellKey({row: 2, col: 3}), "MoveDown")).toBe("3,3")
+    expect(stepFrom(getCellKey({row: 2, col: 3}), "MoveLeft")).toBe("2,2")
+    expect(stepFrom(getCellKey({row: 2, col: 3}), "MoveRight")).toBe("2,4")
   })
 
   it("names exactly the four commands Tapoo accepts", () => {
@@ -54,7 +59,7 @@ describe("maze geometry", () => {
 })
 
 // Both logged shapes carry the status and both must be read: compacted logs write [move, status] pairs,
-// uncompacted ones nest it in the value. movesFromLogged drops it from each on purpose - it wants exits.
+// uncompacted ones nest it in the value. openMovesFromLogged drops it from each on purpose - it wants exits.
 describe("statusesFromLogged", () => {
   it("reads the compacted [move, status] pairs", () => {
     expect(statusesFromLogged([["MoveUp", "explored"], ["MoveDown", "oscillating"]])).toEqual([
@@ -82,6 +87,19 @@ describe("statusesFromLogged", () => {
     expect(statusesFromLogged("MoveUp")).toEqual([])
     expect(statusesFromLogged([["MoveUp"], 42, null])).toEqual([])
   })
+
+  // The move is narrowed here so a caller can hand it straight to stepFrom. A name the maze cannot
+  // apply is dropped at the parse rather than passed on for every caller to guard against - which is
+  // what they used to do, each with its own isMove check beside its own call.
+  it("drops a name that is not one of the four commands, in either shape", () => {
+    expect(statusesFromLogged([["MoveSideways", "explored"], ["MoveUp", "explored"]])).toEqual([
+      ["MoveUp", "explored"],
+    ])
+    expect(statusesFromLogged({
+      Teleport: {row: 9, col: 9, visitStatus: "explored"},
+      MoveDown: {row: 1, col: 0, visitStatus: "explored"},
+    })).toEqual([["MoveDown", "explored"]])
+  })
 })
 
 describe("classifyTraversalSpeed", () => {
@@ -105,14 +123,14 @@ describe("classifyTraversalSpeed", () => {
   )
 })
 
-describe("parseTapooLogExport", () => {
+describe("parseTapooLogText", () => {
   it("accepts a well-formed export and normalizes what it carries", () => {
-    const result = parseTapooLogExport(envelope())
+    const result = parse(envelope())
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
-    expect(expectOk(result).value).toMatchObject({name: "tapoo", version: "2.5.1", mode: AGENT_API_MODE})
-    expect(expectOk(result).value.entries).toHaveLength(1)
+    expect(expectOk(result).source).toMatchObject({name: "tapoo", version: "2.5.1", mode: AGENT_API_MODE})
+    expect(expectOk(result).source.entries).toHaveLength(1)
   })
 
   it.each([
@@ -122,7 +140,7 @@ describe("parseTapooLogExport", () => {
     ["another tool's JSON", {name: "something-else", entries: []}, /Not a Tapoo log export/],
     ["a missing entries array", {name: LOG_ENVELOPE_NAME}, /missing its `entries` array/],
   ])("refuses %s", (_label, value, expected) => {
-    const result = parseTapooLogExport(value)
+    const result = parse(value)
 
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(expected)
@@ -132,7 +150,7 @@ describe("parseTapooLogExport", () => {
     // storage-logs writes stand-ins for records that failed to decode. A log of nothing but those has
     // no evidence in it, and answering the rubric from it would report "not observed" about a file
     // that was never readable.
-    const result = parseTapooLogExport(envelope({entries: [{epochMs: -1, log: "info"}]}))
+    const result = parse(envelope({entries: [{epochMs: -1, log: "info"}]}))
 
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(/no readable entries/)
@@ -141,15 +159,15 @@ describe("parseTapooLogExport", () => {
   it("analyzes an unknown version rather than refusing it", () => {
     // Refusing an unrecognized build would make the analyzer useless against exactly the logs most
     // worth inspecting - those from a Tapoo newer than this app.
-    const result = parseTapooLogExport(envelope({version: undefined}))
+    const result = parse(envelope({version: undefined}))
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).value.version).toBeNull()
+    expect(expectOk(result).source.version).toBeNull()
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/no Tapoo version/)
   })
 
   it("warns when the round was not agent-api, since the rubric describes no other", () => {
-    const result = parseTapooLogExport(envelope({mode: "human"}))
+    const result = parse(envelope({mode: "human"}))
 
     expect(result.ok).toBe(true)
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
@@ -163,11 +181,11 @@ describe("parseTapooLogExport", () => {
       "2 entries did not match the log entry shape and were skipped.",
     ],
   ])("counts %i skipped entries and agrees with itself grammatically", (_count, bad, expected) => {
-    const result = parseTapooLogExport(envelope({entries: [entry(), ...bad]}))
+    const result = parse(envelope({entries: [entry(), ...bad]}))
 
     expect(result.ok).toBe(true)
     expect(messagesOf(expectOk(result).warnings)).toContain(expected)
-    expect(expectOk(result).value.entries).toHaveLength(1)
+    expect(expectOk(result).source.entries).toHaveLength(1)
   })
 
   it.each([
@@ -176,9 +194,9 @@ describe("parseTapooLogExport", () => {
     ["no epochMs", {epochMs: undefined}],
     ["an unknown log level", {log: "trace"}],
   ])("drops an entry with %s", (_label, over) => {
-    const result = parseTapooLogExport(envelope({entries: [entry(), entry(over)]}))
+    const result = parse(envelope({entries: [entry(), entry(over)]}))
 
-    expect(expectOk(result).value.entries).toHaveLength(1)
+    expect(expectOk(result).source.entries).toHaveLength(1)
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/did not match the log entry shape/)
   })
 
@@ -191,10 +209,10 @@ describe("parseTapooLogExport", () => {
     delete older.turn
     delete older.level
     delete older.game
-    const result = parseTapooLogExport(envelope({entries: [older]}))
+    const result = parse(envelope({entries: [older]}))
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).value.entries).toHaveLength(1)
+    expect(expectOk(result).source.entries).toHaveLength(1)
     expect(expectOk(result).warnings).toEqual([])
   })
 })
@@ -255,10 +273,16 @@ describe("turnReports", () => {
 })
 
 describe("the traversal payload checksum", () => {
+  // Through the round parser, one round at a time, which is how the app reads it: the export parse no
+  // longer touches a checksum. Every round is asked here so the fixture's payloads are all covered -
+  // the app asks only for the round on screen.
   const checksumWarnings = (log: unknown): string[] => {
     const result = parseTapooLogText(JSON.stringify(log))
     if (!result.ok) throw new Error(`fixture did not parse: ${result.error}`)
-    return result.warnings.map((warning) => warning.message).filter((m) => m.includes("checksum"))
+    return groupEntriesByRound(result.source.entries)
+      .flatMap((round) => parseGameRound(round.entries).warnings)
+      .map((warning) => warning.message)
+      .filter((m) => m.includes("checksum"))
   }
 
   // The half that matters most: a false positive here would put an accuracy warning on every clean
@@ -370,7 +394,7 @@ describe("what reaches the reader as a warning", () => {
   // Neither is something the reader can act on, and both would read as a reason to distrust the report.
   it("says nothing about an event the rubric has no question for", () => {
     // Both sentences are real: they appear in a 2,004-entry glm-5.1 log and in no LOG_EVENTS entry.
-    const result = parseTapooLogExport(envelope({entries: [
+    const result = parse(envelope({entries: [
       entry(),
       entry({payload: "Malformed agent prediction response.", log: "warn"}),
       entry({payload: "Recovered after a connection-error retry.", log: "warn"}),
@@ -378,17 +402,17 @@ describe("what reaches the reader as a warning", () => {
 
     expect(expectOk(result).warnings).toEqual([])
     // Still readable entries, still analyzed - the events are simply not scored.
-    expect(expectOk(result).value.entries).toHaveLength(3)
+    expect(expectOk(result).source.entries).toHaveLength(3)
   })
 
   it("says nothing about a level that contradicts its own payload", () => {
-    const result = parseTapooLogExport(envelope({entries: [entry({log: "warn"})]}))
+    const result = parse(envelope({entries: [entry({log: "warn"})]}))
 
     expect(expectOk(result).warnings).toEqual([])
   })
 
   it("still reports the caveats that are about the log itself", () => {
-    const result = parseTapooLogExport(envelope({mode: "human", version: undefined}))
+    const result = parse(envelope({mode: "human", version: undefined}))
     const warnings = messagesOf(expectOk(result).warnings).join(" ")
 
     expect(warnings).toMatch(/not "agent-api"/)
@@ -396,13 +420,15 @@ describe("what reaches the reader as a warning", () => {
   })
 })
 
+// Moved off the export parse: whether a round's maze decodes is a statement about that round, and
+// parseGameRound is what answers it - for the round a reader opened, not for all of them at load.
+// Moved off the export parse: what a round's maze decodes to is a statement about that round, and
+// parseGameRound is what answers it - for the round a reader opened, not for all of them at load.
+//
+// It answers by *returning* the maze rather than warning about it. The replay already reports a maze
+// that will not decode, in the space the traversal should have occupied and with what the reader loses
+// by it; a second notice above the tabs added nothing and made one fault look like two.
 describe("the encoded maze payload", () => {
-  // Validating this is the same kind of question as validating the envelope's mode or an entry's
-  // payload - is what arrived what it claims to be - so it is answered here, on the way in, rather
-  // than discovered later by the view that tried to draw it.
-  //
-  // Validation is also what decides the impact, because it is what knows the difference between a
-  // payload that never came and one that came damaged.
   const REAL_MAZE = {
     index_chars: ["|", "---", "-", "   ", " ", "\n"],
     structure_checksum: "0x74af82cb14470b9d",
@@ -411,47 +437,51 @@ describe("the encoded maze payload", () => {
     dimensions: {numCols: 6, numRows: 4, area: 24},
   }
 
-  const started = (details: unknown) =>
-    envelope({entries: [entry({payload: LOG_EVENTS.levelStarted, details})]})
+  // One round's entries, which is what the round parser takes.
+  const started = (details: unknown) => [entry({payload: LOG_EVENTS.levelStarted, details})]
 
-  it("says nothing when the maze arrives intact", () => {
-    expect(expectOk(parseTapooLogExport(started({maze: REAL_MAZE}))).warnings).toEqual([])
+  it("hands back a maze that decodes, with the stats its start and destination imply", () => {
+    const {maze, warnings} = parseGameRound(started({
+      maze: REAL_MAZE,
+      startPosition: {x: 1, y: 1},
+      destinationCell: {row: 0, col: 5},
+    }))
+
+    expect(warnings).toEqual([])
+    expect(expectOk(must(maze, "a decoded maze")).stats.successPathCells).toBe(18)
   })
 
-  it("calls an absent maze incomplete: nothing is wrong, a section is missing", () => {
-    const warnings = expectOk(parseTapooLogExport(started({level: 1}))).warnings
+  it("hands back nothing for a round that carried no maze, and says nothing either", () => {
+    const {maze, warnings} = parseGameRound(started({level: 1}))
 
-    expect(warnings).toHaveLength(1)
-    expect(at(warnings, 0).impact).toBe("incomplete")
-    expect(at(warnings, 0).message).toMatch(/carries no encoded maze/)
-    expect(at(warnings, 0).message).toMatch(/no traversal replay and no maze statistics/)
+    expect(maze).toBeNull()
+    expect(warnings).toEqual([])
   })
 
-  it("calls a damaged maze inaccurate: a payload arrived and is not what it claims", () => {
-    // One character changed, so the structure no longer matches the checksum it carries.
+  // A structure that fails its own checksum arrived damaged. The failure travels on the result, where
+  // the replay reads it, rather than as a warning the reader meets twice.
+  it("hands back the failure for a damaged maze", () => {
     const damaged = {...REAL_MAZE, structure: `1${REAL_MAZE.structure.slice(1)}`}
-    const warnings = expectOk(parseTapooLogExport(started({maze: damaged}))).warnings
+    const {maze, warnings} = parseGameRound(started({maze: damaged}))
 
-    expect(warnings).toHaveLength(1)
-    expect(at(warnings, 0).impact).toBe("inaccurate")
-    expect(at(warnings, 0).message).toMatch(/did not decode/)
-    expect(at(warnings, 0).message).toMatch(/checksum/)
+    expect(expectErr(must(maze, "a decode attempt")).error).toMatch(/checksum/)
+    expect(warnings).toEqual([])
   })
 
-  it("calls a malformed maze inaccurate too", () => {
-    const warnings = expectOk(parseTapooLogExport(started({maze: {dimensions: {}}}))).warnings
-
-    expect(at(warnings, 0).impact).toBe("inaccurate")
+  it("hands back the failure for a malformed one too", () => {
+    expect(expectErr(must(parseGameRound(started({maze: {dimensions: {}}})).maze, "a decode attempt")))
+      .toHaveProperty("ok", false)
   })
 
-  it("names the round, so a multi-round log says which one", () => {
-    const warnings = expectOk(parseTapooLogExport(envelope({entries: [
+  // A group holds a replay of the same level, so more than one opening. buildLevels reads the first,
+  // so that is the one returned - the two must not disagree about which maze the round had.
+  it("returns the first opening's maze when a round was replayed", () => {
+    const {maze} = parseGameRound([
       entry({payload: LOG_EVENTS.levelStarted, details: {maze: REAL_MAZE}, game: 6, level: 54}),
-      entry({payload: LOG_EVENTS.levelStarted, details: {level: 55}, game: 6, level: 55}),
-    ]}))).warnings
+      entry({payload: LOG_EVENTS.levelStarted, details: {maze: {dimensions: {}}}, game: 6, level: 54}),
+    ])
 
-    expect(warnings).toHaveLength(1)
-    expect(at(warnings, 0).message).toMatch(/^Game 6 level 55 /)
+    expect(expectOk(must(maze, "a decoded maze")).stats.cells).toBe(24)
   })
 })
 
@@ -601,7 +631,7 @@ describe("a response this analyzer cannot read", () => {
   const response = (payload: unknown) => entry({payload: LOG_EVENTS.response, details: {payload}})
 
   it("says so, and says what it costs the verdicts", () => {
-    const result = parseTapooLogExport(envelope({entries: [
+    const result = parse(envelope({entries: [
       response({message: {content: '{"moves":["MoveUp"]}'}}),
       response({unknown_provider: {text: "hello"}}),
     ]}))
@@ -614,7 +644,7 @@ describe("a response this analyzer cannot read", () => {
   })
 
   it("says plainly when nothing at all was scored", () => {
-    const result = parseTapooLogExport(envelope({entries: [response({choices: "not a list"})]}))
+    const result = parse(envelope({entries: [response({choices: "not a list"})]}))
 
     expect(at(expectOk(result).warnings, 0).message).toMatch(/No prediction in this log was scored/)
   })
@@ -622,7 +652,7 @@ describe("a response this analyzer cannot read", () => {
   it("stays quiet for a response that is readable but blank", () => {
     // A model stopping early is not a contract gap. Both real logs contain these - 46 and 3 of them -
     // and warning about them would cry wolf on every long run.
-    const result = parseTapooLogExport(envelope({entries: [
+    const result = parse(envelope({entries: [
       response({message: {content: ""}, done_reason: "length"}),
       response({choices: [{finish_reason: "length", message: {content: ""}}]}),
     ]}))
@@ -631,7 +661,7 @@ describe("a response this analyzer cannot read", () => {
   })
 
   it("stays quiet for a tool-only response", () => {
-    const result = parseTapooLogExport(envelope({entries: [
+    const result = parse(envelope({entries: [
       response({message: {content: "", tool_calls: [{function: {name: "get_maze_structure"}}]}}),
     ]}))
 

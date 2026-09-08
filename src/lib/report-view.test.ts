@@ -6,10 +6,10 @@ import * as Inputs from "@observablehq/inputs"
 import {html} from "htl"
 import {describe, expect, it} from "vitest"
 
-import {analyzeLogText, createInitialReportTabs} from "./report-tabs"
-import {activeReportTab, renderReportSections, stampBuildAge} from "./report-view"
-import type {LogEntry, Region, ReportTab, ReportTabsState} from "./types"
-import {query, queryAll, rendered} from "./test-support";
+import {createInitialLogTabs, roundReportFor} from "./log-tabs"
+import {activeLogTab, renderReportSections, stampBuildAge} from "./report-view"
+import type {LogEntry, Region, LogTab, LogTabsState} from "./types"
+import {analyzeLogText, query, queryAll, rendered} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
 // those two, and a stub would be testing the stub's shape rather than the one that ships.
@@ -95,39 +95,39 @@ const twoRoundExport = JSON.stringify({
   ]
 })
 
-const twoRoundTab = (): ReportTab => {
+const twoRoundTab = (): LogTab => {
   const result = analyzeLogText(twoRoundExport, {label: "two-rounds.json"})
   expect(result.ok).toBe(true)
   return {id: "t2", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "two-rounds.json", status: "loaded", result}
 }
 
-const loadedTab = (): ReportTab => {
+const loadedTab = (): LogTab => {
   const result = analyzeLogText(logExport, {label: "gemma4.json"})
   expect(result.ok).toBe(true)
   return {id: "t1", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "gemma4.json", status: "loaded", result}
 }
 
-const stateWith = (...tabs: ReportTab[]): ReportTabsState =>
-  ({...createInitialReportTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
+const stateWith = (...tabs: LogTab[]): LogTabsState =>
+  ({...createInitialLogTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
 const text = (node: Region) => (node === "" ? "" : node.textContent ?? "")
 
-describe("activeReportTab", () => {
+describe("activeLogTab", () => {
   it("finds the tab the state marks active", () => {
-    const first = {id: "a"} as ReportTab
-    const second = {id: "b"} as ReportTab
-    expect(activeReportTab({tabs: [first, second], activeTabId: "b"} as ReportTabsState)).toBe(second)
+    const first = {id: "a"} as LogTab
+    const second = {id: "b"} as LogTab
+    expect(activeLogTab({tabs: [first, second], activeTabId: "b"} as LogTabsState)).toBe(second)
   })
 
   it("falls back to the first tab when the active id names none", () => {
-    const first = {id: "a"} as ReportTab
-    expect(activeReportTab({tabs: [first], activeTabId: "gone"} as ReportTabsState)).toBe(first)
+    const first = {id: "a"} as LogTab
+    expect(activeLogTab({tabs: [first], activeTabId: "gone"} as LogTabsState)).toBe(first)
   })
 
   it("survives a state that is not a tabs state at all", () => {
-    expect(activeReportTab(undefined as unknown as ReportTabsState)).toBeUndefined()
-    expect(activeReportTab({} as ReportTabsState)).toBeUndefined()
+    expect(activeLogTab(undefined as unknown as LogTabsState)).toBeUndefined()
+    expect(activeLogTab({} as LogTabsState)).toBeUndefined()
   })
 })
 
@@ -138,7 +138,7 @@ describe("renderReportSections", () => {
   })
 
   it("shows the how-to and nothing else before a report is loaded", () => {
-    const sections = renderReportSections(ui, createInitialReportTabs())
+    const sections = renderReportSections(ui, createInitialLogTabs())
 
     expect(text(sections.emptyState)).toMatch(/gist/i)
     // A page with no report must not render an empty profile shell around nothing.
@@ -266,10 +266,134 @@ describe("profile", () => {
   })
 })
 
+// The other half of the split: opening a log does not answer every round in it.
+describe("when a round is answered", () => {
+  const rounds = (tab: LogTab) => {
+    const result = tab.result
+    if (!result?.ok) throw new Error("fixture did not analyze")
+    return result.rounds
+  }
+
+  // A slice is entries and an identity. Nothing in it is a verdict, so building one costs no rubric
+  // pass - which is what lets a fourteen-round file open at the price of one.
+  it("carries unanswered slices out of the parse", () => {
+    const slices = rounds(twoRoundTab())
+
+    expect(slices.map((slice) => slice.label)).toEqual(["Game 2 \u00b7 Level 1", "Game 3 \u00b7 Level 2"])
+    for (const slice of slices) {
+      expect(slice).not.toHaveProperty("report")
+      expect(slice.entries.length).toBeGreaterThan(0)
+    }
+  })
+
+  // Memoized on the slice, so returning to a round is free and the view holds a stable object across
+  // renders rather than a fresh report on every scrub.
+  it("answers a round once, however often it is asked for", () => {
+    const [first, second] = rounds(twoRoundTab())
+    if (!first || !second) throw new Error("expected two rounds")
+
+    expect(roundReportFor(first)).toBe(roundReportFor(first))
+    expect(roundReportFor(second)).not.toBe(roundReportFor(first))
+  })
+
+  // And the answer is the round's own: verdicts built from that round's entries, caveats from that
+  // round's payloads.
+  it("answers each round from its own entries", () => {
+    const [first, second] = rounds(twoRoundTab())
+    if (!first || !second) throw new Error("expected two rounds")
+
+    expect(roundReportFor(first).report.levels).toHaveLength(1)
+    expect(roundReportFor(first).report.label).toMatch(/Game 2 \u00b7 Level 1$/)
+    expect(roundReportFor(second).report.label).toMatch(/Game 3 \u00b7 Level 2$/)
+  })
+})
+
+// The whole point of the parser split: a caveat about one round is shown with that round and nowhere
+// else, while a caveat about the file is shown whatever is open.
+describe("where a warning is attributed", () => {
+  // Round 2 carries a get_maze_structure result whose content no longer matches the checksum stamped on
+  // it. Round 1 carries nothing of the kind, so it has no caveat of its own.
+  //
+  // A damaged *maze* would not do: that is reported by the replay, in the space the traversal should
+  // have occupied, and deliberately not repeated here. A payload that fails its checksum has no such
+  // home - the maze still draws, and draws visit colours the log cannot vouch for.
+  const damagedSecondRound = (): LogTab => {
+    const parsed = JSON.parse(twoRoundExport) as {entries: Array<Record<string, unknown>>}
+    const started = parsed.entries.filter((e) => e.payload === "Agent level started.")
+    const second = started[1]
+    if (!second) throw new Error("fixture has no second round")
+    // The reconstruction only runs when the round stated how far the agent could see.
+    second.details = {...(second.details as object), historyWindowRadius: 2}
+
+    parsed.entries.push({
+      ...entry("Agent request.", {
+        messages: [{
+          role: "tool",
+          content: JSON.stringify({
+            currentCell: {row: 1, col: 1},
+            filteredTraversalHistory: [{playerName: "Katara", cell: {row: 1, col: 1}, openMoves: {}}],
+          }),
+          content_checksum: "0xdeadbeefdeadbeef",
+        }],
+      }, 6),
+      game: 3,
+      level: 2,
+    })
+
+    const result = analyzeLogText(JSON.stringify(parsed), {label: "two-rounds.json"})
+    expect(result.ok).toBe(true)
+    return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
+      label: "two-rounds.json", status: "loaded", result}
+  }
+
+  const mount = (tab: LogTab) => {
+    const sections = renderReportSections(ui, stateWith(tab))
+    const host = document.createElement("div")
+    for (const region of [sections.notices, sections.profile, sections.detail]) {
+      if (region !== "") host.append(region)
+    }
+    document.body.append(host)
+    return host
+  }
+
+  it("says nothing about the damaged round while the sound one is open", () => {
+    const host = mount(damagedSecondRound())
+
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 2 \u00b7 Level 1")
+    expect(host.textContent).not.toMatch(/does not match its checksum/)
+  })
+
+  it("says it once that round is opened, and names the round", () => {
+    const host = mount(damagedSecondRound())
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 3 \u00b7 Level 2")
+    expect(host.textContent).toMatch(/does not match its checksum/)
+    expect(query(host, ".notice-round-label").textContent).toBe("Game 3 \u00b7 Level 2")
+
+    // Under the tabs that select it, not up with the log's own caveats. Above them a reader met the
+    // round's name before knowing there were rounds to choose between.
+    const tabs = query(host, ".round-tabs")
+    const notice = query(host, ".notice-round")
+    expect(tabs.parentElement).toBe(notice.parentElement)
+    expect(tabs.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // And back again: the notice has to move with the round, or it keeps naming the one the page opened
+  // on - the same attribution bug in a smaller place.
+  it("takes the round's caveat away again when the reader leaves it", () => {
+    const host = mount(damagedSecondRound())
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+    queryAll<HTMLButtonElement>(host, ".round-tab")[0]?.click()
+
+    expect(host.textContent).not.toMatch(/does not match its checksum/)
+  })
+})
+
 describe("round tabs", () => {
   // Regions are attached to a document: selecting a round replaces them in place, and replaceWith
   // needs a parent. A detached render would pass every assertion below and do nothing on the page.
-  const mount = (tab: ReportTab) => {
+  const mount = (tab: LogTab) => {
     const sections = renderReportSections(ui, stateWith(tab))
     const host = document.createElement("div")
     for (const region of [sections.profile, sections.detail]) {
@@ -357,7 +481,7 @@ describe("detail", () => {
 
 describe("notices", () => {
   it("reports a tab that failed to load", () => {
-    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
+    const tab: LogTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
     const sections = renderReportSections(ui, stateWith(tab))
 
     expect(rendered(sections.notices).className).toBe("notice notice-error")
@@ -386,7 +510,7 @@ describe("notices", () => {
 })
 
 describe("methodology", () => {
-  const sectionsFor = (...tabs: ReportTab[]) => renderReportSections(ui, stateWith(...tabs))
+  const sectionsFor = (...tabs: LogTab[]) => renderReportSections(ui, stateWith(...tabs))
 
   it("explains how the report was made, once a report exists to explain", () => {
     const section = rendered(sectionsFor(loadedTab()).methodology)
@@ -405,11 +529,11 @@ describe("methodology", () => {
     // It used to be static markup in index.md, so an untouched page showed five stages describing the
     // treatment of evidence it did not have yet, directly above an empty state asking for a URL.
     expect(sectionsFor().methodology).toBe("")
-    expect(renderReportSections(ui, createInitialReportTabs()).methodology).toBe("")
+    expect(renderReportSections(ui, createInitialLogTabs()).methodology).toBe("")
   })
 
   it("renders nothing for a tab that failed to load", () => {
-    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
+    const tab: LogTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
 
     expect(sectionsFor(tab).methodology).toBe("")
   })

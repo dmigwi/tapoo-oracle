@@ -65,7 +65,10 @@ export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: s
 
     // One record per played round, carrying the encoded maze and the path walked through it. Kept
     // separate from the rubric answers above: this is evidence to look at, not a verdict.
-    levels: buildLevels(entries),
+    // The context this call already built, rather than a second identical one: answerRubric is
+    // handed one round's entries, so buildLevels would regroup them into the one group it already
+    // has and build the same context over the same entries again.
+    levels: buildLevels(entries, context),
   }
 }
 

@@ -1,3 +1,5 @@
+import {parseTapooLogText} from "./log-contract";
+import {buildReportAnalysis, roundReportFor} from "./log-tabs";
 import type {Analysis, Level, LogWarning, Region, Report} from "./types";
 
 // Helpers shared by the suites.
@@ -13,7 +15,7 @@ export function firstRound(result: Analysis): Report {
   const ok = expectOk(result);
   const round = ok.rounds[0];
   if (!round) throw new Error("analysis carries no rounds");
-  return round.report;
+  return roundReportFor(round).report;
 }
 
 /** Narrows a discriminated result to its success arm, failing the test if it is not one.
@@ -112,4 +114,25 @@ export function reportWith(...levels: Level[]): Report {
 /** The message text of each warning, for a test asserting on wording rather than on impact. */
 export function messagesOf(warnings: LogWarning[]): string[] {
   return warnings.map((warning) => warning.message);
+}
+
+/** analyzeLogText answers the rubric for a log given as raw text, skipping the download.
+ *
+ * A test fixture, and it lives here rather than in log-tabs.ts because nothing in the app calls it.
+ * The app's own path is a URL: loadTapooLogFromUrl fetches and parses, then buildReportAnalysis answers.
+ * A copy of that composition sat in log-tabs.ts describing itself as "the single entry point from
+ * raw text to a rendered result", which no production caller had ever used.
+ *
+ * It composes the same two steps the loaders do, so a suite that exercises it exercises the real
+ * pipeline - everything but the fetch, which is what a fixture on disk is standing in for. */
+export function analyzeLogText(
+  text: unknown,
+  {label = "online log", sourceUrl}: {label?: string; sourceUrl?: string} = {},
+): Analysis {
+  const result = parseTapooLogText(text, {sourceUrl});
+  if (!result.ok) {
+    return {ok: false, error: result.error};
+  }
+
+  return buildReportAnalysis(result.source, result.warnings, label);
 }

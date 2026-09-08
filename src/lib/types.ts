@@ -6,17 +6,41 @@
 
 // --- The log wire format ---
 
-/** A cell as a log records it. Downloaded logs compact `{row, col}` to `[row, col]`, so both shapes
- * are real and a reader must handle either. Writing this as a union is what forces every call site to
- * say which one it means - the alternative produced `"undefined,undefined"` keys in silence. */
-export type LoggedCell = {row: number; col: number} | [number, number];
+/** A cell's coordinates, validated - the shape to carry when row and column are what is actually
+ * wanted.
+ *
+ * A CellKey is a Map key and nothing more. Reaching row and column back out of one means splitting a
+ * string and coercing two numbers, at every place that needs them, with no type saying whether the
+ * result is trustworthy. Anything that has coordinates to work with should hold this instead and let
+ * getCellKey make the key at the moment a key is needed. */
+export type Cell = {row: number; col: number};
 
 /** A cell key, `"row,col"`. Cells travel as strings because they are Map and Set keys, and arrays
  * compare by identity. */
 export type CellKey = string;
 
+/** A cell as a log records it. Downloaded logs compact `{row, col}` to `[row, col]`, so both shapes
+ * are real and a reader must handle either. Writing this as a union is what forces every call site to
+ * say which one it means - the alternative produced `"undefined,undefined"` keys in silence.
+ *
+ * `cellFromLogged` narrows one of these to `Cell`; `getCellKey` accepts either and yields the key. */
+export type LoggedCell = Cell | readonly [number, number];
+
 /** The four commands Tapoo accepts. Anything else in a log is a move the maze cannot apply. */
 export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
+
+/** Which moves lead *out* of each cell - the open exits, keyed by cell.
+ *
+ * Two things wear this type and the whole point is that they are comparable: the exits a decoded maze
+ * *has*, and the exits a log's tool results say the agent was *shown*. Reading one against the other is
+ * why the maze is drawn beside the profile at all, and while they were spelled out separately at each
+ * declaration it was possible for one to drift - it did, as `Set<string>` against `Set<Move>`, and the
+ * comment claiming they matched was wrong for as long as that lasted.
+ *
+ * "Open" is the load-bearing word. A move absent from a cell's set is a wall - the set is the complete
+ * statement of where movement is possible from that cell, not a list of the ones anybody happened to
+ * record - so an absence here is evidence, and reading it as "not known" would invert the meaning. */
+export type OpenCellExits = Map<CellKey, Set<Move>>;
 
 /** How heavily a cell has been worked, as Tapoo grades it.
  *
@@ -163,10 +187,14 @@ export type WarningImpact = "inaccurate" | "incomplete";
 /** A caveat the reader is shown, carrying what it costs them. */
 export type LogWarning = {impact: WarningImpact; message: string};
 
-/** A parsed export, with any caveats the parse raised. Warnings travel with a *success*: a log can be
- * readable and still worth a caveat, and dropping them on the way out is how a caveat goes unsaid. */
-export type LogParseResult = Result<{value: TapooLog; warnings: LogWarning[]}>;
-/** The same, from raw text rather than a parsed object. */
+/** A parsed export, with any caveats the parse raised.
+ *
+ * Warnings travel with a *success*: a log can be readable and still worth a caveat, and dropping them
+ * on the way out is how a caveat goes unsaid.
+ *
+ * There was a second result type beside this one carrying the same pair, for the halfway point between
+ * parsing the JSON and checking the envelope. Nothing outside that one function ever held the halfway
+ * value, so the two steps - and the two types - are now one. */
 export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]}>;
 /** A share-link payload, or why the token could not be read. */
 export type PayloadResult = Result<{payload: string}>;
@@ -181,9 +209,8 @@ export type DecodedPayload = {ok: true; url: string} | {ok: false; error: string
 
 // --- Maze ---
 
-/** A decoded maze: its dimensions and, per cell, the moves that lead out of it. A move absent from a
- * cell's set is a wall - the exits are the complete statement of where movement is possible. */
-export type Maze = {rows: number; cols: number; exits: Map<CellKey, Set<Move>>};
+/** A decoded maze: its dimensions and, per cell, the moves that lead out of it. */
+export type Maze = {rows: number; cols: number; exits: OpenCellExits};
 
 /** Structural counts over a decoded maze.
  *
@@ -214,6 +241,13 @@ export type EncodedMaze = {
 
 /** A decoded maze with its grid and stats, or why decoding failed. */
 export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats}>;
+
+/** What reading one round's entries turns up: its maze, and the caveats about that round.
+ *
+ * Produced by parseGameRound. `maze` is the round's first level-started maze decoded against its own
+ * start and destination - null when the round carried none - and `warnings` are the round's alone,
+ * never the log's. */
+export type GameRound = {maze: MazeResult | null; warnings: LogWarning[]};
 
 // --- Rubric engine ---
 
@@ -267,7 +301,7 @@ export type Context = {
     cachedPromptTokens: number | null;
     finishReasons: Map<string, number>;
   };
-  exits: Map<CellKey, Set<string>>;
+  exits: OpenCellExits;
   /** Visit statuses keyed by the turn whose end they report - never by the turn that carried them, which
    * is one later. Not cumulative: a cell appears only where a payload named it, and the view carries the
    * last one forward. Key -1 is the state the round opened in. */
@@ -360,7 +394,7 @@ export type Level = {
   destinationCell: CellKey | null;
   historyWindowRadius: number | null;
   endCell: CellKey | null;
-  observedExits: Map<CellKey, Set<string>>;
+  observedExits: OpenCellExits;
   visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   turns: Turn[];
@@ -462,25 +496,38 @@ export type ModelOutput = {
   finishReasons: Array<[string, number]>;
 };
 
-/** One round's report, with the identity that names its tab. */
-export type RoundReport = {
-  /** `game/level`. Stable across renders, so it is what a tab selection stores. */
+/** One round's entries and the identity naming its round tab - everything the tab strip needs, and
+ * nothing that costs a rubric pass.
+ *
+ * This is what an Analysis carries, so opening a log of fourteen rounds does not answer fourteen
+ * rubrics to show one. A slice becomes a RoundReport when somebody looks at it. */
+export type RoundSlice = {
+  /** `game/level`. Stable across renders, so it is what a round-tab selection stores. */
   key: string;
   game: number | null;
   level: number | null;
-  /** "Game 2 · Level 1" - what the tab says. */
+  /** "Game 2 · Level 1" - what the round tab says. */
   label: string;
-  report: Report;
+  /** "gemma4.json - Game 2 · Level 1" - what the round's own report is named, so a warning or an error
+   * raised while answering names the round *and* the file it came from. Kept apart from `label`
+   * because the tab has the file above it already and repeating it there would not fit. */
+  reportLabel: string;
+  entries: LogEntry[];
 };
+
+/** A slice once it has been answered: the verdicts, the decoded maze, and the caveats about THIS
+ * round. Resolved on demand and memoized - see roundReportFor. */
+export type RoundReport = RoundSlice & {report: Report; round: GameRound};
 
 /** What a whole log analyzed to: its rounds, and the caveats a reader is owed. */
 export type Analysis = Result<{
   source: TapooLog;
   warnings: LogWarning[];
   /** The rounds this log recorded, in the order they were played. Never empty for a parsed log: a log
-   * that names no round at all still yields one round holding everything. Each carries its own rubric
-   * answers, because a verdict about one maze is not a verdict about the next one. */
-  rounds: RoundReport[];
+   * that names no round at all still yields one round holding everything. Unanswered: each is answered
+   * when it is opened, because a verdict about one maze is not a verdict about the next one and a
+   * reader is looking at one of them. */
+  rounds: RoundSlice[];
 }>;
 
 // --- Maze replay ---
@@ -497,7 +544,7 @@ export type LevelModel = {
   startCell: CellKey | null;
   destinationCell: CellKey | null;
   endCell: CellKey | null;
-  observedExits: Map<CellKey, Set<string>>;
+  observedExits: OpenCellExits;
   visitStatusAfterTurn: VisitStatusByTurn;
   /** How far from its current cell the agent could see its own traversal history, as a Manhattan
    * radius in cells. It bounds what the agent knew when it chose each move, so it belongs beside the
@@ -526,29 +573,29 @@ export type Frame = {
   turn: Turn | null;
 };
 
-// --- Report tabs ---
+// --- Log tabs ---
 
 /** Where a tab stands: nothing loaded, a report ready, or a load that failed. */
-export type TabStatus = "empty" | "loaded" | "error";
+export type LogTabStatus = "empty" | "loaded" | "error";
 /** Where the URL being typed into the add-tab field stands. */
 export type DraftStatus = "empty" | "loading" | "error";
 
 /** One loaded log and its report. `loadedUrl` is what actually produced `result`, which is not always
  * `url` - the field can be edited after a load, and comparing the two is what tells the control the
  * displayed report is stale. */
-export type ReportTab = {
+export type LogTab = {
   id: string;
   url: string;
   label: string;
-  status: TabStatus;
+  status: LogTabStatus;
   loadedUrl?: string;
   result?: Analysis;
   error?: string;
 };
 
 /** The whole control's state, replaced wholesale on every change rather than mutated in place. */
-export type ReportTabsState = {
-  tabs: ReportTab[];
+export type LogTabsState = {
+  tabs: LogTab[];
   activeTabId: string | null;
   isAdding: boolean;
   draftUrl: string;
@@ -561,7 +608,7 @@ export type ReportTabsState = {
 };
 
 /** The Observable "viewof" protocol: the element the page binds to carries the current value. */
-export type ReportTabsInput = HTMLElement & {value: ReportTabsState};
+export type LogTabsInput = HTMLElement & {value: LogTabsState};
 
 // --- The injected Observable globals ---
 

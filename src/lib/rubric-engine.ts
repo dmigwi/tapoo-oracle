@@ -23,9 +23,9 @@ import {
   assistantMessage,
   responseUsage,
   stepFrom,
-  cellFromLogged,
+  cellKeyFromLogged,
   isMove,
-  movesFromLogged,
+  openMovesFromLogged,
   statusesFromLogged,
   turnReports,
 } from "./log-contract"
@@ -39,6 +39,7 @@ import type {
   Context,
   GroupKind,
   LogEntry,
+  Move,
   Outcome,
   Submission,
   RubricGroup,
@@ -215,14 +216,14 @@ export function buildContext(
           const statuses = new Map<CellKey, VisitStatus>()
 
           for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
-            const cell = cellFromLogged(record.cell)
+            const cell = cellKeyFromLogged(record.cell)
             if (cell) {
-              context.exits.set(cell, movesFromLogged(record.openMoves))
+              context.exits.set(cell, openMovesFromLogged(record.openMoves))
 
               // Resolved through the move, because the status belongs to the cell the move reaches -
               // never to the cell whose entry carries it.
               for (const [move, status] of statusesFromLogged(record.openMoves)) {
-                if (isMove(move)) statuses.set(stepFrom(cell, move), status)
+                statuses.set(stepFrom(cell, move), status)
               }
             }
           }
@@ -237,7 +238,7 @@ export function buildContext(
 
         if ("currentCell" in payload) {
           noteTool("get_maze_structure")
-          const cell = cellFromLogged(payload.currentCell)
+          const cell = cellKeyFromLogged(payload.currentCell)
           if (cell) {
             // Consecutive identical readings are one arrival, not several.
             if (context.positions.at(-1) !== cell) {
@@ -437,7 +438,7 @@ function findCell(timeline: Context["timeline"], from: number, direction: 1 | -1
 
 // --- Shared predicates ---
 
-const exitsOf = (context: Context, cell: CellKey | null | undefined): Set<string> | null =>
+const exitsOf = (context: Context, cell: CellKey | null | undefined): Set<Move> | null =>
   (cell === null || cell === undefined ? null : context.exits.get(cell)) ?? null
 
 const isCorridor = (context: Context, cell: CellKey | null | undefined): boolean =>
@@ -519,7 +520,9 @@ function stateAwareness(context: Context): Record<string, boolean> {
     Q1: checkable.every((entry) => {
       const known = exitsOf(context, entry.before)
       const first = entry.moves[0]
-      return known !== null && typeof first === "string" && known.has(first)
+      // isMove rather than a string check: the exits set holds Moves, so a name the maze cannot apply
+      // could never be a member of it.
+      return known !== null && isMove(first) && known.has(first)
     }),
   }
 }
@@ -656,15 +659,15 @@ function availableContextDisregard(context: Context): Record<string, boolean> {
         return false
       }
       // A move that is not among the cell's stated exits disregards the context - that is the question.
-      if (typeof move !== "string" || !known.has(move)) {
+      // isMove is part of the same test rather than a separate branch after it: the exits set holds
+      // Moves, so a name the maze cannot apply is not in it and is not something the cell offered.
+      //
+      // There used to be a second branch here for a move the cell *did* list that was not a Tapoo
+      // command - the agent used what it was told, so nothing was disregarded, and the walk stopped
+      // rather than inventing a verdict. openMovesFromLogged now drops such a name at the parse, so a
+      // cell can no longer be recorded as offering one and the branch had nothing left to catch.
+      if (!isMove(move) || !known.has(move)) {
         return true
-      }
-      // A move the cell *does* list but that is not a command Tapoo accepts is a different matter: the
-      // agent used what it was told, so nothing was disregarded, but the walk cannot continue either.
-      // Stop checking this submission rather than inventing a verdict - the rubric answers NO on absent
-      // evidence. Before, this reached stepFrom and threw the whole report away.
-      if (!isMove(move)) {
-        break
       }
       cell = stepFrom(cell, move)
     }

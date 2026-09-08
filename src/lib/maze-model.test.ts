@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {turnReports} from "./log-contract"
-import {analyzeLogText} from "./report-tabs"
+
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
 import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn} from "./types"
-import {firstRound, must, reportWith} from "./test-support";
+import {analyzeLogText, firstRound, must, reportWith} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],

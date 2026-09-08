@@ -1,14 +1,14 @@
 import {describe, expect, it} from "vitest"
 
-import {cellFromLogged, movesFromLogged} from "./log-contract"
+import {cellFromKey, cellFromLogged, cellKeyFromLogged, getCellKey, openMovesFromLogged} from "./log-contract"
 import {mazeReplayModel} from "./maze-model"
-import {createInitialReportTabs, deleteReportTab, trimReportTabLabel} from "./report-tabs"
+import {createInitialLogTabs, deleteLogTab, trimLogTabLabel} from "./log-tabs"
 import {buildLevels} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
 import {at, must, reportWith} from "./test-support"
 import {asTrimmedText} from "./utils"
-import type {LogEntry, ReportTabsState} from "./types"
+import type {LogEntry, LogTabsState} from "./types"
 
 // Regressions for the defects the TypeScript conversion exposed.
 //
@@ -70,21 +70,50 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   })
 
   it("reads both shapes through one reader, and rejects anything else", () => {
-    expect(cellFromLogged([2, 3])).toBe("2,3")
-    expect(cellFromLogged({row: 2, col: 3})).toBe("2,3")
+    expect(cellFromLogged([2, 3])).toEqual({row: 2, col: 3})
+    expect(cellFromLogged({row: 2, col: 3})).toEqual({row: 2, col: 3})
     expect(cellFromLogged({row: "2", col: 3})).toBeNull()
     expect(cellFromLogged(["2", 3])).toBeNull()
     expect(cellFromLogged(null)).toBeNull()
     expect(cellFromLogged("2,3")).toBeNull()
   })
 
+  // Coordinates out, not a key: a caller that wants row and column gets them without splitting a
+  // string, and one that wants a key composes the two. Both orderings a caller could write by hand -
+  // key the null, or null the key - are wrong in one direction, so the composition has a name.
+  it("keys a logged cell only when it is a cell", () => {
+    expect(cellKeyFromLogged([2, 3])).toBe("2,3")
+    expect(cellKeyFromLogged({row: 2, col: 3})).toBe("2,3")
+    expect(cellKeyFromLogged({row: "2", col: 3})).toBeNull()
+    expect(cellKeyFromLogged("2,3")).toBeNull()
+  })
+
+  // getCellKey takes a cell rather than two loose numbers. A transposed cellKey(col, row) produced a
+  // key that looked entirely valid and addressed the wrong square; naming the fields removes the
+  // ordering from the call site, and cellFromKey is the only thing that reads one back.
+  it("round-trips a cell through its key", () => {
+    expect(getCellKey({row: 2, col: 3})).toBe("2,3")
+    expect(getCellKey([2, 3])).toBe("2,3")
+    expect(cellFromKey(getCellKey({row: 11, col: 19}))).toEqual({row: 11, col: 19})
+    expect(() => cellFromKey("not a key")).toThrow(/not a cell key/)
+  })
+
   it("reads open moves from both shapes", () => {
     // Reading the compacted form with Object.keys yields array indices - "0", "1" - which match no
     // move command, so every exit check silently answered no.
-    expect([...movesFromLogged({MoveUp: "unvisited", MoveDown: "visited"})].sort())
+    expect([...openMovesFromLogged({MoveUp: "unvisited", MoveDown: "visited"})].sort())
       .toEqual(["MoveDown", "MoveUp"])
-    expect([...movesFromLogged([["MoveUp", "unvisited"], ["MoveDown", "visited"]])].sort())
+    expect([...openMovesFromLogged([["MoveUp", "unvisited"], ["MoveDown", "visited"]])].sort())
       .toEqual(["MoveDown", "MoveUp"])
+  })
+
+  // The set holds Moves, so a caller can test it against a maze's own exits or step through it without
+  // re-checking each name. A key the maze cannot apply - including the "0"/"1" indices the compacted
+  // form used to yield - is dropped here rather than left for every reader to guard against.
+  it("drops a name that is not one of the four commands", () => {
+    expect([...openMovesFromLogged({MoveUp: "unvisited", Teleport: "unvisited"})]).toEqual(["MoveUp"])
+    expect([...openMovesFromLogged([["MoveUp", "unvisited"], ["Teleport", "unvisited"]])]).toEqual(["MoveUp"])
+    expect([...openMovesFromLogged(["MoveUp", "MoveDown"])]).toEqual(["MoveUp", "MoveDown"])
   })
 })
 
@@ -161,12 +190,12 @@ describe("defect 4: decodeReportPayload has a failure path that names no link", 
 })
 
 describe("defect 5: deleting a tab erased unrelated pending state", () => {
-  // deleteReportTab rebuilt the state object from scratch, so draftUrl, draftStatus and the
+  // deleteLogTab rebuilt the state object from scratch, so draftUrl, draftStatus and the
   // sharedLink fields were dropped - a shared-link error on screen disappeared when someone closed an
   // unrelated report.
   it("keeps the shared-link error when another tab is deleted", () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [
         {id: "first", url: "https://example.com/a.json", label: "a.json", status: "loaded"},
         {id: "second", url: "https://example.com/b.json", label: "b.json", status: "loaded"},
@@ -176,7 +205,7 @@ describe("defect 5: deleting a tab erased unrelated pending state", () => {
       sharedLinkError: "This link has been truncated or altered. Ask for a fresh link.",
     }
 
-    const next = deleteReportTab(state, "second")
+    const next = deleteLogTab(state, "second")
 
     expect(next.draftUrl).toBe("https://example.com/c.json")
     expect(next.sharedLinkError).toBe("This link has been truncated or altered. Ask for a fresh link.")
@@ -201,7 +230,7 @@ describe("defect 6: untrusted input was stringified rather than rejected", () =>
   })
 
   it("does not name a report '[object Object]'", () => {
-    expect(trimReportTabLabel({})).toBe("")
+    expect(trimLogTabLabel({})).toBe("")
   })
 
   it("refuses an object as a URL for the reason a reader can act on", () => {

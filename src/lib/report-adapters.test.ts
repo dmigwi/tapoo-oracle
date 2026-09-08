@@ -2,10 +2,10 @@ import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
-import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
+import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
-import type {Report, ReportTabsState, TapooLog} from "./types"
-import {at, expectErr, expectOk, firstRound, messagesOf, must} from "./test-support";
+import type {Report, LogTabsState, TapooLog} from "./types"
+import {analyzeLogText, at, expectErr, expectOk, firstRound, messagesOf, must} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
 // local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
@@ -93,18 +93,18 @@ describe("report URL tabs", () => {
   })
 
   it("derives readable report labels from URLs", () => {
-    expect(reportTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
-    expect(reportTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
-    expect(reportTabLabelFromUrl("not a url", 2)).toBe("Report 3")
+    expect(logTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
+    expect(logTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
+    expect(logTabLabelFromUrl("not a url", 2)).toBe("Report 3")
   })
 
   it("trims long report labels from the beginning", () => {
-    expect(trimReportTabLabel("very-long-prefix-tapoo-agent-api-log.json", 27)).toBe("...tapoo-agent-api-log.json")
+    expect(trimLogTabLabel("very-long-prefix-tapoo-agent-api-log.json", 27)).toBe("...tapoo-agent-api-log.json")
   })
 
   it("opens the add-report form without creating a report entry", () => {
-    const state = createInitialReportTabs()
-    const next = addReportTab(state, "report-fixed")
+    const state = createInitialLogTabs()
+    const next = addLogTab(state, "report-fixed")
 
     expect(next.tabs).toHaveLength(0)
     expect(next.activeTabId).toBeNull()
@@ -112,8 +112,8 @@ describe("report URL tabs", () => {
   })
 
   it("deletes the active tab and selects the nearest remaining tab", () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "loaded"},
         {id: "second", url: "https://example.com/second.json", label: "second.json", status: "loaded"},
@@ -122,28 +122,28 @@ describe("report URL tabs", () => {
       activeTabId: "second",
     }
 
-    const next = deleteReportTab(state, "second")
+    const next = deleteLogTab(state, "second")
     expect(next.tabs.map((tab) => tab.id)).toEqual(["first", "third"])
     expect(next.activeTabId).toBe("third")
   })
 
   it("returns to an empty report list after the last tab is deleted", () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [{id: "only", url: "https://example.com/only.json", label: "Only", status: "loaded"}],
       activeTabId: "only",
     }
-    const next = deleteReportTab(state, "only", () => "replacement")
+    const next = deleteLogTab(state, "only", () => "replacement")
 
     expect(next).toMatchObject({tabs: [], activeTabId: null, isAdding: true})
     expect(next.pendingTabId).toBe("replacement")
   })
 
-  it("loads a draft URL into a new report tab", async () => {
-    let state = addReportTab(createInitialReportTabs(), "first")
+  it("loads a draft URL into a new log tab", async () => {
+    let state = addLogTab(createInitialLogTabs(), "first")
     state = {...state, draftUrl: "https://example.com/first.json"}
 
-    const next = await loadNewReportTabFromUrl(state, async () => fixtureText)
+    const next = await loadNewLogTabFromUrl(state, async () => fixtureText)
     const first = next.tabs.find((tab) => tab.id === "first")
 
     expect(first).toMatchObject({
@@ -156,8 +156,8 @@ describe("report URL tabs", () => {
   })
 
   it("loads one existing tab without mutating other tabs", async () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "empty"},
         {id: "second", url: "https://example.com/second.json", label: "second.json", status: "empty"},
@@ -165,7 +165,7 @@ describe("report URL tabs", () => {
       activeTabId: "first",
     }
 
-    const next = await loadReportTabFromUrl(state, "first", async () => fixtureText)
+    const next = await loadLogTabFromUrl(state, "first", async () => fixtureText)
     const first = next.tabs.find((tab) => tab.id === "first")
     const second = next.tabs.find((tab) => tab.id === "second")
 
@@ -175,13 +175,13 @@ describe("report URL tabs", () => {
   })
 
   it("stores load failures on the owning tab", async () => {
-    const tabState: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const tabState: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [{id: "missing", url: "notaurl", label: "New report", status: "empty"}],
       activeTabId: "missing",
     }
 
-    const next = await loadReportTabFromUrl(tabState, "missing", async () => fixtureText)
+    const next = await loadLogTabFromUrl(tabState, "missing", async () => fixtureText)
     expect(at(next.tabs, 0)).toMatchObject({
       status: "error",
       error: "Enter a valid URL.",
@@ -189,9 +189,9 @@ describe("report URL tabs", () => {
   })
 
   it("stores draft load failures without creating a report entry", async () => {
-    const state = {...addReportTab(createInitialReportTabs(), "missing"), draftUrl: "notaurl"}
+    const state = {...addLogTab(createInitialLogTabs(), "missing"), draftUrl: "notaurl"}
 
-    const next = await loadNewReportTabFromUrl(state, async () => fixtureText)
+    const next = await loadNewLogTabFromUrl(state, async () => fixtureText)
     expect(next).toMatchObject({
       tabs: [],
       isAdding: true,
