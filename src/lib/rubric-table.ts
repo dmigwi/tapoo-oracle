@@ -4,12 +4,6 @@
 // markup, and re-implementing it here to add two behaviours would mean maintaining a copy of it.
 
 
-// profileCards summarizes a report as headline counts.
-//
-// Capabilities and violations are reported as separate fractions and never combined. The rubric is
-// explicit that they must not collapse into one score interval: a model with six capabilities and
-// two violations is not "four", and any arithmetic that produces a single number here would be
-// inventing a scale the contract deliberately refuses to define.
 // Column classes, keyed by header text. Positional selectors cannot address these columns: rows
 // after a group's first lose two cells to the merge below, so nth-last-child(4) is the group name on
 // one row and the leading spacer on the next. A class travels with the cell.
@@ -21,17 +15,17 @@ const RUBRIC_COLUMN_CLASSES: Record<string, string> = {
   "Group result": "rubric-result",
 }
 
-// prepareRubricTable labels each column and merges each group's repeated cells into one cell
-// spanning its questions.
-//
-// A group answers one verdict from several fact questions, and Inputs.table can only render flat
-// rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
-// column, that looks like three separate verdicts that happen to agree, which is the opposite of
-// what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
-// the cell states that in the table's own structure.
-//
-// Safe as a one-time pass because these tables are built with sort disabled and every row
-// materialized, so the body is never re-ordered or extended underneath it.
+/** prepareRubricTable labels each column and merges each group's repeated cells into one cell
+ * spanning its questions.
+ *
+ * A group answers one verdict from several fact questions, and Inputs.table can only render flat
+ * rows - so C1's three rows each repeated "INSTRUCTION ADHERENCE" and "YES (3/3)". Reading down the
+ * column, that looks like three separate verdicts that happen to agree, which is the opposite of
+ * what the rubric says: there is one verdict per group, and the questions are its evidence. Spanning
+ * the cell states that in the table's own structure.
+ *
+ * Safe as a one-time pass because these tables are built with sort disabled and every row
+ * materialized, so the body is never re-ordered or extended underneath it. */
 export function prepareRubricTable(node: HTMLElement): HTMLElement {
   const table = node.querySelector("table")
   const body = table?.querySelector("tbody")
@@ -96,15 +90,15 @@ export function prepareRubricTable(node: HTMLElement): HTMLElement {
   return node
 }
 
-// enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
-// 13px square at the far left of a row whose content runs the width of the page, so hitting it means
-// aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
-// recommended target size outright.
-//
-// Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
-// body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
-// the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
-// without moving the input's value.
+/** enableRowSelection makes the whole row a click target for its own checkbox. The checkbox is a
+ * 13px square at the far left of a row whose content runs the width of the page, so hitting it means
+ * aiming at the one part of the row that is hardest to hit - and on a touch screen it is below the
+ * recommended target size outright.
+ *
+ * Delegated on the table rather than bound per row, so it survives Inputs.table re-rendering its
+ * body, and it dispatches input *and* change: Inputs.table reads its value from input events, and
+ * the CSS that tints the row keys off :checked, so a silent .checked assignment would move the tint
+ * without moving the input's value. */
 export function enableRowSelection(node: HTMLElement): HTMLElement {
   const table = node.querySelector("table")
   if (!table) {

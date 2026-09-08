@@ -22,7 +22,8 @@ function rubricTable(rowCount = 3) {
   return enableRowSelection(Inputs.table(rows, {sort: false, rows: rows.length}))
 }
 
-// enableRowSelection returns the table carrying its selected rows on `value`, the viewof protocol.
+// selectionOf reads what enableRowSelection publishes: the table carries its selected rows on `value`, per the
+// viewof protocol, which is a shape the DOM types do not describe - hence the cast.
 const selectionOf = (node: HTMLElement) => (node as HTMLElement & {value: {id: string}[]}).value
 
 const bodyRows = (node: ParentNode) => queryAll<HTMLTableRowElement>(node, "tbody tr")

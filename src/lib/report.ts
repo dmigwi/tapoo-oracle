@@ -9,8 +9,12 @@ import { buildLevels } from "./rounds"
 import { CAPABILITIES, VIOLATIONS, aggregate, buildContext } from "./rubric-engine"
 import type { GroupKind, GroupResult, LogEntry, Report, RubricGroup } from "./types"
 
-
-
+/** answerRubric is the app's public entry point to the rubric: it returns the complete result for one
+ * log as plain data, with each group's per-question answers preserved alongside its verdict.
+ *
+ * The group fractions are carried rather than reduced to the verdict because the rubric requires
+ * partial evidence to stay visible - "2/3" and "0/3" are both a `no`, and collapsing them would hide
+ * the difference the contract exists to preserve. */
 export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: string } = {}): Report {
   const context = buildContext(entries, { label })
 

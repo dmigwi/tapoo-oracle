@@ -6,15 +6,15 @@
 import type { LogWarning, GroupKind, GroupResult, Report, TapooLog } from "./types"
 import { formatCount } from "./utils"
 
-// warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
-//
-// A warning is only shown when it costs the reader something, so the banner says what that cost is
-// rather than asking them to work it out from a list. "Read with care" was the old heading and it did
-// not do that: it is a tone, not a finding, and a reader cannot tell from it whether a verdict below
-// is wrong or whether the report is merely missing its provenance.
-//
-// The two impacts are reported together when both are present, because they are different harms and
-// collapsing them would understate one of them.
+/** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
+ *
+ * A warning is only shown when it costs the reader something, so the banner says what that cost is
+ * rather than asking them to work it out from a list. "Read with care" was the old heading and it did
+ * not do that: it is a tone, not a finding, and a reader cannot tell from it whether a verdict below
+ * is wrong or whether the report is merely missing its provenance.
+ *
+ * The two impacts are reported together when both are present, because they are different harms and
+ * collapsing them would understate one of them. */
 export function warningHeadline(warnings: LogWarning[]): string | null {
   const inaccurate = warnings.some((warning) => warning.impact === "inaccurate")
   const incomplete = warnings.some((warning) => warning.impact === "incomplete")
@@ -25,19 +25,23 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
   return null
 }
 
-// profileCards: the two fractions, each naming the groups it counted.
-//
-// The groups are named in full, with their code in parentheses - "Multi-step execution (C6)" - rather
-// than left as a row of codes. A card reading "5/9 (C2, C3, C6, C8, C9)" looks informative and is not:
-// the reader has to carry five codes down to the rubric tables and match them there to learn what was
-// actually demonstrated. Hovering was the cheaper fix and it is not one, because a hover does not exist
-// on touch and nothing about a code invites the attempt.
-//
-// The cost is height - five names is three lines where five codes was one - and it is paid in the one
-// place on the page where the reader is deciding what this agent did.
-//
-// Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
-// the test can then assert on the groups themselves rather than on punctuation.
+/** profileCards: the two fractions, each naming the groups it counted.
+ *
+ * Two fractions, never one. The rubric is explicit that capabilities and violations must not collapse
+ * into a single score interval: a model with six capabilities and two violations is not "four", and any
+ * arithmetic producing one number here would invent a scale the contract deliberately refuses to define.
+ *
+ * The groups are named in full, with their code in parentheses - "Multi-step execution (C6)" - rather
+ * than left as a row of codes. A card reading "5/9 (C2, C3, C6, C8, C9)" looks informative and is not:
+ * the reader has to carry five codes down to the rubric tables and match them there to learn what was
+ * actually demonstrated. Hovering was the cheaper fix and it is not one, because a hover does not exist
+ * on touch and nothing about a code invites the attempt.
+ *
+ * The cost is height - five names is three lines where five codes was one - and it is paid in the one
+ * place on the page where the reader is deciding what this agent did.
+ *
+ * Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
+ * the test can then assert on the groups themselves rather than on punctuation. */
 export function profileCards(
   report: Report,
 ): Array<{label: string; value: string; groups: Array<{id: string; label: string}>; tone: string}> {
@@ -59,13 +63,13 @@ export function profileCards(
   ];
 }
 
-// narrativeSummary states the run in a sentence: which model, through which provider, at what effort,
-// over how many predictions, and how fast a win came.
-//
-// It used to close by explaining what a NO means. That explanation is the method, not the finding, and
-// it was the third place on the page to say so - the hero lede and the methodology's third stage said
-// it too. It now lives only in "How this report is generated", the section named for exactly that, so
-// the summary reads as a result rather than as a result trailing its own disclaimer.
+/** narrativeSummary states the run in a sentence: which model, through which provider, at what effort,
+ * over how many predictions, and how fast a win came.
+ *
+ * It used to close by explaining what a NO means. That explanation is the method, not the finding, and
+ * it was the third place on the page to say so - the hero lede and the methodology's third stage said
+ * it too. It now lives only in "How this report is generated", the section named for exactly that, so
+ * the summary reads as a result rather than as a result trailing its own disclaimer. */
 export function narrativeSummary(report: Report): string {
   const capabilities = report.capabilities.filter((group) => group.met).length;
   const speed =
@@ -91,12 +95,12 @@ export function narrativeSummary(report: Report): string {
     .join(" ");
 }
 
-// groupResultTone names the class a group result should carry, or null for no colour at all.
-//
-// Split out from the table's format callback because this is the part that can be wrong: YES means
-// opposite things in the two tables, and the rule for what stays uncoloured is a statement about
-// what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
-// the decision stays here where the suite can reach it.
+/** groupResultTone names the class a group result should carry, or null for no colour at all.
+ *
+ * Split out from the table's format callback because this is the part that can be wrong: YES means
+ * opposite things in the two tables, and the rule for what stays uncoloured is a statement about
+ * what the rubric claims. The span-wrapping around it cannot be, so the DOM stays in the view and
+ * the decision stays here where the suite can reach it. */
 export function groupResultTone(kind: GroupKind, groupResult: string): string | null {
   // NO is never coloured. For a violation it is the good outcome, and for a capability it means the
   // behavior was not observed in this sample - never that the model is incapable of it, which is the
@@ -108,8 +112,8 @@ export function groupResultTone(kind: GroupKind, groupResult: string): string | 
   return kind === "violation" ? "result-confirmed" : "result-demonstrated"
 }
 
-// rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
-// visible because a partially evidenced group and a group with no evidence can share the same NO.
+/** rubricQuestionRows gives every evaluated fact its own row. Group verdicts and fractions remain
+ * visible because a partially evidenced group and a group with no evidence can share the same NO. */
 export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, string>> {
   return groups.flatMap((group) =>
     Object.entries(group.answers).map(([questionId, answer]) => ({
@@ -122,9 +126,9 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
   )
 }
 
-// diagnosticRows reports operational signals that are deliberately excluded from the violation
-// profile. Endpoint failures in particular can be caused by infrastructure outside the model's
-// reasoning, so the rubric notes require them to be preserved as evidence but never scored.
+/** diagnosticRows reports operational signals that are deliberately excluded from the violation
+ * profile. Endpoint failures in particular can be caused by infrastructure outside the model's
+ * reasoning, so the rubric notes require them to be preserved as evidence but never scored. */
 export function diagnosticRows(
   report: Report,
 ): Array<{signal: string; count: number; scoredBy: string | null}> {
@@ -139,8 +143,8 @@ export function diagnosticRows(
   ];
 }
 
-// diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
-// two measures as rows avoids packing count and scoring semantics into an ambiguous combined value.
+/** diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
+ * two measures as rows avoids packing count and scoring semantics into an ambiguous combined value. */
 export function diagnosticTableData(report: Report): {columns: string[]; rows: Array<Record<string, unknown>>} {
   const diagnostics = diagnosticRows(report)
   const columns = ["measure", ...diagnostics.map((row) => row.signal)]
@@ -156,23 +160,21 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
   }
 }
 
-// provenanceRows describe which build and which round produced the log, so a profile is never read
-// detached from what it was measured against.
 // Joined rather than reduced to one value: a log that names two providers really was produced against
 // two, and picking one would misdescribe the sample.
 function listOrNotRecorded(values: string[]): string {
   return values.length > 0 ? values.join(", ") : "not recorded";
 }
 
-// modelOutputRows summarises what the model produced, as the provider itself reported it.
-//
-// Only rows the provider actually reported: the two APIs report overlapping but different things, and
-// a row reading "not recorded" for every Ollama log would be a column of noise rather than a finding.
-// The exception is the token counts, which both report and which are the point of the section.
-//
-// Nothing here is scored. It is context for reading the verdicts above - a model given 3,000 prompt
-// tokens per turn and one given 300 are not doing the same task, and neither is a run that spent most
-// of its completion budget on reasoning tokens.
+/** modelOutputRows summarises what the model produced, as the provider itself reported it.
+ *
+ * Only rows the provider actually reported: the two APIs report overlapping but different things, and
+ * a row reading "not recorded" for every Ollama log would be a column of noise rather than a finding.
+ * The exception is the token counts, which both report and which are the point of the section.
+ *
+ * Nothing here is scored. It is context for reading the verdicts above - a model given 3,000 prompt
+ * tokens per turn and one given 300 are not doing the same task, and neither is a run that spent most
+ * of its completion budget on reasoning tokens. */
 export function modelOutputRows(report: Report): Array<{field: string; value: string}> {
   const {output} = report;
   const rows: Array<{field: string; value: string}> = [
@@ -204,6 +206,8 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
   return rows;
 }
 
+/** provenanceRows describe which build and which round produced the log, so a profile is never read
+ * detached from what it was measured against. */
 export function provenanceRows(source: TapooLog, report: Report): Array<{field: string; value: string}> {
   return [
     // No source URL row. It is the one field here that is not read out of the log itself, the panel
@@ -224,8 +228,8 @@ export function provenanceRows(source: TapooLog, report: Report): Array<{field: 
   ];
 }
 
-// provenanceTableData renders the small provenance record as one horizontal row so a wide report
-// does not spend six rows on six short values.
+/** provenanceTableData renders the small provenance record as one horizontal row so a wide report
+ * does not spend six rows on six short values. */
 export function provenanceTableData(source: TapooLog, report: Report): {columns: string[]; rows: Array<Record<string, unknown>>} {
   const provenance = provenanceRows(source, report)
   return {

@@ -46,9 +46,9 @@ import type {
 
 // --- Reading a log entry ---
 
-// parsePrediction recovers the moves array a model submitted, mirroring the three tiers
-// frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
-// prose. The tier matters on its own - it is what C1.Q1 scores - so it is returned, not discarded.
+/** parsePrediction recovers the moves array a model submitted, mirroring the three tiers
+ * frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
+ * prose. The tier matters on its own - it is what C1.Q1 scores - so it is returned, not discarded. */
 export function parsePrediction(content: unknown): Omit<Submission, "turn"> | null {
   if (typeof content !== "string" || !content.trim()) {
     return null
@@ -95,8 +95,8 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
 
 // --- Building the context ---
 
-// buildContext walks the log once and derives everything the questions need. It takes already-parsed
-// entries rather than a path so the same derivation serves a file on disk and a pasted payload.
+/** buildContext walks the log once and derives everything the questions need. It takes already-parsed
+ * entries rather than a path so the same derivation serves a file on disk and a pasted payload. */
 export function buildContext(
   entries: LogEntry[],
   { label = "log", index = indexLog(entries) }: { label?: string; index?: LogIndex } = {},
@@ -751,6 +751,15 @@ function failedStateRepetition(context: Context): Record<string, boolean> {
 
 // --- Groups ---
 
+/** The capability half of the rubric, in the order the report presents it.
+ *
+ * Each entry is the whole of a group: its id, the questions in the reader's words, and the function
+ * that answers them. Kept together deliberately - a question moved away from its evaluator is how a
+ * report comes to describe one thing and answer another.
+ *
+ * A capability's verdict is the conjunction of its questions, so adding a question can only ever lower
+ * a verdict, never raise one. A group that answers NO means the behavior was not observed in this
+ * sample - never that the model is incapable of it. */
 export const CAPABILITIES: RubricGroup[] = [
   {
     id: "C1",
@@ -824,6 +833,11 @@ export const CAPABILITIES: RubricGroup[] = [
   },
 ]
 
+/** The violation half, in the same shape and never merged with the half above.
+ *
+ * The rule inverts: a violation's verdict is the *disjunction* of its questions, because one confirmed
+ * breach is a breach. That inversion is also why the two lists cannot be concatenated and counted -
+ * they answer to opposite aggregation rules, and the rubric forbids collapsing them into one score. */
 export const VIOLATIONS: RubricGroup[] = [
   {
     id: "V1",
@@ -870,8 +884,9 @@ export const VIOLATIONS: RubricGroup[] = [
   },
 ]
 
-// A capability needs every question answered yes; a violation needs only one. The assertion is not
-// defensive noise - a question returning anything but a boolean would silently skew both rules.
+/** aggregate turns a group's per-question answers into its verdict: a capability needs every question
+ * answered yes; a violation needs only one. The assertion is not
+ * defensive noise - a question returning anything but a boolean would silently skew both rules. */
 export function aggregate(answers: Record<string, boolean>, kind: GroupKind): boolean {
   const values = Object.values(answers)
   if (!values.every((value) => value === true || value === false)) {

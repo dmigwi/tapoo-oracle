@@ -30,7 +30,8 @@ const rubricRows: RubricRow[] = [
   {id: "C2.Q1", group: "VALID ACTION DELIVERY", question: "a move applied?", groupResult: "YES (1/1)"},
 ]
 
-// prepareRubricTable returns the table carrying its selected rows on `value`, the viewof protocol.
+// selectionOf reads what prepareRubricTable publishes: the table carries its selected rows on `value`, per the
+// viewof protocol, which is a shape the DOM types do not describe - hence the cast.
 const selectionOf = (node: HTMLElement) => (node as HTMLElement & {value: RubricRow[]}).value
 
 const bodyRows = (node: ParentNode) => queryAll<HTMLTableRowElement>(node, "tbody tr")

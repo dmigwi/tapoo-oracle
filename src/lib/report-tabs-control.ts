@@ -367,7 +367,11 @@ function createReportUrlForm(state: ReportTabsState, actions: ReportActions): HT
   return form;
 }
 
-// Creates the Observable input node that owns report-tab state and emits input events on changes.
+/** createReportTabsInput builds the Observable input node that owns report-tab state.
+ *
+ * It is a `viewof` element: its `value` is the current ReportTabsState, and it emits an `input` event
+ * whenever that value changes, which is what makes the markdown's dependent cells recompute. Every
+ * decision it makes is delegated to the pure reducers in report-tabs.ts. */
 export function createReportTabsInput(
   {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
 ): ReportTabsInput {

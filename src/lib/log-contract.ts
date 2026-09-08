@@ -1,8 +1,11 @@
 // Tapoo agent-api log contract.
 //
-// This module is the single definition of what a downloaded Tapoo log looks like, shared by every
-// consumer that reads one: the CLI in scripts/agentic-analysis.mjs, and the Oracle analytics app in
-// src/. There is exactly one copy, so the two front ends cannot answer the same log differently.
+// This module is the definition of what a downloaded Tapoo log looks like for everything under src/ -
+// the app, its rubric engine, and the maze replay all read a log through here and nowhere else.
+//
+// Not for scripts/agentic-analysis.mjs. That CLI imports nothing but node: builtins and carries its own
+// reader and its own evaluator, which its header calls a known migration gap. So the two front ends can
+// answer the same log differently, and folding it onto this module is what would stop that.
 //
 // It deliberately imports no dependencies and no node: builtins, so it runs unchanged in Node and in a
 // browser bundle.
@@ -58,20 +61,22 @@ export {
   stepFrom,
 } from "./geometry";
 
-// Tapoo reports a turn's outcome on the request that *follows* it, so a payload logged on turn N -
-// get_maze_structure, get_prediction_rules, get_last_prediction_outcome - covers turn N - 1.
-//
-// That offset lives on one line, inside this store, and nowhere else. It used to be a bare `- 1` beside
-// a plain Map, which meant every writer had to remember it and every reader had to trust that they had:
-// it was written `.get(turn + 1)` in one place, `reportedAt - 1` in another, and left out entirely in a
-// third, which is how the maze overlay came to draw its colours a turn behind the maze.
-//
-// `record` is the only way in and takes the turn that *carried* a payload; `get` is the only way out and
-// takes the turn it *covers*. A caller holding the offset separately is the bug this closes, so there is
-// no exported helper to hold.
-//
-// Turn 0's payload covers turn -1: there is no turn before the first, so that key holds the state the
-// round opened in and matches no turn.
+/** turnReports stores per-turn payloads under the turn they describe.
+ *
+ * Tapoo reports a turn's outcome on the request that *follows* it, so a payload logged on turn N -
+ * get_maze_structure, get_prediction_rules, get_last_prediction_outcome - covers turn N - 1.
+ *
+ * That offset lives on one line, inside this store, and nowhere else. It used to be a bare `- 1` beside
+ * a plain Map, which meant every writer had to remember it and every reader had to trust that they had:
+ * it was written `.get(turn + 1)` in one place, `reportedAt - 1` in another, and left out entirely in a
+ * third, which is how the maze overlay came to draw its colours a turn behind the maze.
+ *
+ * `record` is the only way in and takes the turn that *carried* a payload; `get` is the only way out and
+ * takes the turn it *covers*. A caller holding the offset separately is the bug this closes, so there is
+ * no exported helper to hold.
+ *
+ * Turn 0's payload covers turn -1: there is no turn before the first, so that key holds the state the
+ * round opened in and matches no turn. */
 export function turnReports<T>(): TurnReports<T> {
   const byTurn = new Map<number, T>();
 
@@ -94,29 +99,29 @@ export function turnReports<T>(): TurnReports<T> {
 
 // --- Reading a provider response ---
 
-// assistantMessage reads one model response, whichever of the three providers produced it.
-//
-// Tapoo logs the provider's response body verbatim, so the shape belongs to the provider. Its own
-// adapters (frontend/app/agent/providers.ts) define all three, and they agree on nothing structural:
-//
-//   Ollama     {message: {content, thinking, tool_calls}}                 - verified against real logs
-//   OpenAI     {choices: [{message: {content, reasoning_content, tool_calls}}]}  - verified
-//   Anthropic  {content: [{type: "text"|"thinking"|"tool_use", ...}]}     - from the adapter only
-//
-// The Anthropic branch is written from Tapoo's adapter and covered by tests built from it, but no
-// Anthropic log has ever been run through it. It is kept rather than dropped because the alternative
-// is worse than an unverified reader: without it an Anthropic log returns null here, and null now
-// raises a warning that says the responses could not be read (see unreadableResponseWarnings) instead
-// of failing silently the way the OpenAI shape did.
-//
-// Reading only Ollama's shape is what made a whole log analyze to nothing: every OpenAI response has
-// no `message` at the root, so each counted as empty - zero predictions, zero turns, and a replay
-// scrubber reading "0 / 0" under a maze that drew correctly. Anthropic would have failed the same way
-// for the same reason, so all three are read here rather than two.
-//
-// Providers are told apart by shape, not by the `api` field or the endpoint URL. Both are recorded in
-// the log and either would work, but a body that looks like a response is better evidence about that
-// body than a label written beside it.
+/** assistantMessage reads one model response, whichever of the three providers produced it.
+ *
+ * Tapoo logs the provider's response body verbatim, so the shape belongs to the provider. Its own
+ * adapters (frontend/app/agent/providers.ts) define all three, and they agree on nothing structural:
+ *
+ *   Ollama     {message: {content, thinking, tool_calls}}                 - verified against real logs
+ *   OpenAI     {choices: [{message: {content, reasoning_content, tool_calls}}]}  - verified
+ *   Anthropic  {content: [{type: "text"|"thinking"|"tool_use", ...}]}     - from the adapter only
+ *
+ * The Anthropic branch is written from Tapoo's adapter and covered by tests built from it, but no
+ * Anthropic log has ever been run through it. It is kept rather than dropped because the alternative
+ * is worse than an unverified reader: without it an Anthropic log returns null here, and null now
+ * raises a warning that says the responses could not be read (see unreadableResponseWarnings) instead
+ * of failing silently the way the OpenAI shape did.
+ *
+ * Reading only Ollama's shape is what made a whole log analyze to nothing: every OpenAI response has
+ * no `message` at the root, so each counted as empty - zero predictions, zero turns, and a replay
+ * scrubber reading "0 / 0" under a maze that drew correctly. Anthropic would have failed the same way
+ * for the same reason, so all three are read here rather than two.
+ *
+ * Providers are told apart by shape, not by the `api` field or the endpoint URL. Both are recorded in
+ * the log and either would work, but a body that looks like a response is better evidence about that
+ * body than a label written beside it. */
 export function assistantMessage(payload: unknown): AssistantMessage | null {
   const body = asRecord(payload);
 
@@ -177,13 +182,12 @@ function toolNamesOf(calls: unknown): string[] {
     .filter((name): name is string => typeof name === "string" && name !== "");
 }
 
-// responseUsage reads what the provider reported about its own work, from either API shape.
-//
-// The two report overlapping but different things, so every field is nullable and a null means "this
-// provider did not say" rather than zero. Ollama counts tokens at the payload root and times the whole
-// call; OpenAI nests counts under `usage` and adds the two that matter most for a reasoning model -
-// how many of the completion tokens were spent thinking, and how much of the prompt was served from
-// cache rather than re-read.
+/** responseUsage reads what the provider reported about its own work, from either API shape.
+ *
+ * The two report overlapping but different things, so every field is nullable and a null means "this
+ * provider did not say" rather than zero. Ollama counts tokens at the payload root; OpenAI nests them
+ * under `usage` and adds the two that matter most for a reasoning model - how many of the completion
+ * tokens were spent thinking, and how much of the prompt was served from cache rather than re-read. */
 export function responseUsage(payload: unknown): ResponseUsage {
   const body = asRecord(payload);
   const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -225,14 +229,14 @@ function isLogEntry(value: unknown): value is LogEntry {
   );
 }
 
-// parseTapooLogExport validates a parsed JSON value against the envelope contract and returns a
-// discriminated result rather than throwing, because both consumers report the failure to a person:
-// the CLI prints it, the Oracle renders it beside the input.
-//
-// The check is strict on identity (name, entry shape) and deliberately lenient on version, because
-// rejecting an unrecognized app version would make the analyzer useless against the very logs most
-// worth inspecting - those from a build that is ahead of it. Unknown versions analyze, with a
-// warning attached, rather than being refused.
+/** parseTapooLogExport validates a parsed JSON value against the envelope contract and returns a
+ * discriminated result rather than throwing, because the failure is reported to a person: the app
+ * renders it beside the input the reader typed.
+ *
+ * The check is strict on identity (name, entry shape) and deliberately lenient on version, because
+ * rejecting an unrecognized app version would make the analyzer useless against the very logs most
+ * worth inspecting - those from a build that is ahead of it. Unknown versions analyze, with a
+ * warning attached, rather than being refused. */
 export function parseTapooLogExport(value: unknown): LogParseResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {ok: false, error: "Expected a Tapoo log export object at the top level."};
@@ -324,9 +328,6 @@ export function parseTapooLogExport(value: unknown): LogParseResult {
   return {ok: true, value: log, warnings};
 }
 
-// parseTapooLogText is the raw JSON ingress point shared by the app and non-UI callers. Its successful
-// output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
-// downloadedAt, and readable entries.
 // unreadableResponseWarnings reports responses whose body this contract could not read at all.
 //
 // This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
@@ -366,21 +367,6 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
   }];
 }
 
-// encodedMazeWarnings validates the encoded maze each level-started entry should carry.
-//
-// This belongs with the rest of the contract validation rather than downstream in the view: whether a
-// payload in this JSON is present and well-formed is the same question as whether the envelope has a
-// mode or an entry has a payload, and it is answered once, here, on the way in.
-//
-// Validation is also what decides the impact, because it is what knows the difference:
-//
-//   absent  -> incomplete. The log never carried a maze. Nothing is wrong; a section is missing.
-//   invalid -> inaccurate. A payload was provided and it is not what it claims to be - a structure
-//              that fails its own checksum arrived damaged, and "damaged" is a statement about the
-//              data's accuracy, not about how much of it there is.
-//
-// Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
-// from the exits the log's own tool results confirmed.
 // traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
 //
 // The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
@@ -508,6 +494,21 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
   return warnings;
 }
 
+// encodedMazeWarnings validates the encoded maze each level-started entry should carry.
+//
+// This belongs with the rest of the contract validation rather than downstream in the view: whether a
+// payload in this JSON is present and well-formed is the same question as whether the envelope has a
+// mode or an entry has a payload, and it is answered once, here, on the way in.
+//
+// Validation is also what decides the impact, because it is what knows the difference:
+//
+//   absent  -> incomplete. The log never carried a maze. Nothing is wrong; a section is missing.
+//   invalid -> inaccurate. A payload was provided and it is not what it claims to be - a structure
+//              that fails its own checksum arrived damaged, and "damaged" is a statement about the
+//              data's accuracy, not about how much of it there is.
+//
+// Either way the rubric verdicts stand: no question reads this payload. The corridor questions answer
+// from the exits the log's own tool results confirmed.
 function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
   const warnings: LogWarning[] = [];
 
@@ -541,6 +542,9 @@ function encodedMazeWarnings(entries: LogEntry[]): LogWarning[] {
   return warnings;
 }
 
+/** parseTapooLogText is the raw JSON ingress point: every log the app reads enters here. Its successful
+ * output is the normalized Tapoo log shape every downstream query uses: name, version, mode,
+ * downloadedAt, and readable entries. */
 export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
   const trimmed = asTrimmedText(text);
   if (!trimmed) {

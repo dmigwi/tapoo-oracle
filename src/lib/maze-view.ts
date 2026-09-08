@@ -58,9 +58,6 @@ const cellXY = (cell: CellKey): {row: number; col: number; x: number; y: number}
 
 // --- Static layers ---
 
-// drawWalls renders the static maze once. Every edge a cell has no exit through becomes a line, so
-// interior walls are drawn twice - once from each side - which costs nothing and avoids having to
-// special-case the outer boundary.
 // The mark for a cell the log never graded. Diagonal hatching, the same idea the decay strip uses for a
 // charge nobody reported and for the reason its comment gives: a missing measurement is not a
 // measurement of nothing, and it must not borrow a colour from the scale.
@@ -118,11 +115,8 @@ const spellCell = (cell: CellKey): string => {
   return `row=${row}, col=${col}`;
 };
 
-// The radius used when a log never recorded one.
-//
-// The lens still magnifies without it - magnification is a view control, ours to choose - but it stops
-// claiming to be the agent's window: no scrim, and a caption that says only what it is showing. The
-// window is the log's to state, and we do not invent one.
+// Arrow keys move the focused cell, so the mode is not mouse-only. A dozen lines, and the difference
+// between a feature and one a keyboard cannot reach.
 const ARROW_STEPS: Record<string, [number, number] | undefined> = {
   ArrowUp: [-1, 0],
   ArrowDown: [1, 0],
@@ -130,6 +124,11 @@ const ARROW_STEPS: Record<string, [number, number] | undefined> = {
   ArrowRight: [0, 1],
 };
 
+// The radius used when a log never recorded one.
+//
+// The lens still magnifies without it - magnification is a view control, ours to choose - but it stops
+// claiming to be the agent's window: no cover, and a caption that says only what it is showing. The
+// window is the log's to state, and we do not invent one.
 const DEFAULT_LENS_RADIUS = 2;
 
 // hitLayer gives every cell something to point at.
@@ -223,6 +222,9 @@ function buildLens(
   return svg;
 }
 
+// drawWalls renders the static maze once. Every edge a cell has no exit through becomes a line, so
+// interior walls are drawn twice - once from each side - which costs nothing and avoids having to
+// special-case the outer boundary.
 function drawWalls(svg: SVGElement, maze: Maze): void {
   const walls = createSvgElement("g", {stroke: "var(--oracle-ink)", "stroke-width": 2, "stroke-linecap": "square"});
   for (const [cell, open] of maze.exits) {
@@ -242,7 +244,7 @@ function drawWalls(svg: SVGElement, maze: Maze): void {
   svg.append(walls);
 }
 
-// markerFor draws the fixed points of the round: where it began and where it had to end.
+// drawMarkers draws the fixed points of the round: where it began and where it had to end.
 function drawMarkers(svg: SVGElement, model: LevelModel): void {
   if (model.startCell) {
     const {x, y} = cellXY(model.startCell);
@@ -781,7 +783,7 @@ function agentStatsRow(stats: AgentLevelStats): HTMLElement {
 
 // --- Entry point ---
 
-// createMazeReplay builds the whole section for one report and returns its root node.
+/** createMazeReplay builds the whole section for one report and returns its root node. */
 export function createMazeReplay(report: Report): HTMLElement {
   // Takes the report, not a pre-built model: both adapters live in this module, and having the caller
   // run them meant the view's own data shaping was spelled out at every call site.

@@ -11,13 +11,6 @@ import { buildContext } from "./rubric-engine"
 import { asArray, asRecord } from "./utils"
 import type { CellKey, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
 
-
-// answerRubric is the engine's public entry point: it returns the complete rubric result for one
-// log as plain data, with each group's per-question answers preserved alongside its verdict.
-//
-// The group fractions are carried rather than reduced to the verdict because the rubric requires
-// partial evidence to stay visible - "2/3" and "0/3" are both a `no`, and collapsing them would hide
-// the difference the contract exists to preserve.
 // resolveActingAgents maps each turn number to the raw playerName that acted on it.
 //
 // "Agent request." records the acting seat as a decorated label - "Katara the Trailblazer - Default" -
@@ -73,12 +66,6 @@ function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
   return byTurn
 }
 
-// buildLevels groups the log into one record per played round and derives the path walked in each.
-//
-// Rounds are keyed by (game, level) rather than level alone: a retry of the same level is a different
-// round with a brand-new maze, so keying on level would merge two mazes into one and draw a path
-// crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
-// exits from one maze must never leak into another.
 // reportedMoves reads the move list out of a replay record, or null when it holds none.
 //
 // The names are stripped of any "player:" prefix the way annotateApplied strips them - some producer
@@ -101,8 +88,8 @@ export type RoundGroup = {
   entries: LogEntry[];
 };
 
-// roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
-// "2/1" beside a filename reads as a fraction or a date before it reads as a round.
+/** roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
+ * "2/1" beside a filename reads as a fraction or a date before it reads as a round. */
 export function roundLabel({game, level}: {game: number | null; level: number | null}): string {
   const parts = [
     typeof game === "number" ? `Game ${game}` : null,
@@ -112,11 +99,11 @@ export function roundLabel({game, level}: {game: number | null; level: number | 
   return parts.length > 0 ? parts.join(" \u00b7 ") : "Whole log";
 }
 
-// groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
-//
-// The one definition of what a round is. The replay reads it to build a maze per round, and the report
-// reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
-// tab whose maze came from somewhere else.
+/** groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
+ *
+ * The one definition of what a round is. The replay reads it to build a maze per round, and the report
+ * reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
+ * tab whose maze came from somewhere else. */
 export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
   // An entry that does not name its round belongs to the round in progress.
   //
@@ -163,6 +150,12 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
   return [...groups.values()]
 }
 
+/** buildLevels groups the log into one record per played round and derives the path walked in each.
+ *
+ * Rounds are keyed by (game, level) rather than level alone: a retry of the same level is a different
+ * round with a brand-new maze, so keying on level would merge two mazes into one and draw a path
+ * crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
+ * exits from one maze must never leak into another. */
 export function buildLevels(entries: LogEntry[]): Level[] {
   return groupEntriesByRound(entries).map(({key, entries: groupEntries}) => {
     const context = buildContext(groupEntries, { label: key })

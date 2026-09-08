@@ -21,14 +21,15 @@ import type {LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpan} from "./typ
 const hasTurnNumbers = (entries: LogEntry[]): boolean =>
   entries.length > 0 && entries.every((entry) => typeof entry.turn === "number");
 
-// turnSpans cuts the entries into half-open ranges, one per turn.
-//
-// Tapoo resets turn numbers for every round, so the complete identity is (game, level, turn). Modern
-// logs stamp all three fields; null preserves the limited identity available in older logs.
+/** turnIdentityKey names a turn completely.
+ *
+ * Tapoo resets turn numbers for every round, so the complete identity is (game, level, turn). Modern
+ * logs stamp all three fields; null preserves the limited identity available in older logs. */
 export function turnIdentityKey({game, level, turn}: TurnIdentity): string {
   return `${game ?? "?"}/${level ?? "?"}/${turn}`;
 }
 
+// turnSpans cuts the entries into half-open ranges, one per turn.
 function turnSpans(entries: LogEntry[]): TurnSpan[] {
   const spans: TurnSpan[] = [];
   let current: TurnSpan | null = null;
@@ -96,24 +97,24 @@ export function entriesForTurn(entries: LogEntry[], index: LogIndex, identity: T
   return span ? entries.slice(span.start, span.end) : [];
 }
 
-// unknownEvents lists payload sentences the rubric has no question for, with how often each occurred.
-//
-// Deliberately not shown to a reader. "This event is not scored" describes work not yet done here, and
-// the reader's warning banner is for caveats about the log itself - things that bound how much the
-// verdicts are worth and that they can weigh. The proper answer to an unscored event is a fact
-// question that scores it; this is the tool for finding which ones are missing.
+/** unknownEvents lists payload sentences the rubric has no question for, with how often each occurred.
+ *
+ * Deliberately not shown to a reader. "This event is not scored" describes work not yet done here, and
+ * the reader's warning banner is for caveats about the log itself - things that bound how much the
+ * verdicts are worth and that they can weigh. The proper answer to an unscored event is a fact
+ * question that scores it; this is the tool for finding which ones are missing. */
 export function unknownEvents(index: LogIndex): Array<{payload: string; count: number}> {
   return [...index.summary.events]
     .filter(([payload]) => !KNOWN_EVENTS.has(payload))
     .map(([payload, count]) => ({payload, count}));
 }
 
-// levelDisagreements reports entries whose level contradicts the class its payload implies.
-//
-// Only known events can disagree: an unknown one has nothing to contradict. A disagreement means the
-// producer and this file describe the same event differently - a bug in one of them, and not something
-// a reader of the report can act on, so like unknownEvents it stays out of the warning banner. Nothing
-// here changes a count or a verdict either: the finding is for whoever fixes the mismatch.
+/** levelDisagreements reports entries whose level contradicts the class its payload implies.
+ *
+ * Only known events can disagree: an unknown one has nothing to contradict. A disagreement means the
+ * producer and this file describe the same event differently - a bug in one of them, and not something
+ * a reader of the report can act on, so like unknownEvents it stays out of the warning banner. Nothing
+ * here changes a count or a verdict either: the finding is for whoever fixes the mismatch. */
 export function levelDisagreements(
   entries: LogEntry[],
 ): Array<{payload: string; expected: string; actual: string; count: number}> {

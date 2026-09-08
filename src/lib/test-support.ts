@@ -4,12 +4,6 @@ import type {Analysis, Level, LogWarning, Region, Report} from "./types";
 //
 // Not shipped: nothing in src/lib/app.ts reaches this, so it never enters the bundle.
 
-/** Narrows a discriminated result to its success arm, failing the test if it is not one.
- *
- * The unions exist so production code cannot read a success field off a failure. A test asserting on
- * a known-good fixture is stating that it *is* a success, and this says so once - which is more
- * honest than a cast, because a fixture that stops decoding fails here with the reason attached
- * rather than at some later property access. */
 /** The report for a single-round log's only round.
  *
  * Most fixtures are one round, and reaching through `rounds[0]` at every call site would bury what is
@@ -22,6 +16,12 @@ export function firstRound(result: Analysis): Report {
   return round.report;
 }
 
+/** Narrows a discriminated result to its success arm, failing the test if it is not one.
+ *
+ * The unions exist so production code cannot read a success field off a failure. A test asserting on
+ * a known-good fixture is stating that it *is* a success, and this says so once - which is more
+ * honest than a cast, because a fixture that stops decoding fails here with the reason attached
+ * rather than at some later property access. */
 export function expectOk<T extends {ok: boolean}>(result: T): Extract<T, {ok: true}> {
   if (!result.ok) {
     throw new Error(`expected a success, got: ${JSON.stringify(result)}`);

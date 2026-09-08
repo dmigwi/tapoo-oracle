@@ -18,9 +18,6 @@ export type CellKey = string;
 /** The four commands Tapoo accepts. Anything else in a log is a move the maze cannot apply. */
 export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
 
-/** Open exits as a log records them: an object keyed by move, or `[move, visitStatus]` pairs once the
- * result has been compacted for the download. */
-
 /** How heavily a cell has been worked, as Tapoo grades it.
  *
  * Tapoo's own rule, from get_maze_structure's description: it compares the cell's visit count with its
@@ -54,9 +51,20 @@ export type TurnReports<T> = {
   readonly size: number;
 };
 
+/** Cell grades keyed by the turn they describe, not the turn that carried them. */
 export type VisitStatusByTurn = TurnReports<Map<CellKey, VisitStatus>>;
 
+/** The level Tapoo stamps on an entry, and it writes them with a meaning: `warn` is an agent error
+ * carrying a penalty, `error` is a failure outside the agent's control that disabled it, and `info` is
+ * everything else. */
 export type LogLevel = "error" | "info" | "warn";
+
+/** Who is answerable for an entry, as `levelClassOf` reads it off the level.
+ *
+ * The rubric already draws this line - endpoint failures are kept out of the violation profile because
+ * they can come from infrastructure rather than reasoning - but it drew it by matching payload
+ * sentences. The level says the same thing, declared by the producer. */
+export type LogClass = "neutral" | "penalised" | "external";
 
 /** One entry, carrying only the fields `isLogEntry` actually verifies. `turn`, `level` and `game`
  * are optional because logs written before those counters landed still analyze. `details` is
@@ -74,15 +82,6 @@ export type LogEntry = {
 
 // --- Log index ---
 
-/** What a log level says about who is answerable for an entry.
- *
- * Tapoo writes the level with that meaning: `warn` is an agent error that carries a penalty, `error`
- * is a failure outside the agent's control that disabled it, and `info` is everything else. The rubric
- * already draws this line - endpoint failures are kept out of the violation profile because they can
- * come from infrastructure rather than reasoning - but it drew it by matching payload sentences. The
- * level says the same thing, declared by the producer. */
-export type LogClass = "neutral" | "penalised" | "external";
-
 /** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
 export type TurnSpan = {
   game: number | null;
@@ -92,6 +91,8 @@ export type TurnSpan = {
   end: number;
 };
 
+/** The three fields that name a turn uniquely. Turn numbers restart every round, so a turn number
+ * alone is ambiguous across a log holding more than one. */
 export type TurnIdentity = Pick<TurnSpan, "game" | "level" | "turn">;
 
 /** How the turn spans were arrived at.
@@ -102,6 +103,7 @@ export type TurnIdentity = Pick<TurnSpan, "game" | "level" | "turn">;
  * spans that were invented. */
 export type TurnSource = "field" | "unavailable";
 
+/** What a log contains, counted once on the way in. Descriptive only - nothing here is a verdict. */
 export type LogSummary = {
   entries: number;
   turns: number;
@@ -123,6 +125,8 @@ export type LogIndex = {
   byTurn: Map<string, TurnSpan>;
 };
 
+/** A validated export: its envelope, its readable entries, and the index built over them. Reaching
+ * this shape means the JSON parsed and at least one entry matched the entry contract. */
 export type TapooLog = {
   name: string;
   version: string | null;
@@ -141,7 +145,9 @@ export type TapooLog = {
  * success field off a failure. */
 export type Result<T, E = string> = ({ok: true} & T) | ({ok: false; error: E});
 
+/** A validated URL, or the reason it was refused. */
 export type UrlResult = Result<{url: string}>;
+
 /** How a warning bears on the report the reader is about to read.
  *
  * Only two, because only two justify interrupting someone. "inaccurate" means a verdict in the report
@@ -157,8 +163,12 @@ export type WarningImpact = "inaccurate" | "incomplete";
 /** A caveat the reader is shown, carrying what it costs them. */
 export type LogWarning = {impact: WarningImpact; message: string};
 
+/** A parsed export, with any caveats the parse raised. Warnings travel with a *success*: a log can be
+ * readable and still worth a caveat, and dropping them on the way out is how a caveat goes unsaid. */
 export type LogParseResult = Result<{value: TapooLog; warnings: LogWarning[]}>;
+/** The same, from raw text rather than a parsed object. */
 export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]}>;
+/** A share-link payload, or why the token could not be read. */
 export type PayloadResult = Result<{payload: string}>;
 
 /** A rejected share link always carries the link it is about, so the view can mark it up.
@@ -171,8 +181,15 @@ export type DecodedPayload = {ok: true; url: string} | {ok: false; error: string
 
 // --- Maze ---
 
+/** A decoded maze: its dimensions and, per cell, the moves that lead out of it. A move absent from a
+ * cell's set is a wall - the exits are the complete statement of where movement is possible. */
 export type Maze = {rows: number; cols: number; exits: Map<CellKey, Set<Move>>};
 
+/** Structural counts over a decoded maze.
+ *
+ * `successPathCells` counts **cells** on the shortest start-to-destination route, start and destination
+ * included - one more than the move count `successPathLength` returns, and the unit the report compares
+ * against `cells`. Null when no route exists in the decoded structure, which is a finding, not a zero. */
 export type MazeStats = {
   rows: number;
   cols: number;
@@ -183,9 +200,11 @@ export type MazeStats = {
   deg3: number;
   deg4: number;
   edges: number;
-  successPath: number | null;
+  successPathCells: number | null;
 };
 
+/** The maze as the log carries it. `structure_checksum` is Tapoo's own hash of `structure`, and it is
+ * the only way to tell a maze that arrived intact from one truncated in transit. */
 export type EncodedMaze = {
   index_chars: string[];
   structure: string;
@@ -193,6 +212,7 @@ export type EncodedMaze = {
   dimensions?: {numRows?: number; numCols?: number; area?: number};
 };
 
+/** A decoded maze with its grid and stats, or why decoding failed. */
 export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats}>;
 
 // --- Rubric engine ---
@@ -212,10 +232,16 @@ export type Submission = {
   applied?: number | null;
 };
 
+/** One thing that happened, in log order: the agent stood somewhere, or it submitted moves. */
 export type TimelineEvent =
   | {kind: "position"; cell: CellKey}
   | {kind: "submission"; record: Submission};
 
+/** Everything one round's entries yielded, gathered in a single pass.
+ *
+ * The rubric groups read this and nothing else, so a question can only be answered from evidence the
+ * pass actually collected - which is what keeps a verdict traceable to the log. Built per round: a
+ * retry is a different maze, and positions or exits leaking across would describe neither. */
 export type Context = {
   label: string;
   model: string | null;
@@ -264,12 +290,13 @@ export type Context = {
   tokenExhaustions: number;
 };
 
-/** A `get_last_prediction_outcome` payload, as logged. Every field is optional: it is read from
- * arbitrary JSON and two different producers push into the same array. */
 /** One turn's outcome, as get_last_prediction_outcome reported it to the turn after it.
  *
  * Logged verbatim - this tool carries no content_checksum, which is Tapoo's marker for a message whose
- * content was trimmed or compacted - so these are the values Tapoo actually sent, not a reconstruction. */
+ * content was trimmed or compacted - so these are the values Tapoo actually sent, not a reconstruction.
+ *
+ * Every field is optional: it is read from arbitrary JSON, and two different producers push into the
+ * same array. */
 export type Replay = {
   lastMoveStatus?: string | null;
   lastSubmittedMoves?: unknown;
@@ -299,6 +326,10 @@ export type Outcome = {
   lastActionResult?: Replay;
 };
 
+/** One turn of play: who acted, what they submitted, and what the maze did with it.
+ *
+ * `cells` starts at the cell the turn *began* on, so a turn that applied two moves holds three cells.
+ * `applied` and `decayCharged` are null where the log did not say - not zero, which is a reading. */
 export type Turn = {
   turn: number;
   playerName: string | null;
@@ -312,6 +343,10 @@ export type Turn = {
   decayCharged: number | null;
 };
 
+/** One played round, as the replay needs it: its maze, its path, and how it ended.
+ *
+ * Named for the level it played, but keyed by (game, level) - a retry is a different round with a
+ * brand-new maze, and merging two would draw a path crossing walls that exist in neither. */
 export type Level = {
   key: string;
   game: number | null;
@@ -319,9 +354,9 @@ export type Level = {
   encodedMaze: EncodedMaze | null;
   startPosition: {x?: number; y?: number} | null;
   startCell: CellKey | null;
-  // Resolved to a cell key here, not carried in the logged shape. The view used to do this conversion
-  // itself and handled only {row, col}, so a compacted [row, col] silently became
-  // "undefined,undefined" - no destination drawn, and the shortest route reported as "no route found".
+  /** Resolved to a cell key here, not carried in the logged shape. The view used to do this conversion
+   * itself and handled only {row, col}, so a compacted [row, col] silently became
+   * "undefined,undefined" - no destination drawn, and the shortest route reported as "no route found". */
   destinationCell: CellKey | null;
   historyWindowRadius: number | null;
   endCell: CellKey | null;
@@ -332,6 +367,7 @@ export type Level = {
   outcome: Outcome | null;
 };
 
+/** Which half of the rubric a group belongs to. The two are never combined into one score. */
 export type GroupKind = "capability" | "violation";
 
 /** One rubric group: its identity, the questions it asks, and the function that answers them. Keeping
@@ -344,6 +380,8 @@ export type RubricGroup = {
   evaluate: (context: Context) => Record<string, boolean>;
 };
 
+/** One rubric group's verdict and the answers behind it. `met` is the verdict; `passed`/`total` are
+ * kept because "2/3" and "0/3" are both a no, and the difference is evidence. */
 export type GroupResult = {
   id: string;
   label: string;
@@ -354,6 +392,7 @@ export type GroupResult = {
   total: number;
 };
 
+/** One round's complete profile: what produced it, what it demonstrated, and what it violated. */
 export type Report = {
   label: string;
   model: string | null;
@@ -434,6 +473,7 @@ export type RoundReport = {
   report: Report;
 };
 
+/** What a whole log analyzed to: its rounds, and the caveats a reader is owed. */
 export type Analysis = Result<{
   source: TapooLog;
   warnings: LogWarning[];
@@ -468,6 +508,10 @@ export type LevelModel = {
   agents: string[];
 };
 
+/** The replay at one scrubber position - everything the view draws for that turn.
+ *
+ * Derived per position rather than accumulated, so scrubbing backwards shows the same picture as
+ * scrubbing forwards to the same place. */
 export type Frame = {
   played: Turn[];
   turnIndex: number;
@@ -484,9 +528,14 @@ export type Frame = {
 
 // --- Report tabs ---
 
+/** Where a tab stands: nothing loaded, a report ready, or a load that failed. */
 export type TabStatus = "empty" | "loaded" | "error";
+/** Where the URL being typed into the add-tab field stands. */
 export type DraftStatus = "empty" | "loading" | "error";
 
+/** One loaded log and its report. `loadedUrl` is what actually produced `result`, which is not always
+ * `url` - the field can be edited after a load, and comparing the two is what tells the control the
+ * displayed report is stale. */
 export type ReportTab = {
   id: string;
   url: string;
@@ -497,6 +546,7 @@ export type ReportTab = {
   error?: string;
 };
 
+/** The whole control's state, replaced wholesale on every change rather than mutated in place. */
 export type ReportTabsState = {
   tabs: ReportTab[];
   activeTabId: string | null;
@@ -523,10 +573,12 @@ export type ReportTabsInput = HTMLElement & {value: ReportTabsState};
  * libraries. */
 export type Html = (strings: TemplateStringsArray, ...values: unknown[]) => Element;
 
+/** The one Inputs call this app makes. */
 export type InputsApi = {
   table: (rows: unknown[], options?: Record<string, unknown>) => HTMLElement;
 };
 
+/** The two Observable globals, passed in rather than imported - see the note on `Html`. */
 export type ReportUi = {html: Html; Inputs: InputsApi};
 
 /** A rendered region: an element, or the empty string when a section renders nothing. */

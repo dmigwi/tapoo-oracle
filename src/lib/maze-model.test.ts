@@ -241,7 +241,9 @@ describe("mazeLevelRows", () => {
 
     expect(value(rows, "Outcome")).toBe("won")
     expect(value(rows, "Turns")).toBe("3")
-    expect(value(rows, "Success path")).toBe("17 of 24 (71%)")
+    // Cells, not moves: the 17-move route passes through 18 cells, and the row compares it against
+    // the maze's 24 cells. Counting moves here read "17 of 24 (71%)" - one short in both halves.
+    expect(value(rows, "Success path")).toBe("18 of 24 (75%)")
     // Agent-specific rows are no longer in mazeLevelRows.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()

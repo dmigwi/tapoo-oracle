@@ -11,7 +11,8 @@
 //
 // What belongs here: pure, document-free, and either genuinely generic or already wanted by two
 // modules. A helper only one module uses stays with that module; this is not a drawer for anything
-// small. The import rule is checked by module-graph.test.ts, because nothing in the linter checks it.
+// small. Nothing enforces the import rule - not the linter, not a test - so it holds only as long as
+// each new helper is added with it in mind; the first import here is what makes this module ordinary.
 
 // --- Reading values that arrived from outside the app ---
 //

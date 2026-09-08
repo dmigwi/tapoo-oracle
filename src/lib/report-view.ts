@@ -115,8 +115,9 @@ function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): 
 
 // --- Which report is showing ---
 
-// The tab the rest of the page is about. The state can arrive before the input has produced one, so
-// the shape is normalized rather than assumed.
+/** activeReportTab is the tab the rest of the page is about. The state can arrive before the input has
+ * produced one, so the shape is normalized rather than assumed - it returns undefined instead of
+ * throwing, and every caller renders an empty state from that. */
 export function activeReportTab(tabsState: ReportTabsState | undefined): ReportTab | undefined {
   const state = tabsState?.tabs ? tabsState : createInitialReportTabs();
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
@@ -173,10 +174,10 @@ function notices({html}: ReportUi, tab: ReportTab | undefined): Region {
   return "";
 }
 
-// activeRound picks the round on screen, falling back to the first.
-//
-// The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
-// blanked because a key went stale would be a worse failure than showing round one.
+/** activeRound picks the round on screen, falling back to the first.
+ *
+ * The fallback is the contract: a key only ever comes from a tab this render drew, but a report that
+ * blanked because a key went stale would be a worse failure than showing round one. */
 export function activeRound(tab: ReportTab | undefined, key: string | null): RoundReport | undefined {
   const result = tab?.result;
   if (!result?.ok) return undefined;
@@ -253,8 +254,6 @@ function profile(
     </div>`;
 }
 
-// detail is the evidence itself: the rubric tables, the diagnostics, and the provenance of the log
-// they were read from.
 // How this report is generated.
 //
 // Reference material, so it is collapsed, and it sits directly under the share panel because a reader
@@ -333,6 +332,8 @@ function methodology({html}: ReportUi, result: Analysis | undefined): Region {
     </details>`;
 }
 
+// detail is the evidence itself: the rubric tables, the diagnostics, and the provenance of the log
+// they were read from.
 function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): Region {
   const result = tab?.result;
   const round = activeRound(tab, key);
@@ -380,9 +381,9 @@ function detail(ui: ReportUi, tab: ReportTab | undefined, key: string | null): R
 
 // --- Entry point ---
 
-// One call per render, returning the four regions the page interpolates. Returning an object rather
-// than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
-// reading order stays visible in the markdown rather than being buried in this file.
+/** renderReportSections is one call per render, returning the regions the page interpolates. Returning an object rather
+ * than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
+ * reading order stays visible in the markdown rather than being buried in this file. */
 export function renderReportSections(
   ui: ReportUi,
   tabsState: ReportTabsState | undefined,

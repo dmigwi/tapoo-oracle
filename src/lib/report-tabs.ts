@@ -11,9 +11,9 @@ import type { Analysis, LogWarning, ReportTab, ReportTabsState, TapooLog } from 
 import {asTrimmedText, clamp} from "./utils";
 
 
-// analyzeLogText is the single entry point from raw text to a rendered result. It returns a
-// discriminated result instead of throwing, because every failure here is a person's input mistake
-// that the page has to explain, not an exceptional condition.
+/** analyzeLogText is the single entry point from raw text to a rendered result. It returns a
+ * discriminated result instead of throwing, because every failure here is a person's input mistake
+ * that the page has to explain, not an exceptional condition. */
 export function analyzeLogText(
   text: unknown,
   {label = "online log", sourceUrl}: {label?: string; sourceUrl?: string} = {},
@@ -59,6 +59,10 @@ function reportTabId(): string {
   return `report-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/** Names a tab after the file it loaded: the last path segment, else the host, else "Report N".
+ *
+ * Every arm falls back rather than throwing - this runs on a URL that has already been validated, but
+ * naming a tab must not be able to fail the load that produced it. */
 export function reportTabLabelFromUrl(value: string, index = 0): string {
   const fallback = `Report ${index + 1}`;
   try {
@@ -70,12 +74,17 @@ export function reportTabLabelFromUrl(value: string, index = 0): string {
   }
 }
 
+/** Shortens a label to fit a tab, keeping the *end*.
+ *
+ * The tail is the discriminating half: logs from one run share a directory and differ in the file name,
+ * so trimming from the right would leave a row of tabs reading the same thing. */
 export function trimReportTabLabel(value: unknown, maxLength = 34): string {
   const label = asTrimmedText(value);
   if (label.length <= maxLength) return label;
   return `...${label.slice(-(maxLength - 3))}`;
 }
 
+/** A tab with no log in it yet: an id and somewhere to type a URL. */
 export function createEmptyReportTab(id: string = reportTabId()): ReportTab {
   return {
     id,
@@ -85,6 +94,7 @@ export function createEmptyReportTab(id: string = reportTabId()): ReportTab {
   };
 }
 
+/** The state the page opens in: no tabs, and the add-a-report field already showing. */
 export function createInitialReportTabs(): ReportTabsState {
   return {
     tabs: [],
@@ -95,6 +105,10 @@ export function createInitialReportTabs(): ReportTabsState {
   };
 }
 
+/** Opens the draft field for a new report, remembering the id the tab will take once it loads.
+ *
+ * No tab is appended here. A tab only exists once a load has produced something to put in it, so
+ * cancelling the draft leaves no empty tab behind. */
 export function addReportTab(state: ReportTabsState, id: string = reportTabId()): ReportTabsState {
   return {
     ...state,
@@ -106,6 +120,8 @@ export function addReportTab(state: ReportTabsState, id: string = reportTabId())
   };
 }
 
+/** Replaces one tab's fields, leaving the rest of the state alone. Returns a new state rather than
+ * mutating - the control repaints from whatever it is handed, so an in-place edit would not be drawn. */
 export function updateReportTab(
   state: ReportTabsState,
   tabId: string,
@@ -117,6 +133,12 @@ export function updateReportTab(
   };
 }
 
+/** Removes a tab and decides what the reader looks at next.
+ *
+ * Activation only moves when the *active* tab is the one closed; closing a background tab must not
+ * change what is on screen. The successor is the tab that took the deleted one's position, or the new
+ * last tab when the deleted one was at the end. Removing the last tab of all returns the opening
+ * state, so the page offers a URL field rather than an empty frame. */
 export function deleteReportTab(
   state: ReportTabsState,
   tabId: string,
@@ -144,6 +166,13 @@ export function deleteReportTab(
 const fetchOptions = (fetchText?: (url: string) => Promise<string>) =>
   fetchText ? {fetchText} : undefined;
 
+/** Loads the drafted URL and appends the tab it produced.
+ *
+ * A failure with a URL still becomes a tab, carrying its error: the reader typed an address that
+ * validated, and a tab they can retry or correct is more use than an error message and nothing to
+ * attach it to. A failure with no URL never validated, so it stays in the draft field instead.
+ *
+ * `fetchText` is injectable for the suites. */
 export async function loadNewReportTabFromUrl(
   state: ReportTabsState,
   fetchText?: (url: string) => Promise<string>,
@@ -183,6 +212,11 @@ export async function loadNewReportTabFromUrl(
   };
 }
 
+/** Reloads an existing tab from the URL it currently holds - the retry path, and the path a reader
+ * takes after editing a tab's address.
+ *
+ * Same rule on failure as the load above: a URL that validated leaves the tab in place carrying its
+ * error, so `loadedUrl` and the displayed report stay together or are cleared together. */
 export async function loadReportTabFromUrl(
   state: ReportTabsState,
   tabId: string,
