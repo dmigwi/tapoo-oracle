@@ -10,7 +10,7 @@ import { parseGameRound } from "./log-contract"
 import { loadTapooLogFromUrl } from "./share-link"
 import { answerRubric } from "./report"
 import { groupEntriesByRound, roundLabel } from "./rounds"
-import type { Analysis, LogWarning, LogTab, LogTabsState, RoundReport, RoundSlice, TapooLog } from "./types"
+import type { Analysis, LogWarning, LogTab, LogTabsState, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types"
 import {asTrimmedText, clamp} from "./utils";
 
 
@@ -27,7 +27,10 @@ import {asTrimmedText, clamp} from "./utils";
  *
  * The step both loaders share. Exported so a test can reach it from text without a network - see
  * analyzeLogText in test-support.ts. */
-export function buildReportAnalysis(source: TapooLog, warnings: LogWarning[], label: string): Analysis {
+export function buildReportAnalysis(
+  {source, warnings, checks}: {source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]},
+  label: string,
+): Analysis {
   const [first, ...rest]: RoundSlice[] = groupEntriesByRound(source.entries).map(({identity, entries}) => ({
     identity,
     reportLabel: `${label} - ${roundLabel(identity)}`,
@@ -49,6 +52,7 @@ export function buildReportAnalysis(source: TapooLog, warnings: LogWarning[], la
     ok: true,
     source,
     warnings,
+    checks,
     rounds: [first, ...rest],
   };
 }
@@ -237,7 +241,7 @@ async function loadLogTabFields(
   // Past the guard above, a load that failed still validated, so it has a URL to name.
   const resolved = loaded.url ?? asTrimmedText(url);
   const label = logTabLabelFromUrl(resolved, index);
-  const result = loaded.ok ? buildReportAnalysis(loaded.source, loaded.warnings, label) : undefined;
+  const result = loaded.ok ? buildReportAnalysis(loaded, label) : undefined;
 
   return {
     label,

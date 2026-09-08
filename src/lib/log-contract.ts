@@ -23,6 +23,7 @@ import type {
   GameRound,
   LogWarning,
   MazeResult,
+  ValidationCheck,
   AssistantMessage,
   ResponseUsage,
   LogEntry,
@@ -30,7 +31,7 @@ import type {
   TapooLog,
 } from "./types";
 
-import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, isRecord} from "./utils";
+import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, formatCount, isRecord} from "./utils";
 import {indexLog} from "./log-index";
 import {cellFromGridPoint, mazeFromEncoded} from "./maze";
 // Imported as well as re-exported below: a re-export puts a name on this module's surface without
@@ -247,7 +248,13 @@ function isLogEntry(value: unknown): value is LogEntry {
 //
 // Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
 // but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
-function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
+/** How many of a list's model responses this contract could read.
+ *
+ * Counted once and read twice: the export warns when any response in the file is unreadable, and a
+ * round reports the same count over its own entries. The warning is about the file - "no prediction in
+ * this log was scored" is a claim about the whole of it - while the check belongs to the round a reader
+ * is looking at. */
+function countResponses(entries: LogEntry[]): {responses: number; unreadable: number} {
   const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
   const unreadable = responses.filter((entry) => {
     const details = entry.details;
@@ -256,16 +263,41 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
       : null;
     return assistantMessage(payload) === null;
   }).length;
+  return {responses: responses.length, unreadable};
+}
+
+/** What the file's model responses report about themselves.
+ *
+ * Scoped to the file rather than the round: the question is whether this contract recognises the shape
+ * the provider writes, and one file is one provider. Per-round counts would differ only in how many
+ * responses each round happened to hold, which is not what the check is asking. */
+function responseCheck(entries: LogEntry[]): ValidationCheck {
+  const {responses, unreadable} = countResponses(entries);
+  return {
+    name: "Model responses",
+    scope: "log",
+    outcome: responses === 0 ? "unchecked" : unreadable > 0 ? "failed" : "passed",
+    detail:
+      responses === 0
+        ? "the log carried no model responses"
+        : unreadable > 0
+          ? `${formatCount(unreadable)} of ${formatCount(responses)} model responses were in a provider shape this analyzer does not recognise`
+          : `${formatCount(responses - unreadable)} of ${formatCount(responses)} model responses were read`,
+  };
+}
+
+function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
+  const {responses, unreadable} = countResponses(entries);
 
   if (unreadable === 0) {
     return [];
   }
 
-  const all = unreadable === responses.length;
+  const all = unreadable === responses;
   return [{
     impact: "inaccurate",
     message:
-      `${unreadable} of ${responses.length} model ${responses.length === 1 ? "response" : "responses"} ` +
+      `${unreadable} of ${responses} model ${responses === 1 ? "response" : "responses"} ` +
       `could not be read: the body is not in a shape this analyzer recognises. ` +
       `${all ? "No prediction in this log was scored" : "Those turns were not scored"}, so a capability ` +
       "answered NO may only mean the evidence for it was unreadable.",
@@ -291,14 +323,16 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
 // Checked when the round is opened rather than when its maze is drawn: a damaged payload is reported
 // once, above the report, instead of being discovered by whoever happens to scrub to the turn holding
 // it.
-function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
+function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[]; check: ValidationCheck} {
   const warnings: LogWarning[] = [];
 
   let exits: OpenCellExits | null = null;
   let startCell: CellKey | null = null;
   let destinationCell: unknown = null;
   let historyWindowRadius: unknown = null;
+  let verified = 0;
   let damaged = 0;
+  let unverifiable = 0;
   let firstDamaged: string | null = null;
 
   const cellTypeOf = (cell: CellKey): string => {
@@ -325,6 +359,20 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
 
     for (const message of asArray(details.messages).map(asRecord)) {
       if (message.role !== "tool" || typeof message.content !== "string") continue;
+
+      // Is this a get_maze_structure result at all? Decided before anything is counted, because a round
+      // carries three tools' results and only this one is reconstructable. Counting the other two as
+      // "not checkable" read as a gap in the checking when they are simply not this check's business -
+      // it reported 32 unverifiable payloads on a log where every payload this check covers verified.
+      let payload: unknown;
+      try {
+        payload = JSON.parse(message.content);
+      } catch {
+        continue;
+      }
+      const body = asRecord(payload);
+      if (!Array.isArray(body.filteredTraversalHistory)) continue;
+
       const checksum = message.content_checksum;
       // Verify only when the round supplied every input the reconstruction needs.
       //
@@ -342,17 +390,9 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
         destinationCell === undefined ||
         typeof historyWindowRadius !== "number"
       ) {
+        unverifiable += 1;
         continue;
       }
-
-      let payload: unknown;
-      try {
-        payload = JSON.parse(message.content);
-      } catch {
-        continue;
-      }
-      const body = asRecord(payload);
-      if (!Array.isArray(body.filteredTraversalHistory)) continue;
 
       const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
         const key = cellKeyFromLogged(record.cell) ?? "0,0";
@@ -376,7 +416,9 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
         filteredTraversalHistory: history,
       });
 
-      if (fnv1a64Checksum(rebuilt) !== checksum) {
+      if (fnv1a64Checksum(rebuilt) === checksum) {
+        verified += 1;
+      } else {
         damaged += 1;
         firstDamaged ??= `turn ${entry.turn ?? "?"} of game ${entry.game ?? "?"} level ${entry.level ?? "?"}`;
       }
@@ -395,7 +437,47 @@ function traversalPayloadWarnings(entries: LogEntry[]): LogWarning[] {
     });
   }
 
-  return warnings;
+  return {warnings, check: traversalCheck(verified, damaged, unverifiable)};
+}
+
+/** How the traversal reconstruction reports itself when nothing is wrong.
+ *
+ * Nothing verified and something skipped is `unchecked`, not `passed`: the round did not record what
+ * the reconstruction needs, so the visit colours on its replay are unvouched-for. That is the case this
+ * summary exists to make visible - before it, a round that verified all 16 payloads and a round that
+ * could attempt none both showed the same silence. */
+function traversalCheck(verified: number, damaged: number, unverifiable: number): ValidationCheck {
+  const name = "Traversal payloads";
+  const scope = "round" as const;
+  const skipped = unverifiable === 0 ? "" : `, ${formatCount(unverifiable)} not checkable`;
+  const results = "get_maze_structure results";
+  const total = verified + damaged;
+
+  if (damaged > 0) {
+    return {
+      name,
+      scope,
+      outcome: "failed",
+      detail: `${formatCount(damaged)} of ${formatCount(total)} ${results} did not match the checksum Tapoo stamped on them${skipped}`,
+    };
+  }
+  if (verified === 0) {
+    return {
+      name,
+      scope,
+      outcome: "unchecked",
+      detail:
+        unverifiable === 0
+          ? "the round carried no checksummed get_maze_structure results"
+          : `${formatCount(unverifiable)} ${results} carried no checksum, or the round never recorded the destination cell and history window a reconstruction needs`,
+    };
+  }
+  return {
+    name,
+    scope,
+    outcome: "passed",
+    detail: `${formatCount(verified)} of ${formatCount(total)} ${results} reconstructed byte-exactly${skipped}`,
+  };
 }
 
 /** How a round names itself in a warning. The entries all belong to one round, so any of them can say
@@ -454,20 +536,26 @@ const PERSONA_FORMS = 4;
 // Tool *results* are excluded here for the same reason they are hashed elsewhere: their content is
 // compacted rather than truncated, so it neither hashes nor ends in an ellipsis, and mistaking that for
 // damage would warn on every log ever written.
-function promptWarnings(entries: LogEntry[], round: string): LogWarning[] {
+function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarning[]; checks: ValidationCheck[]} {
   const warnings: LogWarning[] = [];
   const toolSums = new Map<string, Set<string>>();
   const byChecksum = new Map<string, string[]>();
   const personas = new Set<string>();
+  let hashed = 0;
   let damaged = 0;
+  let stubs = 0;
 
   const note = (checksum: unknown, text: unknown): void => {
     if (typeof checksum !== "string" || typeof text !== "string") return;
     byChecksum.set(checksum, [...(byChecksum.get(checksum) ?? []), text]);
     // Trimmed text cannot be hashed, and a full text that happens to end in an ellipsis is only skipped
     // - the heuristic errs towards checking less, never towards warning wrongly.
-    if (text.endsWith(COMPACT_TAIL)) return;
-    if (fnv1a64Checksum(text) !== checksum) damaged += 1;
+    if (text.endsWith(COMPACT_TAIL)) {
+      stubs += 1;
+      return;
+    }
+    if (fnv1a64Checksum(text) === checksum) hashed += 1;
+    else damaged += 1;
   };
 
   for (const entry of entries) {
@@ -531,8 +619,17 @@ function promptWarnings(entries: LogEntry[], round: string): LogWarning[] {
     });
   }
 
+  // A stub whose checksum the round never carried in full cannot be checked at all - and that is
+  // ordinary rather than damage: Tapoo logs a prompt in full once and stubs every later appearance, so
+  // a prompt that changes mid-round is only ever stubbed. Counted, so the summary can say how much of
+  // the round's text was actually vouched for.
+  let unmatched = 0;
   for (const [checksum, texts] of byChecksum) {
     const full = texts.reduce((longest, text) => (text.length > longest.length ? text : longest), "");
+    if (full.endsWith(COMPACT_TAIL)) {
+      unmatched += texts.length;
+      continue;
+    }
     if (texts.every((text) => text === full || text === compacted(full))) continue;
     warnings.push({
       impact: "inaccurate",
@@ -542,7 +639,66 @@ function promptWarnings(entries: LogEntry[], round: string): LogWarning[] {
     });
   }
 
-  return warnings;
+  const drifted = [...toolSums.values()].filter((sums) => sums.size > 1).length;
+  const checks: ValidationCheck[] = [
+    promptTextCheck(hashed, damaged, stubs - unmatched, unmatched),
+    {
+      name: "Tool descriptions",
+      scope: "round",
+      outcome: toolSums.size === 0 ? "unchecked" : drifted > 0 ? "failed" : "passed",
+      detail:
+        toolSums.size === 0
+          ? "the round declared no tools"
+          : drifted > 0
+            ? `${formatCount(drifted)} of ${formatCount(toolSums.size)} declared tools were described more than one way during the round`
+            : `${formatCount(toolSums.size)} declared tools, each described one way throughout the round`,
+    },
+    {
+      name: "Agent personas",
+      scope: "round",
+      outcome: personas.size === 0 ? "unchecked" : personas.size > PERSONA_FORMS ? "failed" : "passed",
+      detail:
+        personas.size === 0
+          ? "the round carried no system prompt"
+          : `${formatCount(personas.size)} distinct system prompts, of the ${formatCount(PERSONA_FORMS)} personas Tapoo defines`,
+    },
+  ];
+
+  return {warnings, checks};
+}
+
+/** How the prompt and tool-description texts report themselves.
+ *
+ * Two populations, and the summary has to keep them apart. Text logged in full is hashed against the
+ * checksum beside it. Text logged as a stub cannot be hashed, only compared with the full text under the
+ * same checksum - and where the round never carried that full text, it cannot be checked at all. The
+ * snapshot log is mostly that last case, which is exactly why a bare "passed" would overstate it. */
+function promptTextCheck(hashed: number, damaged: number, matched: number, unmatched: number): ValidationCheck {
+  const name = "Prompts and tool descriptions";
+  const scope = "round" as const;
+  const parts = [
+    hashed > 0 ? `${formatCount(hashed)} texts logged in full and hashed against their checksums` : "",
+    matched > 0 ? `${formatCount(matched)} shortened repeats matched the full text they stand for` : "",
+    unmatched > 0 ? `${formatCount(unmatched)} shortened repeats whose full text this round never carried` : "",
+  ].filter(Boolean);
+
+  if (damaged > 0) {
+    return {
+      name,
+      scope,
+      outcome: "failed",
+      detail: `${formatCount(damaged)} texts did not match their own checksums${parts.length > 0 ? `; ${parts.join(", ")}` : ""}`,
+    };
+  }
+  if (hashed === 0 && matched === 0) {
+    return {
+      name,
+      scope,
+      outcome: "unchecked",
+      detail: unmatched > 0 ? `${formatCount(unmatched)} shortened repeats whose full text this round never carried` : "the round carried no checksummed prompt or description",
+    };
+  }
+  return {name, scope, outcome: "passed", detail: parts.join(", ")};
 }
 
 /** parseGameRound reads one round's entries: its maze, and whether what the log carries about that
@@ -588,10 +744,37 @@ export function parseGameRound(entries: LogEntry[]): GameRound {
     });
   }
 
-  const warnings: LogWarning[] = [];
-  warnings.push(...promptWarnings(entries, roundName(entries)));
-  warnings.push(...traversalPayloadWarnings(entries));
-  return {maze, warnings};
+  const prompts = promptWarnings(entries, roundName(entries));
+  const traversal = traversalPayloadWarnings(entries);
+
+  return {
+    maze,
+    warnings: [...prompts.warnings, ...traversal.warnings],
+    checks: [mazeCheck(maze), ...prompts.checks, traversal.check],
+  };
+}
+
+/** How the decoded maze reports itself.
+ *
+ * One check rather than four, though mazeFromEncoded verifies four things - the structure checksum,
+ * that edges are one fewer than cells, the dead-end identity, and that a route from start to
+ * destination exists. They fail as one result and the replay already prints the last two as proofs, so
+ * naming them here is enough for a reader to know what "passed" covered. */
+function mazeCheck(maze: MazeResult | null): ValidationCheck {
+  const name = "Encoded maze";
+  const scope = "round" as const;
+  if (maze === null) {
+    return {name, scope, outcome: "unchecked", detail: "the round carried no encoded maze"};
+  }
+  if (!maze.ok) {
+    return {name, scope, outcome: "failed", detail: maze.error};
+  }
+  return {
+    name,
+    scope,
+    outcome: "passed",
+    detail: "structure checksum, acyclic-graph and dead-end proofs, and a navigable start-to-destination route",
+  };
 }
 
 /** parseTapooLogText is the ingress point: every log the app reads enters here, and nothing else in
@@ -688,6 +871,24 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
 
   warnings.push(...unreadableResponseWarnings(entries));
 
+  // Both true of every round in the file: an entry that fails the contract is dropped before rounds
+  // exist, and the provider's response shape does not change between them.
+  const checks: ValidationCheck[] = [
+    {
+      // Named for what it reads rather than for the contract it applies. "Entry shape" said nothing
+      // about what a shape is or which entries were counted; every consumer of a log needs these three
+      // fields, so the check says so and the count says what it counted.
+      name: "Log entry fields",
+      scope: "log",
+      outcome: skipped > 0 ? "failed" : "passed",
+      detail:
+        skipped > 0
+          ? `${formatCount(skipped)} of ${formatCount(envelope.entries.length)} log entries lacked a payload, a timestamp or a known log level, and were dropped`
+          : `${formatCount(entries.length)} of ${formatCount(entries.length)} log entries carried a payload, a timestamp and a known log level`,
+    },
+    responseCheck(entries),
+  ];
+
   // Only the export's own caveats. A round's are parseGameRound's; unknownEvents and
   // levelDisagreements are deliberately not warnings at all - each says why.
 
@@ -700,5 +901,5 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     index,
   };
 
-  return {ok: true, source: sourceUrl ? {...log, sourceUrl} : log, warnings};
+  return {ok: true, source: sourceUrl ? {...log, sourceUrl} : log, warnings, checks};
 }

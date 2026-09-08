@@ -4,7 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 
 import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
-import type {LogEntry} from "./types"
+import type {LogEntry, ValidationCheck} from "./types"
 import {groupEntriesByRound} from "./rounds"
 import {fnv1a64Checksum} from "./utils"
 import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
@@ -483,6 +483,104 @@ describe("the encoded maze payload", () => {
     ])
 
     expect(expectOk(must(maze, "a decoded maze")).stats.cells).toBe(24)
+  })
+})
+
+// The summary the report shows: what was verified, and what could not be.
+//
+// The checks report only their failures, so a clean log says nothing - and "nothing" covered both a
+// round that verified all 16 payloads and a round that could attempt none. These pin the difference.
+describe("the validation summary", () => {
+  const named = (checks: ValidationCheck[], name: string) => {
+    const check = checks.find((candidate) => candidate.name === name)
+    if (!check) throw new Error(`no check named ${name}`)
+    return check
+  }
+  const fixtureEntries = () => (fixtureData as unknown as {entries: LogEntry[]}).entries
+
+  it("reports what a real round verified", () => {
+    const round = parseGameRound(fixtureEntries())
+
+    expect(round.checks.map((check) => check.outcome)).toEqual(["passed", "passed", "passed", "passed", "passed"])
+    expect(round.checks.every((check) => check.scope === "round")).toBe(true)
+    expect(named(round.checks, "Traversal payloads").detail).toBe("16 of 16 get_maze_structure results reconstructed byte-exactly")
+    expect(named(round.checks, "Agent personas").detail).toMatch(/3 distinct system prompts, of the 4 personas/)
+  })
+
+  // Two checks cover the file rather than a round, and say so: an entry that fails the contract is
+  // dropped before rounds exist, and whether this analyzer recognises the provider's response shape
+  // does not change between rounds. The view marks them so a reader knows they hold for every round.
+  it("scopes the file-wide checks to the log, not to a round", () => {
+    const parsed = expectOk(parseTapooLogText(JSON.stringify(fixtureData)))
+
+    expect(parsed.checks.map((check) => check.name)).toEqual(["Log entry fields", "Model responses"])
+    expect(parsed.checks.every((check) => check.scope === "log")).toBe(true)
+    expect(named(parsed.checks, "Log entry fields").detail).toBe("66 of 66 log entries carried a payload, a timestamp and a known log level")
+    expect(named(parsed.checks, "Model responses").detail).toBe("32 of 32 model responses were read")
+  })
+
+  it("counts entries the entry contract turned away", () => {
+    const parsed = expectOk(parseTapooLogText(JSON.stringify(envelope({entries: [entry(), {nonsense: true}]}))))
+
+    expect(named(parsed.checks, "Log entry fields").outcome).toBe("failed")
+    expect(named(parsed.checks, "Log entry fields").detail).toMatch(/^1 of 2 log entries lacked a payload/)
+    expect(messagesOf(parsed.warnings).join(" ")).toMatch(/did not match the log entry shape/)
+  })
+
+  // The other two tools' results are not maze-structure payloads, so they are not this check's
+  // business and must not be counted against it. Counting them read as 32 unverifiable payloads on a
+  // log where every payload the check covers verified.
+  it("counts only the payloads the reconstruction is about", () => {
+    expect(named(parseGameRound(fixtureEntries()).checks, "Traversal payloads").detail)
+      .not.toMatch(/not checkable/)
+  })
+
+  // The case the summary exists for. Strip the history window and the reconstruction has nothing to
+  // work from - which is not damage, and is no longer indistinguishable from success either.
+  it("says a check could not run, rather than that it passed", () => {
+    const stripped = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    for (const entry of stripped.entries) {
+      const details = entry.details as Record<string, unknown> | null
+      if (details && "historyWindowRadius" in details) delete details.historyWindowRadius
+    }
+    const check = named(parseGameRound(stripped.entries).checks, "Traversal payloads")
+
+    expect(check.outcome).toBe("unchecked")
+    expect(check.detail).toMatch(/never recorded the destination cell and history window/)
+    // And still silent, because a missing input is not evidence of damage.
+    expect(parseGameRound(stripped.entries).warnings).toEqual([])
+  })
+
+  // A failure has to read as one, and must not replace the warning that already reports it.
+  it("reports a damaged payload as failed, alongside the warning", () => {
+    const tampered = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    for (const entry of tampered.entries) {
+      const details = entry.details as {messages?: Array<Record<string, unknown>>} | null
+      for (const message of details?.messages ?? []) {
+        if (typeof message.content_checksum === "string") message.content_checksum = "0xdeadbeefdeadbeef"
+      }
+    }
+    const round = parseGameRound(tampered.entries)
+
+    expect(named(round.checks, "Traversal payloads").outcome).toBe("failed")
+    expect(named(round.checks, "Traversal payloads").detail).toMatch(/^16 of 16 get_maze_structure results did not match/)
+    expect(round.warnings.some((warning) => warning.message.includes("checksum"))).toBe(true)
+  })
+
+  it("reports a round that carried no maze as unchecked, not failed", () => {
+    const check = named(parseGameRound([entry({payload: LOG_EVENTS.levelStarted})]).checks, "Encoded maze")
+
+    expect(check.outcome).toBe("unchecked")
+    expect(check.detail).toMatch(/carried no encoded maze/)
+  })
+
+  it("reports responses this analyzer could not read", () => {
+    const unreadable = entry({payload: LOG_EVENTS.response, details: {payload: {unknown_provider: {}}}})
+    const parsed = expectOk(parseTapooLogText(JSON.stringify(envelope({entries: [unreadable]}))))
+    const check = named(parsed.checks, "Model responses")
+
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toMatch(/1 of 1 model responses were in a provider shape/)
   })
 })
 

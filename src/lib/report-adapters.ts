@@ -3,7 +3,7 @@
 // Nothing here invents a number. Every value traces to a rubric answer or to a field the log states
 // outright, which is why the adapters are pure and testable without a DOM.
 
-import type { LogWarning, GroupKind, GroupResult, Report, TapooLog } from "./types"
+import type { LogWarning, GroupKind, GroupResult, Report, TapooLog, ValidationCheck } from "./types"
 import { formatCount } from "./utils"
 
 /** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
@@ -228,12 +228,26 @@ export function provenanceRows(source: TapooLog, report: Report): Array<{field: 
   ];
 }
 
-/** provenanceTableData renders the small provenance record as one horizontal row so a wide report
- * does not spend six rows on six short values. */
-export function provenanceTableData(source: TapooLog, report: Report): {columns: string[]; rows: Array<Record<string, unknown>>} {
-  const provenance = provenanceRows(source, report)
-  return {
-    columns: provenance.map((row) => row.field),
-    rows: [Object.fromEntries(provenance.map((row) => [row.field, row.value]))],
-  }
+
+/** The mark a file-wide check carries, and the note that explains it. */
+export const LOG_SCOPE_MARK = "*";
+
+/** validationRows turns the checks an analyzer ran into rows a reader can scan.
+ *
+ * The outcome leads the value, not the name, so a column of results reads down: passed, passed,
+ * not checked. It is the third that this table exists for - the checks report only their failures, so
+ * before this a clean page and an unchecked one looked the same.
+ *
+ * "not checked" rather than "unchecked": the reader is being told what this analyzer did, and the
+ * useful distinction is between a check that ran and one that could not.
+ *
+ * A file-wide check is marked rather than grouped. The reader has already chosen a round from the tabs
+ * above, so splitting one short table under a second set of headings reads as a second choice to make;
+ * an asterisk and one line of footnote says the same thing without asking anything of them. */
+export function validationRows(checks: ValidationCheck[]): Array<{field: string; value: string}> {
+  const said = {passed: "passed", failed: "FAILED", unchecked: "not checked"};
+  return checks.map((check) => ({
+    field: `${check.name}${check.scope === "log" ? LOG_SCOPE_MARK : ""}`,
+    value: `${said[check.outcome]} - ${check.detail}`,
+  }));
 }

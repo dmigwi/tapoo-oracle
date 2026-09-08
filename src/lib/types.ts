@@ -191,6 +191,30 @@ export type UrlResult = Result<{url: string}>;
  */
 export type WarningImpact = "inaccurate" | "incomplete";
 
+/** One integrity check this analyzer ran over a log, and what it found.
+ *
+ * Three outcomes, not two, and the third is the reason this type exists. The checks report only their
+ * failures, so a clean report says nothing - and "nothing" covered both a round whose 16 payloads
+ * reconstructed byte-exactly and a round where not one could be attempted, because the inputs the
+ * reconstruction needs were never recorded. A reader deciding whether to cite the report could not tell
+ * those apart. `unchecked` is that distinction made visible.
+ *
+ * The counts belong in `detail` rather than in more fields: what makes a check readable is "16 of 16",
+ * and every check counts something different.
+ *
+ * `scope` says what the check covers. Most are about one round, and sit in that round's report. A "log"
+ * check is about the file - entries dropped for failing the entry contract happen before rounds exist,
+ * and whether this analyzer can read the provider's response shape does not vary between rounds - so it
+ * is true of every round in the file and is listed with them rather than under a heading of its own.
+ * The view marks those with an asterisk and a footnote, which is a lighter way to say "this one covers
+ * more than the round you are reading" than splitting one short table in two. */
+export type ValidationCheck = {
+  name: string;
+  scope: "log" | "round";
+  outcome: "passed" | "failed" | "unchecked";
+  detail: string;
+};
+
 /** A caveat the reader is shown, carrying what it costs them. */
 export type LogWarning = {impact: WarningImpact; message: string};
 
@@ -202,7 +226,7 @@ export type LogWarning = {impact: WarningImpact; message: string};
  * There was a second result type beside this one carrying the same pair, for the halfway point between
  * parsing the JSON and checking the envelope. Nothing outside that one function ever held the halfway
  * value, so the two steps - and the two types - are now one. */
-export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]}>;
+export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]}>;
 /** A share-link payload, or why the token could not be read. */
 export type PayloadResult = Result<{payload: string}>;
 
@@ -254,7 +278,7 @@ export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats}
  * Produced by parseGameRound. `maze` is the round's first level-started maze decoded against its own
  * start and destination - null when the round carried none - and `warnings` are the round's alone,
  * never the log's. */
-export type GameRound = {maze: MazeResult | null; warnings: LogWarning[]};
+export type GameRound = {maze: MazeResult | null; warnings: LogWarning[]; checks: ValidationCheck[]};
 
 // --- Rubric engine ---
 
@@ -529,6 +553,11 @@ export type RoundReport = RoundSlice & {report: Report; round: GameRound};
 export type Analysis = Result<{
   source: TapooLog;
   warnings: LogWarning[];
+  /** What was verified about the file itself, which is true of every round in it. Listed with the
+   * round's own checks rather than under a heading of its own: a reader has already chosen which round
+   * they are reading, and a second grouping below that choice reads as a second choice to make. */
+  checks: ValidationCheck[];
+
   /** The rounds this log recorded, in the order they were played.
    *
    * A non-empty tuple, because it genuinely cannot be empty: the parse refuses a log with no readable

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
-import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, rubricQuestionRows, warningHeadline} from "./report-adapters"
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, LogTabsState, TapooLog} from "./types"
@@ -304,15 +304,6 @@ describe("presentation", () => {
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
-  it("pivots provenance into one complete row", () => {
-    const table = provenanceTableData(fixtureSource, fixtureReport)
-    expect(table.rows).toHaveLength(1)
-    expect(table.rows[0]).toMatchObject({
-      "Tapoo version": "2.5.1",
-      Model: "gemma4",
-      Player: "Katara",
-    })
-  })
 
   it("states the profile as a finding, leaving the method to the methodology", () => {
     const summary = narrativeSummary(fixtureReport)

@@ -419,6 +419,51 @@ describe("where a warning is attributed", () => {
   })
 })
 
+// The validation summary reaches the page, at both scopes and labelled by scope.
+describe("payload validation", () => {
+  const detail = (tab: LogTab) => rendered(renderReportSections(ui, stateWith(tab)).detail)
+
+  // One table, no grouping. A reader has already chosen which round they are reading, from the tabs
+  // above; a second grouping under that choice reads as a second choice to make. The two checks that
+  // cover the whole file are marked instead, and a footnote says what the mark means.
+  it("lists every check in one table, marking the ones that cover the file", () => {
+    const node = detail(loadedTab())
+    const section = [...node.querySelectorAll("section")].find(
+      (candidate) => candidate.querySelector("h2")?.textContent === "Payload validation",
+    )
+    if (!section) throw new Error("no payload validation section")
+    const names = [...section.querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent?.trim()).filter(Boolean)[0],
+    )
+
+    expect(section.querySelectorAll(".validation-scope")).toHaveLength(0)
+    expect(names).toEqual([
+      "Log entry fields*",
+      "Model responses*",
+      "Encoded maze",
+      "Prompts and tool descriptions",
+      "Tool descriptions",
+      "Agent personas",
+      "Traversal payloads",
+    ])
+    expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)
+  })
+
+  // Provenance used to be one row of eight columns, which trimmed its own values on a narrow viewport.
+  // Two columns down the page, like Model Output directly above it.
+  it("renders provenance as field and value rows", () => {
+    const node = detail(loadedTab())
+    const headers = queryAll<HTMLElement>(node, "thead th").map((th) => th.textContent?.trim())
+
+    expect(headers).toContain("MEASURE")
+    expect(headers).toContain("VALUE")
+    expect(headers).toContain("CHECK")
+    expect(headers).toContain("RESULT")
+    // Eight provenance fields, each on its own row rather than each in its own column.
+    expect(headers).not.toContain("Tapoo version")
+  })
+})
+
 describe("round tabs", () => {
   // Regions are attached to a document: selecting a round replaces them in place, and replaceWith
   // needs a parent. A detached render would pass every assertion below and do nothing on the page.

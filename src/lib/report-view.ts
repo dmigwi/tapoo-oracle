@@ -15,7 +15,9 @@ import {
   groupResultTone,
   narrativeSummary,
   profileCards,
-  provenanceTableData,
+  LOG_SCOPE_MARK,
+  provenanceRows,
+  validationRows,
   modelOutputRows,
   rubricQuestionRows,
   warningHeadline,
@@ -24,7 +26,7 @@ import { createInitialLogTabs, roundReportFor } from "./log-tabs";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
-import type { Analysis, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog } from "./types";
+import type { Analysis, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types";
 
 
 // --- Shared tables ---
@@ -105,13 +107,33 @@ function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement
   }));
 }
 
+// Field and value down the page, not eight columns across it.
+//
+// One row of eight columns fits a wide screen and trims its own values on anything narrower - a Tapoo
+// version, a model name and a reasoning effort each squeezed into an eighth of the width. Every other
+// summary here is already two columns, including Model Output directly above, so this now reads the
+// same way and the values have the room to be read.
 function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): HTMLElement {
-  const data = provenanceTableData(source, report);
-  return enableRowSelection(Inputs.table(data.rows, {
-    columns: data.columns,
+  const rows = provenanceRows(source, report);
+  return enableRowSelection(Inputs.table(rows, {
+    columns: ["field", "value"],
+    header: {field: "MEASURE", value: "VALUE"},
     sort: false,
-    rows: data.rows.length
+    rows: rows.length,
+    layout: "auto"
   }));
+}
+
+// One scope's worth of checks: what was verified, and what could not be.
+function validationTable({Inputs}: ReportUi, checks: ValidationCheck[]): HTMLElement {
+  const rows = validationRows(checks);
+  return Inputs.table(rows, {
+    columns: ["field", "value"],
+    header: {field: "CHECK", value: "RESULT"},
+    sort: false,
+    rows: rows.length,
+    layout: "auto"
+  });
 }
 
 // --- Which report is showing ---
@@ -427,6 +449,19 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
         <h2>Provenance</h2>
         <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
         ${provenanceTable(ui, result.source, report)}
+      </section>
+      <section class="events-section">
+        <h2>Payload validation</h2>
+        <p class="section-note">
+          What was checked before any of the above was answered, and what could not be. A check that
+          found nothing wrong and a check that never ran both used to look the same: this report says
+          nothing when every payload is intact, so "not checked" is the line worth reading.
+        </p>
+        ${validationTable(ui, [...result.checks, ...round.round.checks])}
+        <p class="source-line">
+          ${LOG_SCOPE_MARK} Checked once over the whole log file, so it holds for every round in it, not
+          only the one on screen.
+        </p>
         <p class="source-line">
           The question definitions and answers above come directly from the rubric engine that
           analyzed this log.

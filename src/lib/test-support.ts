@@ -134,5 +134,5 @@ export function analyzeLogText(
     return {ok: false, error: result.error};
   }
 
-  return buildReportAnalysis(result.source, result.warnings, label);
+  return buildReportAnalysis(result, label);
 }
