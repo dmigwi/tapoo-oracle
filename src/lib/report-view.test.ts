@@ -10,7 +10,7 @@ import {createInitialLogTabs, roundReportFor} from "./log-tabs"
 import {roundLabel} from "./rounds"
 import {activeLogTab, activeRound, renderReportSections, stampBuildAge} from "./report-view"
 import type {LogEntry, RegionView, LogTab, LogTabsState} from "./types"
-import {analyzeLogText, query, queryAll, rendered} from "./test-support";
+import {analyzeLogText, query, queryAll, rendered, twoSeatDriftLog} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
 // those two, and a stub would be testing the stub's shape rather than the one that ships.
@@ -468,8 +468,10 @@ describe("payload validation", () => {
       "Model responses*",
       "Encoded maze",
       "Prompts and tool descriptions",
+      "Trimmed checksummed repeats",
       "Tool descriptions",
       "Agent personas",
+      "User warnings",
       "Traversal payloads",
       "Agent settings",
     ])
@@ -624,13 +626,36 @@ describe("detail", () => {
     // Mono is the model's alone: it is the one literal string of the three.
     expect(queryAll<HTMLElement>(host, ".agent-model").map((node) => node.textContent))
       .toEqual(["moonshotai/Kimi-K3:baseten"])
+    // "on the X API", never "through X": the field is a wire protocol, and Hugging Face answers on
+    // OpenAI's, so naming it the way a provider is named would claim something the log does not say.
     expect(queryAll<HTMLElement>(host, ".agent-joiner").map((node) => node.textContent))
-      .toEqual([" through ", " at ", " reasoning effort"])
+      .toEqual([" on the ", " API", " at ", " reasoning effort"])
 
     // A model name is not a rubric identifier, and that chip is this page's promise that a code it marks
     // is defined somewhere else on the page.
     expect(queryAll<HTMLElement>(host, ".rubric-code").map((node) => node.textContent))
       .not.toContain("moonshotai/Kimi-K3:baseten")
+  })
+
+  // A row the Agent settings check is reporting has to look different from the rows it is not, before it
+  // is read rather than after. Comma-joined and in the same ink, two models read as a list - and at a
+  // glance as one long name - so the finding was invisible in the table that holds its evidence.
+  it("marks the setting a seat changed, and only that one", () => {
+    const result = analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const tab: LogTab = {id: "d", url: "https://example.com/d.json", loadedUrl: "https://example.com/d.json",
+      label: "drift", status: "loaded", result}
+    const host = rendered(renderReportSections(ui, stateWith(tab)).detail)
+
+    // One seat changed one setting, so exactly one span carries the mark - not the endpoint it kept,
+    // not the API, and nothing at all on the seat that held still.
+    expect(queryAll<HTMLElement>(host, ".agent-changed").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten \u2192 moonshotai/Kimi-K3:together"])
+    // An arrow, in the order the turns ran: a comma would say "two of these", not "this became that".
+    expect(queryAll<HTMLElement>(host, ".agent-value").map((node) => node.textContent))
+      .toEqual([
+        "moonshotai/Kimi-K3:baseten \u2192 moonshotai/Kimi-K3:together",
+        "OpenAI", "high", "gemma4:cloud", "Ollama", "max",
+      ])
   })
 
   // The rendered cell reads the endpoint from its own field now rather than from the sentence, so

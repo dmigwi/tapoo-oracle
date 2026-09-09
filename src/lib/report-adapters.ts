@@ -150,11 +150,6 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
   }
 }
 
-// Joined rather than reduced to one value: a log that names two providers really was produced against
-// two, and picking one would misdescribe the sample.
-function listOrNotRecorded(values: string[]): string {
-  return values.length > 0 ? values.join(", ") : "not recorded";
-}
 
 /** modelOutputRows summarises what the model produced, as the provider itself reported it.
  *
@@ -240,11 +235,23 @@ export function withoutCredentials(endpoint: string): string {
  * comparing two seats compares, and a view that can weight them differently should not have to take the
  * sentence apart again to find them. */
 export type AgentRunning = {
-  models: string;
-  provider: string;
-  endpoint: string;
-  effort: string;
+  models: string[];
+  /** The API families the request was made in - "Ollama", "OpenAI" - which is a wire protocol and not the
+   * company that served the model. Hugging Face has no API of its own and answers on OpenAI's, so a seat
+   * running there reports "OpenAI" here and names Hugging Face only in its endpoint. Printing this as
+   * the provider read as a claim about who ran the model, which this field does not make. */
+  api: string[];
+  endpoint: string[];
+  effort: string[];
 };
+
+/** CHANGED_JOIN separates the values of a setting a seat did not hold still.
+ *
+ * An arrow rather than a comma, and in first-seen order, which is the order the turns ran in: a comma
+ * makes two models read as a list, and at a glance as one long name. The whole point of this cell is
+ * that a seat which changed setup mid-round is the finding agentSettingsCheck reports, so the cell has
+ * to look different from a clean one before it is read rather than after. */
+export const CHANGED_JOIN = " \u2192 ";
 
 /** One seat's row: the sentence to read, and the values it was built from. */
 export type AgentRow = {
@@ -252,6 +259,19 @@ export type AgentRow = {
   value: string;
   running: AgentRunning;
 };
+
+/** How an API family's own name is written, for the few this analyzer has seen.
+ *
+ * `capitalize` alone gets "Openai", and these are proper names with fixed spellings. Anything unlisted
+ * falls back to it: a new value is better shown miscased than dropped, and the log is the authority on
+ * which families exist. */
+const API_NAMES: Record<string, string> = {
+  ollama: "Ollama",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+};
+
+const apiName = (api: string): string => API_NAMES[api.toLowerCase()] ?? capitalize(api);
 
 /** agentRows says what each seat was running, one row per seat.
  *
@@ -262,17 +282,20 @@ export type AgentRow = {
 export function agentRows(agents: AgentSummary[]): AgentRow[] {
   return agents.map((agent, index) => {
     const running: AgentRunning = {
-      models: listOrNotRecorded(agent.models),
-      provider: agent.apis.map(capitalize).join(", "),
-      endpoint: agent.endpoints.map(withoutCredentials).join(", "),
-      effort: agent.reasoningEfforts.join(", "),
+      models: agent.models,
+      api: agent.apis.map(apiName),
+      endpoint: agent.endpoints.map(withoutCredentials),
+      effort: agent.reasoningEfforts,
     };
 
+    // The sentence joins the same way the cell does, so the fallback and what a reader sees say the same
+    // thing about whether a setting moved.
+    const said = (values: string[]): string => values.join(CHANGED_JOIN);
     const sentence = [
-      running.models,
-      running.provider === "" ? "" : `through ${running.provider}`,
-      running.endpoint === "" ? "" : `(${running.endpoint})`,
-      running.effort === "" ? "" : `at ${running.effort} reasoning effort`,
+      running.models.length > 0 ? said(running.models) : "not recorded",
+      running.api.length === 0 ? "" : `on the ${said(running.api)} API`,
+      running.endpoint.length === 0 ? "" : `(${said(running.endpoint)})`,
+      running.effort.length === 0 ? "" : `at ${said(running.effort)} reasoning effort`,
     ].filter((part) => part !== "");
 
     return {field: agentSeatLabel(agent, index), value: sentence.join(" "), running};

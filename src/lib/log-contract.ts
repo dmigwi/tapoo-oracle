@@ -321,19 +321,96 @@ function unreadableResponseWarnings({responses, unreadable}: ResponseTally): Log
   }];
 }
 
+/** A logged message's text and the checksum beside it, each proved once.
+ *
+ * Both readers below take the same two fields off the same records, and both used to narrow them for
+ * themselves - two places to keep in step about what a readable message even is, and four checks over two
+ * values.
+ *
+ * What they do not share is what a *missing* checksum means. promptWarnings has nothing to compare and
+ * passes over it; traversalPayloadWarnings counts it as a payload it could not verify, which is a number
+ * that reaches the report. So the checksum comes back nullable and that decision stays with the caller -
+ * a shared reader should settle what the fields are, never what their absence implies.
+ *
+ * Null is "no text to read at all", which both treat the same way. */
+function messageText(message: Record<string, unknown>): {content: string; checksum: string | null} | null {
+  const {content, content_checksum: checksum} = message;
+  if (typeof content !== "string") return null;
+  return {content, checksum: typeof checksum === "string" ? checksum : null};
+}
+
+// --- The get_maze_structure payloads a round carried ---
+
+/** What a round states about its maze, which is everything rebuilding one of its payloads needs.
+ *
+ * Gathered as a value so the reconstruction below can be read on its own. These four arrive on the
+ * round's "Agent level started." entry and hold until the next one, and the walker keeps them as cursors
+ * because a group keyed game/level can hold a replay of that level too. */
+type RoundMaze = {
+  exits: OpenCellExits;
+  startCell: CellKey | null;
+  destinationCell: unknown;
+  historyWindowRadius: number;
+};
+
+/** filteredTraversalHistoryRebuild rebuilds the original `get_maze_structure` payload Tapoo hashed.
+ *
+ * The entry carries a compacted copy of the payload and a checksum taken over the original, so hashing
+ * the text the entry holds can never reproduce it - it has to be checked against this. Every byte
+ * matters: the key order, the compact separators, and cellType's precedence are all reproduced as Tapoo
+ * writes them, and 16 of 16 checksummed results in the snapshot log come back identical.
+ *
+ * Standalone, and taking what it needs rather than reading a walker's cursors, because it is the half of
+ * this check that has to be exactly right - a wrong field order here fails every payload in a sound log
+ * and stamps the whole report inaccurate. Read on its own, it can be compared against the producer
+ * without also reading a loop. */
+function filteredTraversalHistoryRebuild(body: Record<string, unknown>, level: number | undefined, maze: RoundMaze): string {
+  // What Tapoo calls a cell. Nested because the rebuild is the only thing that asks: this is one field
+  // of the string being reproduced, not a fact about the maze anything else wants.
+  //
+  // start-cell and target-cell override the structural type - cell 0,0 of the snapshot log has one exit
+  // and would read dead-end, where Tapoo writes start-cell.
+  const cellTypeOf = (cell: CellKey): string => {
+    if (cell === maze.startCell) return "start-cell";
+    if (cell === cellKeyFromLogged(maze.destinationCell)) return "target-cell";
+    const open = maze.exits.get(cell)?.size ?? 0;
+    if (open <= 1) return "dead-end";
+    return open === 2 ? "corridor" : "junction";
+  };
+
+  const history = asArray(body.filteredTraversalHistory).map(asRecord).map((record) => {
+    const key = cellKeyFromLogged(record.cell) ?? "0,0";
+    const openMoves: Record<string, unknown> = {};
+    for (const [move, status] of statusesFromLogged(record.openMoves)) {
+      openMoves[move] = {...cellFromKey(stepFrom(key, move)), visitStatus: status};
+    }
+    return {
+      playerName: record.playerName,
+      cell: cellFromKey(key),
+      cellType: cellTypeOf(key),
+      openMoves,
+    };
+  });
+
+  return JSON.stringify({
+    level,
+    currentCell: cellFromLogged(body.currentCell) ?? {row: 0, col: 0},
+    destinationCell: maze.destinationCell,
+    historyWindowRadius: maze.historyWindowRadius,
+    filteredTraversalHistory: history,
+  });
+}
+
 // traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
 //
 // The replay's visit-status overlay is drawn from these payloads with nothing in between to question
 // them, so a damaged payload reaches the grid as an overlay that looks exactly as certain as a correct
 // one. Hence checking them here.
 //
-// `content_checksum` is fnv1a64Checksum of the content Tapoo sent, not of the compacted form the log
-// keeps, so hashing the text on disk would never reproduce it. Verifying means rebuilding the original
-// first, and every field that takes is either in the record itself or on the round's "Agent level
-// started." entry.
-//
-// Verified byte-exact against a real export: the key order, the compact separators, and cellType's
-// precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
+// The checking itself is filteredTraversalHistoryRebuild above, which says why a stored payload cannot
+// simply be hashed. What this function does is walk a round, keep the facts that reconstruction needs,
+// and decide for each payload whether it can be checked at all - the third outcome, and the one worth
+// reading: a payload nothing could verify is not a payload that passed.
 //
 // Given one round's entries, by parseGameRound, and still running a cursor rather than assuming a single
 // maze: a group keyed game/level holds a replay of that level too, and each opening resets the facts the
@@ -353,16 +430,6 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
   let unverifiable = 0;
   let firstDamaged: string | null = null;
 
-  const cellTypeOf = (cell: CellKey): string => {
-    // start-cell and target-cell override the structural type: cell 0,0 of the snapshot log has one
-    // exit and would read dead-end, and Tapoo writes start-cell.
-    if (cell === startCell) return "start-cell";
-    if (cell === cellKeyFromLogged(destinationCell)) return "target-cell";
-    const open = exits?.get(cell)?.size ?? 0;
-    if (open <= 1) return "dead-end";
-    return open === 2 ? "corridor" : "junction";
-  };
-
   for (const entry of entries) {
     const details = asRecord(entry.details);
 
@@ -376,7 +443,9 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
     }
 
     for (const message of asArray(details.messages).map(asRecord)) {
-      if (message.role !== "tool" || typeof message.content !== "string") continue;
+      if (message.role !== "tool") continue;
+      const text = messageText(message);
+      if (!text) continue;
 
       // Is this a get_maze_structure result at all? Decided before anything is counted, because a round
       // carries three tools' results and only this one is reconstructable. Counting the other two as
@@ -384,14 +453,14 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
       // it reported 32 unverifiable payloads on a log where every payload this check covers verified.
       let payload: unknown;
       try {
-        payload = JSON.parse(message.content);
+        payload = JSON.parse(text.content);
       } catch {
         continue;
       }
       const body = asRecord(payload);
       if (!Array.isArray(body.filteredTraversalHistory)) continue;
 
-      const checksum = message.content_checksum;
+      const {checksum} = text;
       // Verify only when the round supplied every input the reconstruction needs.
       //
       // The checksum covers the payload Tapoo sent, which carries destinationCell and
@@ -402,7 +471,7 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
       //
       // A missing input is not evidence of damage. It means we cannot check, which is silence.
       if (
-        typeof checksum !== "string" ||
+        checksum === null ||
         exits === null ||
         destinationCell === null ||
         destinationCell === undefined ||
@@ -412,26 +481,10 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
         continue;
       }
 
-      const history = body.filteredTraversalHistory.map(asRecord).map((record) => {
-        const key = cellKeyFromLogged(record.cell) ?? "0,0";
-        const openMoves: Record<string, unknown> = {};
-        for (const [move, status] of statusesFromLogged(record.openMoves)) {
-          openMoves[move] = {...cellFromKey(stepFrom(key, move)), visitStatus: status};
-        }
-        return {
-          playerName: record.playerName,
-          cell: cellFromKey(key),
-          cellType: cellTypeOf(key),
-          openMoves,
-        };
-      });
-
-      const rebuilt = JSON.stringify({
-        level: entry.level,
-        currentCell: cellFromLogged(body.currentCell) ?? {row: 0, col: 0},
-        destinationCell,
-        historyWindowRadius,
-        filteredTraversalHistory: history,
+      // The guard above is what proves these four, so the value is built from them here rather than
+      // being threaded through the walk.
+      const rebuilt = filteredTraversalHistoryRebuild(body, entry.level, {
+        exits, startCell, destinationCell, historyWindowRadius,
       });
 
       if (fnv1a64Checksum(rebuilt) === checksum) {
@@ -512,6 +565,33 @@ const roundName = (entries: LogEntry[]): string => {
 // hundreds. The checksum beside a stub is of the *full* text, so a stub cannot be hashed - but it can
 // still be checked against the full text logged earlier under the same checksum.
 const COMPACT_HEAD = 25;
+
+/** How the harness opens a warning, and the only way one is told apart.
+ *
+ * The warning reaches the model in one of two shapes, decided by the provider:
+ *
+ *   Ollama and OpenAI take a second user message, so the warning is appended after the tool results and
+ *   the turn's instruction is left alone. Verified against a real request.
+ *
+ *   Anthropic allows only one user message per request, so the warning is merged into the instruction
+ *   instead. Not verified: no Anthropic log has been read, the same gap assistantMessage records for its
+ *   own Anthropic branch.
+ *
+ * Which is why this is a *contains* and not a startsWith. Appended, the warning opens with this word;
+ * merged, it sits after the instruction, and a prefix test would report "no user warnings detected" on a
+ * log that plainly has them. Searching the whole text catches both.
+ *
+ * The cost is that an instruction quoting this word verbatim would be miscounted as a warning. No text in
+ * the capture contains it - the instruction has no form of the word, and the only "warning" anywhere is
+ * lowercase and inside a system prompt, which is not searched.
+ *
+ * Position was the other candidate - "any user message after the first" - and it cannot see a merged
+ * warning at all, because there is only ever one message to look at.
+ *
+ * If Tapoo rewords the opener, this row drops to "no user warnings detected" on a log that has them. That
+ * is the failure mode to watch, and the reason a warning arriving trimmed is counted as unvalidated rather
+ * than skipped: a row quietly reporting none is worse than one reporting something it could not check. */
+const WARNING_PREFIX = "Warning:";
 const COMPACT_TAIL = "...";
 const compacted = (full: string): string => `${full.slice(0, COMPACT_HEAD)}${COMPACT_TAIL}`;
 
@@ -528,6 +608,9 @@ const compacted = (full: string): string => `${full.slice(0, COMPACT_HEAD)}${COM
  * only the opening Default is logged in full - the later two are compacted well past the word naming
  * the persona, so which brackets they are is not readable from the log. */
 const PERSONA_FORMS = 4;
+
+/** What a checksummed text was, which decides which row counts it. */
+type TextKind = "persona" | "warning" | "text";
 
 // promptWarnings checks that a round told the agent one consistent story.
 //
@@ -558,19 +641,48 @@ const PERSONA_FORMS = 4;
 function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarning[]; checks: ValidationCheck[]} {
   const warnings: LogWarning[] = [];
   const toolSums = new Map<string, Set<string>>();
-  const byChecksum = new Map<string, string[]>();
+  // Every checksummed text, with what it was: the consistency warning below is about bytes and covers
+  // all of them, while the repeat counts are about one population and exclude personas - see note.
+  const byChecksum = new Map<string, Array<{text: string; kind: TextKind}>>();
   const personas = new Set<string>();
+  let personaAppearances = 0;
+  // What the harness told the model when it had to warn it. Its own population, for the same reason the
+  // personas are: a round where the model was warned forty times answered under conditions a clean round
+  // did not, and that is a number a reader wants rather than something to find by reading turns.
+  let userWarnings = 0;
+  let userWarningsVerified = 0;
   let hashed = 0;
   let damaged = 0;
   let stubs = 0;
 
-  const note = (checksum: unknown, text: unknown): void => {
-    if (typeof checksum !== "string" || typeof text !== "string") return;
-    byChecksum.set(checksum, [...(byChecksum.get(checksum) ?? []), text]);
+  /** Records one checksummed text.
+   *
+   * A trimmed persona is left out of the repeat population entirely: it is not a repeat of a text this
+   * round logged, it is the next persona in a sequence Tapoo rewrites as the player's speed class changes,
+   * and it is never logged in full at all. Counted as a repeat it produced 30 appearances with nothing to
+   * compare them to, which reads as a shortfall in a check rather than as the persona sequence the Agent
+   * personas row exists to report.
+   *
+   * A system prompt logged in full is still hashed here. That one is a claim the log makes about its own
+   * bytes, and it can be wrong. */
+  const note = (checksum: string, text: string, kind: TextKind): void => {
+    byChecksum.set(checksum, [...(byChecksum.get(checksum) ?? []), {text, kind}]);
+
     // Trimmed text cannot be hashed, and a full text that happens to end in an ellipsis is only skipped
     // - the heuristic errs towards checking less, never towards warning wrongly.
     if (text.endsWith(COMPACT_TAIL)) {
-      stubs += 1;
+      // A trimmed warning is counted and left unvalidated rather than dropped: it has never been seen, and
+      // if it starts happening the row should say so instead of reporting a smaller total.
+      if (kind === "warning") userWarnings += 1;
+      if (kind === "text") stubs += 1;
+      return;
+    }
+
+    // A warning is hashed by its own row, not by the one above: counted in both, a round with four of them
+    // would report the same four texts twice and leave a reader deciding whether the rows agree.
+    if (kind === "warning") {
+      userWarnings += 1;
+      if (fnv1a64Checksum(text) === checksum) userWarningsVerified += 1;
       return;
     }
     if (fnv1a64Checksum(text) === checksum) hashed += 1;
@@ -581,23 +693,69 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
     if (entry.payload !== LOG_EVENTS.request) continue;
     const details = asRecord(entry.details);
 
+    // One request can carry two user messages. A warned request holds the turn's instruction and, appended
+    // after the tool results, the warning itself - so `role: "user"` is not one message per request and
+    // nothing here may treat it as one. It also carries `agentMode: "warned"`, which is not read: the text
+    // says what the model was actually told, where the mark only says that something was.
+
     for (const message of asArray(details.messages).map(asRecord)) {
       // Not a tool result: that is a compacted payload, checked by reconstruction rather than by hash.
+      //
+      // And nothing without both halves of a checksummed text - messageText proves them, here and for the
+      // reconstruction above, so what a readable message is has one definition.
+      //
+      // Dropping a text with no checksum loses nothing this can check, and nothing trimmed either: every
+      // trimmed text in the capture carries one - all 107, across system prompts, user messages and tool
+      // descriptions, no exception. The checksum-less ones are all untrimmed: the 16 assistant messages,
+      // which are the model's own tool calls, and 32 of the 48 tool results, only get_maze_structure
+      // carrying one.
+      //
+      // That is what makes the repeat denominator trustworthy: "76 of 76" is every trimmed text this round
+      // logged outside the personas, not merely the ones that happened to arrive checkable. A trimmed text
+      // with no checksum would be unverifiable *and* uncounted, the one shape this cannot report - it has
+      // never appeared, and if the producer starts writing one it will need a row of its own.
       if (message.role === "tool") continue;
-      note(message.content_checksum, message.content);
-      // The persona travels in the system prompt, which is why the count is taken here and not from the
-      // user message: that one is the same fixed instruction on every request of the round - one
-      // checksum across all 32 in the snapshot - so it carries no persona to count.
-      if (message.role === "system" && typeof message.content_checksum === "string") {
-        personas.add(message.content_checksum);
-      }
+      const text = messageText(message);
+      if (!text || text.checksum === null) continue;
+
+      // Every other message is offered to note, which keeps the ones carrying a checksum. Three roles
+      // reach it:
+      //
+      //   system - the persona, counted again below.
+      //   user   - the turn's instruction, and on a warned-mode request a second user message holding the
+      //            warning itself. That one is appended rather than merged, and logged in full every time
+      //            rather than trimmed, because warnings are rare and each says something different.
+      //   assistant - the model's own tool calls, which carry no content_checksum at all and so are
+      //            dropped by the guard above. Nothing was shown to the agent here to check.
+      //
+      // A loop that read only system prompts would drop the user messages from both rows above - 32 of the
+      // snapshot's texts.
+      // A warning is a user message carrying WARNING_PREFIX, wherever in the text it falls - see the
+      // constant for the two shapes that puts it in different places. Logged in full every time rather
+      // than trimmed, because warnings are rare and each says something different.
+      const isPersona = message.role === "system";
+      const isWarning = message.role === "user" && text.content.includes(WARNING_PREFIX);
+      note(text.checksum, text.content, isPersona ? "persona" : isWarning ? "warning" : "text");
+
+      // Past here is the persona count, and nothing else is one. The persona travels in the system prompt,
+      // and a user message carries none - not because there is only ever one of them, since a warned
+      // request appends a second, but because what they say is the turn's instruction rather than who the
+      // agent is being told to be.
+      if (!isPersona) continue;
+
+      // Appearances as well as distinct prompts, because this row owns the whole population now: three
+      // personas over thirty-two turns and three over three are different rounds, and the trimmed-repeat
+      // row no longer says how often each was seen.
+      personas.add(text.checksum);
+      personaAppearances += 1;
     }
 
     for (const tool of asArray(details.tools).map(asRecord)) {
       const name = asTrimmedText(tool.name);
       const checksum = tool.description_checksum;
-      note(checksum, tool.description);
-      if (!name || typeof checksum !== "string") continue;
+      if (typeof checksum !== "string") continue;
+      if (typeof tool.description === "string") note(checksum, tool.description, "text");
+      if (!name) continue;
       toolSums.set(name, new Set([...(toolSums.get(name) ?? []), checksum]));
     }
   }
@@ -643,10 +801,13 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
   // a prompt that changes mid-round is only ever stubbed. Counted, so the summary can say how much of
   // the round's text was actually vouched for.
   let unmatched = 0;
-  for (const [checksum, texts] of byChecksum) {
+  for (const [checksum, recorded] of byChecksum) {
+    const texts = recorded.map((one) => one.text);
     const full = texts.reduce((longest, text) => (text.length > longest.length ? text : longest), "");
     if (full.endsWith(COMPACT_TAIL)) {
-      unmatched += texts.length;
+      // Personas excluded for the reason note gives: they are the only texts Tapoo never logs in full,
+      // and counting them here made an ordinary sequence read as a shortfall in a check.
+      unmatched += recorded.filter((one) => one.kind !== "persona").length;
       continue;
     }
     if (texts.every((text) => text === full || text === compacted(full))) continue;
@@ -660,7 +821,8 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
 
   const drifted = [...toolSums.values()].filter((sums) => sums.size > 1).length;
   const checks: ValidationCheck[] = [
-    promptTextCheck(hashed, damaged, stubs - unmatched, unmatched),
+    promptTextCheck(hashed, damaged),
+    trimmedRepeatCheck({matched: stubs - unmatched, unmatched}),
     {
       name: "Tool descriptions",
       scope: "round",
@@ -679,45 +841,132 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
       detail:
         personas.size === 0
           ? "the round carried no system prompt"
-          : `${formatCount(personas.size)} distinct system prompts, of the ${formatCount(PERSONA_FORMS)} personas Tapoo defines`,
+          : `${formatCount(personas.size)} distinct system prompt${personas.size === 1 ? "" : "s"} across ` +
+            `${formatCount(personaAppearances)} appearance${personaAppearances === 1 ? "" : "s"}, of the ` +
+            `${formatCount(PERSONA_FORMS)} personas Tapoo defines`,
     },
+    // Beside the personas: who the agent was told to be, then what it was told off for.
+    userWarningCheck(userWarnings, userWarningsVerified),
   ];
 
   return {warnings, checks};
 }
 
-/** How the prompt and tool-description texts report themselves.
+/** How the prompt and tool-description texts logged in full report themselves.
  *
- * Two populations, and the summary has to keep them apart. Text logged in full is hashed against the
- * checksum beside it. Text logged as a stub cannot be hashed, only compared with the full text under the
- * same checksum - and where the round never carried that full text, it cannot be checked at all. The
- * snapshot log is mostly that last case, which is exactly why a bare "passed" would overstate it. */
-function promptTextCheck(hashed: number, damaged: number, matched: number, unmatched: number): ValidationCheck {
+ * Only the texts this round can actually hash: logged verbatim, with a checksum beside them. The
+ * repeats - logged as stubs, and never hashable - are their own check below, because they are a
+ * different population answering a different question.
+ */
+function promptTextCheck(hashed: number, damaged: number): ValidationCheck {
   const name = "Prompts and tool descriptions";
   const scope = "round" as const;
-  const parts = [
-    hashed > 0 ? `${formatCount(hashed)} texts logged in full and hashed against their checksums` : "",
-    matched > 0 ? `${formatCount(matched)} shortened repeats matched the full text they stand for` : "",
-    unmatched > 0 ? `${formatCount(unmatched)} shortened repeats whose full text this round never carried` : "",
-  ].filter(Boolean);
 
   if (damaged > 0) {
     return {
       name,
       scope,
       outcome: "failed",
-      detail: `${formatCount(damaged)} texts did not match their own checksums${parts.length > 0 ? `; ${parts.join(", ")}` : ""}`,
+      detail:
+        `${formatCount(damaged)} of ${formatCount(hashed + damaged)} texts logged in full did not match their own checksums`,
     };
   }
-  if (hashed === 0 && matched === 0) {
+  if (hashed === 0) {
+    return {name, scope, outcome: "unchecked", detail: "the round carried no prompt or description logged in full"};
+  }
+  return {
+    name,
+    scope,
+    outcome: "passed",
+    detail: `${formatCount(hashed)} of ${formatCount(hashed)} texts logged in full hashed to the checksum beside them`,
+  };
+}
+
+/** What the trimmed repeats were compared against, and how many of each population there were. */
+type RepeatTally = {
+  /** Stub appearances whose checksum the log also carries a full text under. */
+  matched: number;
+  /** Stub appearances whose checksum has no full text anywhere in the log. */
+  unmatched: number;
+};
+
+/** How many warnings the harness gave the model, and whether the log's own bytes bear them out.
+ *
+ * Its own row, beside Agent personas, because it is its own population and its size is the finding: a
+ * round where the model was warned forty times answered its turns under conditions a clean round did not,
+ * and that is not something a summary should leave a reader to count off the turns.
+ *
+ * Hashed here and nowhere else. A warning is logged in full every time - warnings are rare and each says
+ * something different, so there is never an earlier copy to trim it against - which makes it checkable the
+ * simple way, and counting it in the row above as well would report the same texts twice.
+ *
+ * A round with none is `passed` and says so. Nothing failed to run: the round was searched and there was
+ * nothing to find, and "not checked" on the ordinary, good case is the reading this section keeps having
+ * to be rescued from. */
+function userWarningCheck(warnings: number, verified: number): ValidationCheck {
+  const name = "User warnings";
+  const scope = "round" as const;
+
+  if (warnings === 0) {
+    return {name, scope, outcome: "passed", detail: "0 of 0 - no user warnings detected"};
+  }
+  return {
+    name,
+    scope,
+    outcome: verified === warnings ? "passed" : "failed",
+    detail:
+      `${formatCount(verified)} of ${formatCount(warnings)} user warnings validated against their checksums`,
+  };
+}
+
+/** How the trimmed, checksummed repeats report themselves.
+ *
+ * A repeat is logged trimmed - the first COMPACT_HEAD characters and an ellipsis - with the checksum of
+ * the untrimmed text beside it, so it can only be checked against the full text logged under that same
+ * checksum. The check is over exactly those, and it counts appearances and nothing else.
+ *
+ * It does not say how many distinct checksums stand behind them, though it knows. The texts that go
+ * uncompared here are system prompts - Tapoo trims a persona it never logged in full - and how many
+ * distinct system prompts a round carried is what the Agent personas check above reports. Two rows
+ * counting one population from different angles is a reader working out whether they disagree.
+ *
+ * A trimmed repeat whose full text the log does not carry is not a failure and not a check that did not
+ * run. It is the producer compacting a text it never logged in full - in the v2.5.1 capture, 2 of the 7
+ * distinct trimmed checksums have no full text in the file at all, across 30 appearances - so there is
+ * nothing here to compare and nothing wrong with that.
+ *
+ * Its own row all the same, because the population is not the one above it: those texts are logged in
+ * full and hashed, these are compared against an earlier copy, and one row reporting both let whichever
+ * number was larger speak for the other. */
+function trimmedRepeatCheck({matched, unmatched}: RepeatTally): ValidationCheck {
+  const name = "Trimmed checksummed repeats";
+  const scope = "round" as const;
+  const absentClause = unmatched === 0
+    ? ""
+    : `; ${formatCount(unmatched)} more stand for text no entry in this log carries in full, so there ` +
+      "is nothing to compare them against";
+
+  if (matched + unmatched === 0) {
+    return {name, scope, outcome: "unchecked", detail: "the round carried no trimmed repeats"};
+  }
+  if (matched === 0) {
     return {
       name,
       scope,
       outcome: "unchecked",
-      detail: unmatched > 0 ? `${formatCount(unmatched)} shortened repeats whose full text this round never carried` : "the round carried no checksummed prompt or description",
+      detail:
+        `all ${formatCount(unmatched)} of this round's repeats stand for text no entry in this log ` +
+        "carries in full, so none of them could be compared",
     };
   }
-  return {name, scope, outcome: "passed", detail: parts.join(", ")};
+  return {
+    name,
+    scope,
+    outcome: "passed",
+    detail:
+      `${formatCount(matched)} of ${formatCount(matched)} repeats matched the full text logged under the ` +
+      `same checksum${absentClause}`,
+  };
 }
 
 // --- The agents that played a round ---
@@ -753,7 +1002,7 @@ export function agentsFromRound(
   const echoes = new Map<AgentSummary, string[]>()
   const entered = new Map<AgentSummary, Set<CellKey>>()
 
-  const blank = (name: string, seatId: number | null): AgentSummary => {
+  const emptySummary = (name: string, seatId: number | null): AgentSummary => {
     const seat: AgentSummary = {
       name,
       seatId,
@@ -802,11 +1051,11 @@ export function agentsFromRound(
         return unnumbered
       }
 
-      return blank(name, seatId)
+      return emptySummary(name, seatId)
     }
 
     if (name === "") return null
-    return seats.find((seat) => seat.name === name) ?? blank(name, null)
+    return seats.find((seat) => seat.name === name) ?? emptySummary(name, null)
   }
 
   // Every turn is played by exactly one seat, so a turn's setup, its charge and its cells are that
@@ -868,7 +1117,7 @@ export function agentsFromRound(
       ? seats.length === 1
         ? seats[0]
         : undefined
-      : blank(owner, ownerSeatId))
+      : emptySummary(owner, ownerSeatId))
 
   if (finisher) {
     const speed = Number(outcome?.traversalSpeed)
@@ -910,12 +1159,48 @@ export const agentSeatLabel = (agent: AgentSummary, index: number): string => {
 }
 
 
+/** The per-turn settings a seat can be found to have changed, and how each is reported.
+ *
+ * `values: false` for endpoints alone, and not for brevity. This detail is rendered into a table cell,
+ * and an endpoint may carry `user:pass@host` - the thing withoutCredentials exists to keep out of the
+ * DOM. That function lives in report-adapters, which imports this module, so it cannot be reached from
+ * here without closing a cycle. The count says drift happened; the Agents table shows the addresses
+ * themselves, stripped. */
+const DRIFTABLE: Array<{label: string; values: boolean; of: (agent: AgentSummary) => readonly string[]}> = [
+  {label: "models", values: true, of: (agent) => agent.models},
+  {label: "APIs", values: true, of: (agent) => agent.apis},
+  {label: "reasoning efforts", values: true, of: (agent) => agent.reasoningEfforts},
+  {label: "endpoints", values: false, of: (agent) => agent.endpoints},
+];
+
+/** How a seat is named in a finding, where there is no roster index to fall back on. */
+const seatName = (agent: AgentSummary): string =>
+  agent.name === "" ? `Seat ${agent.seatId ?? "?"}` : agent.name;
+
+/** What one seat changed, as clauses, or none where it held one of everything. */
+function driftOf(agent: AgentSummary): string[] {
+  return DRIFTABLE.filter((field) => field.of(agent).length > 1).map((field) => {
+    const held = field.of(agent);
+    const counted = `${formatCount(held.length)} ${field.label}`;
+    return field.values ? `${counted} (${held.join(", ")})` : counted;
+  });
+}
+
 /** agentSettingsCheck reports whether each seat answered under one setup for the whole round.
  *
  * A seat that changed model, provider, endpoint or effort mid-round was not one experiment: its turns
  * before and after are not comparable, and a verdict drawn across them compares two setups. The same
  * argument the tool-description check makes, and the reason AgentSummary holds lists - a list longer
  * than one *is* the finding, so nothing is counted twice to reach it.
+ *
+ * Every drifted seat is named, and every setting each one changed, with the values it changed between.
+ * A count alone - "ran 2 different settings" - told a reader that something moved and left them to find
+ * what in the Agents table, and reporting only the first seat hid the rest of a finding that is about
+ * comparability: a round with two unstable seats is not one bad seat.
+ *
+ * Stated as a replication problem, because that is the consequence a reader can act on: there is no one
+ * setup they could run again to get this profile back, and the row names the settings they would have to
+ * choose between to try.
  *
  * Only possible because settings are read per turn. A roster declared once at the start of a round
  * could not contradict itself, so there would be nothing here to check. */
@@ -930,22 +1215,17 @@ export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationC
     return {name, scope, outcome: "unchecked", detail: "the round recorded no model, provider or effort"};
   }
 
-  const drifted = stated.filter(
-    (agent) =>
-      agent.models.length > 1 ||
-      agent.apis.length > 1 ||
-      agent.endpoints.length > 1 ||
-      agent.reasoningEfforts.length > 1,
-  );
+  const drifted = stated.map((agent) => ({agent, changed: driftOf(agent)}))
+    .filter(({changed}) => changed.length > 0);
+
   if (drifted.length > 0) {
-    const first = drifted[0]
     return {
       name,
       scope,
       outcome: "failed",
       detail:
-        `${first?.name ?? "a seat"} ran ${formatCount(Math.max(first?.models.length ?? 0, first?.apis.length ?? 0, first?.endpoints.length ?? 0, first?.reasoningEfforts.length ?? 0))} ` +
-        `different settings during the round, so its turns did not all answer under the same setup`,
+        `${drifted.map(({agent, changed}) => `${seatName(agent)} ran ${changed.join(" and ")}`).join("; ")}` +
+        ` - this makes it hard to replicate this report output/profile.`,
     };
   }
 

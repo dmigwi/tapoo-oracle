@@ -476,14 +476,16 @@ describe("provenance names the setup a verdict depends on", () => {
     expect(agentRows(firstRound(result).agents)).toEqual([
       {
         field: "Katara \u00b7 Agent at Seat 1",
-        value: "gemma4:cloud through Ollama (http://localhost:11434/api/chat) at max reasoning effort",
+        value: "gemma4:cloud on the Ollama API (http://localhost:11434/api/chat) at max reasoning effort",
         // The same four values unjoined, which is what the table actually renders - the sentence is the
         // fallback for anything that cannot weight them.
+        // Lists, not joined strings: the cell marks a setting the seat did not hold still, and it can
+        // only know one changed by being handed more than one value.
         running: {
-          models: "gemma4:cloud",
-          provider: "Ollama",
-          endpoint: "http://localhost:11434/api/chat",
-          effort: "max",
+          models: ["gemma4:cloud"],
+          api: ["Ollama"],
+          endpoint: ["http://localhost:11434/api/chat"],
+          effort: ["max"],
         },
       },
     ])

@@ -547,6 +547,16 @@ a[href] {
   color: var(--oracle-muted);
 }
 
+/* A setting the seat changed mid-round, in the page's caveat colour - the same amber .notice-warn uses,
+   and deliberately neither of the verdict colours: this says the report is harder to reproduce, not that
+   the agent did something wrong.
+ *
+ * The values are joined by an arrow rather than a comma, which the view does; this only has to make the
+ * row findable without reading it, since the row it marks is the one the Agent settings check names. */
+.agent-changed {
+  color: var(--oracle-amber);
+}
+
 /* Its own line, and breakable anywhere: a URL has no spaces to wrap at, so inline it either forced the
    column wide or split mid-host wherever the cell happened to end. */
 .agent-endpoint {

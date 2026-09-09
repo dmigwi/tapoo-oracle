@@ -6,8 +6,9 @@ import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENV
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
 import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
+import {roundReportFor} from "./log-tabs"
 import {fnv1a64Checksum} from "./utils"
-import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
+import {analyzeLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
 // a numeric payload, an unknown level - which is exactly the shape parseTapooLogText is asked to
@@ -307,6 +308,36 @@ describe("the traversal payload checksum", () => {
     }
 
     expect(checksumWarnings(log)).toEqual([])
+  })
+
+  // A payload with no checksum at all is *counted*, not passed over. The distinction has a number in the
+  // report behind it - "16 of 16 reconstructed" against "16 not checkable" - and skipping these would
+  // shrink the denominator until a round that verified nothing looked like a round with nothing to verify.
+  //
+  // No log has one: every get_maze_structure result in the capture is checksummed, and the 32 tool results
+  // that are not belong to the other two tools, which this check never reaches.
+  it("counts a maze-structure payload with no checksum instead of passing over it", () => {
+    const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
+    let stripped = 0
+    for (const entry of log.entries) {
+      const details = entry.details as {messages?: Array<Record<string, unknown>>} | null
+      for (const message of details?.messages ?? []) {
+        // role must be checked, not just the text: the system prompt names the field while explaining the
+        // tool, and a substring match alone strips its checksum too.
+        if (message.role !== "tool" || typeof message.content !== "string") continue
+        if (!message.content.includes("filteredTraversalHistory")) continue
+        delete message.content_checksum
+        stripped += 1
+      }
+    }
+    expect(stripped).toBe(16)
+
+    const round = parseGameRound(log.entries)
+    const check = must(round.checks.find((one) => one.name === "Traversal payloads"), "the traversal check")
+    expect(check.outcome).toBe("unchecked")
+    expect(check.detail).toMatch(/^16 get_maze_structure results carried no checksum/)
+    // Unverifiable, never damaged: nothing here says the payload is wrong.
+    expect(round.warnings).toEqual([])
   })
 
   it("reports a payload whose contents no longer match what Tapoo hashed", () => {
@@ -842,6 +873,53 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   })
 })
 
+// End to end over a whole log, because every other test of this reaches agentsFromRound directly. The
+// real capture has one seat that never changed anything, so it cannot show what a round that is not one
+// experiment looks like - see twoSeatDriftLog for why it is built rather than saved.
+describe("a log whose seat changed model mid-round", () => {
+  const round = () => {
+    const result = expectOk(analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "two-seat"}))
+    const opened = roundReportFor(must(result.rounds[0], "a round"))
+    return {report: opened.report, checks: opened.round.checks}
+  }
+
+  it("reads both seats, each with the setup its own turns stated", () => {
+    const agents = round().report.agents
+
+    expect(agents.map((agent) => [agent.seatId, agent.name, agent.models, agent.apis])).toEqual([
+      [1, "Katara", ["moonshotai/Kimi-K3:baseten", "moonshotai/Kimi-K3:together"], ["openai"]],
+      [2, "Bumi", ["gemma4:cloud"], ["ollama"]],
+    ])
+  })
+
+  it("reports the change, naming the seat, the setting and both models", () => {
+    const check = must(round().checks.find((entry) => entry.name === "Agent settings"), "the settings check")
+
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toBe(
+      "Katara ran 2 models (moonshotai/Kimi-K3:baseten, moonshotai/Kimi-K3:together) - " +
+      "this makes it hard to replicate this report output/profile.",
+    )
+  })
+
+  // The drift has to be the only finding, or the fixture is demonstrating its own defects. Its prompts
+  // and tool descriptions carry checksums computed with the app's own hash, so they verify.
+  it("is otherwise a clean round, so the finding is the one thing to read", () => {
+    expect(round().checks.map((check) => [check.name, check.outcome])).toEqual([
+      ["Encoded maze", "passed"],
+      ["Prompts and tool descriptions", "passed"],
+      // No repeats and no traversal checksums: honestly unverifiable rather than quietly passed.
+      ["Trimmed checksummed repeats", "unchecked"],
+      ["Tool descriptions", "passed"],
+      ["Agent personas", "passed"],
+      // No warning was issued, which is the good case and reads as one.
+      ["User warnings", "passed"],
+      ["Traversal payloads", "unchecked"],
+      ["Agent settings", "failed"],
+    ])
+  })
+})
+
 describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
@@ -856,11 +934,48 @@ describe("agentSettingsCheck", () => {
     expect(agentSettingsCheck([agent()]).detail).toBe("one seat, on one model, endpoint and reasoning effort throughout")
   })
 
-  it("reports a seat that changed model during the round", () => {
+  // Which setting, and between which values. A bare count told a reader that something moved and left
+  // them to find what in the Agents table.
+  it("names the setting a seat changed and the values it changed between", () => {
     const check = agentSettingsCheck([agent({models: ["gemma4", "glm-5.1"]})])
 
     expect(check.outcome).toBe("failed")
-    expect(check.detail).toMatch(/Katara ran 2 different settings/)
+    expect(check.detail).toBe(
+      "Katara ran 2 models (gemma4, glm-5.1) - this makes it hard to replicate this report output/profile.",
+    )
+  })
+
+  // Every unstable seat, not just the first. A round with two of them is not one bad seat, and the
+  // question this check answers - are these turns comparable - is about the round.
+  it("names every seat that drifted, and every setting each one changed", () => {
+    const check = agentSettingsCheck([
+      agent({models: ["gemma4", "glm-5.1"], reasoningEfforts: ["max", "high"]}),
+      agent({name: "Bumi", apis: ["ollama", "openai"]}),
+    ])
+
+    expect(check.detail).toBe(
+      "Katara ran 2 models (gemma4, glm-5.1) and 2 reasoning efforts (max, high); " +
+      "Bumi ran 2 APIs (ollama, openai) - this makes it hard to replicate this report output/profile.",
+    )
+  })
+
+  // An endpoint may carry user:pass@host, and this detail is rendered into a table cell. The count says
+  // the drift happened; the Agents table shows the addresses, stripped on the way in.
+  it("counts changed endpoints without printing them", () => {
+    const check = agentSettingsCheck([
+      agent({endpoints: ["http://user:pass@host/api", "http://other/api"]}),
+    ])
+
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toBe("Katara ran 2 endpoints - this makes it hard to replicate this report output/profile.")
+    expect(check.detail).not.toMatch(/user:pass|http/)
+  })
+
+  // A seat that stated a number and no player is still named, or a finding would open with " ran 2".
+  it("names a drifted seat that stated no player", () => {
+    const check = agentSettingsCheck([agent({name: "", seatId: 4, models: ["gemma4", "glm-5.1"]})])
+
+    expect(check.detail).toMatch(/^Seat 4 ran 2 models/)
   })
 
   it("says nothing of a round that recorded no settings at all", () => {
@@ -885,10 +1000,74 @@ describe("the validation summary", () => {
   it("reports what a real round verified", () => {
     const round = parseGameRound(fixtureEntries())
 
-    expect(round.checks.map((check) => check.outcome)).toEqual(["passed", "passed", "passed", "passed", "passed"])
+    expect(round.checks.map((check) => [check.name, check.outcome])).toEqual([
+      ["Encoded maze", "passed"],
+      ["Prompts and tool descriptions", "passed"],
+      ["Trimmed checksummed repeats", "passed"],
+      ["Tool descriptions", "passed"],
+      ["Agent personas", "passed"],
+      ["User warnings", "passed"],
+      ["Traversal payloads", "passed"],
+    ])
     expect(round.checks.every((check) => check.scope === "round")).toBe(true)
     expect(named(round.checks, "Traversal payloads").detail).toBe("16 of 16 get_maze_structure results reconstructed byte-exactly")
-    expect(named(round.checks, "Agent personas").detail).toMatch(/3 distinct system prompts, of the 4 personas/)
+    expect(named(round.checks, "Agent personas").detail).toMatch(/3 distinct system prompts across 32 appearances, of the 4 personas/)
+  })
+
+  // A trimmed persona belongs to one row only. Six of them under two checksums is a persona sequence,
+  // reported as such - and the repeats row says it carried none rather than counting six it could not
+  // compare, which was the same population described twice and worse the second time.
+  it("leaves trimmed personas to the personas row", () => {
+    const sum = (n: number) => `0x${n.toString(16).padStart(16, "0")}`
+    const messages = Array.from({length: 6}, (_, index) => (
+      {role: "system", content: "You are Katara and your t...", content_checksum: sum(index % 2)}
+    ))
+    const round = parseGameRound([entry({payload: LOG_EVENTS.request, details: {messages}})])
+
+    const named_ = (name: string) => must(round.checks.find((check) => check.name === name), name)
+    expect(named_("Trimmed checksummed repeats").detail).toBe("the round carried no trimmed repeats")
+    expect(named_("Agent personas").detail)
+      .toBe("2 distinct system prompts across 6 appearances, of the 4 personas Tapoo defines")
+  })
+
+  // Nothing to compare at all is still "not checked": the row would otherwise report "0 of 0 matched",
+  // which reads as a clean result for a comparison that never happened.
+  it("says nothing was checked where no repeat could be compared", () => {
+    const stub = "Get current/destination c..."
+    const request = (messages: unknown[]) => [entry({payload: LOG_EVENTS.request, details: {messages}})]
+    const round = parseGameRound(request([
+      {role: "user", content: stub, content_checksum: "0xdeadbeefdeadbeef"},
+    ]))
+
+    const repeats = must(round.checks.find((check) => check.name === "Trimmed checksummed repeats"), "the repeats check")
+    expect(repeats.outcome).toBe("unchecked")
+    expect(repeats.detail).toBe(
+      "all 1 of this round's repeats stand for text no entry in this log carries in full, so none of " +
+      "them could be compared",
+    )
+  })
+
+  // Its own row, because the two populations are different: texts logged in full and hashed, against
+  // repeats compared with an earlier copy.
+  //
+  // The check counts only what it could compare. 30 of this log's stubs stand for text no entry in the
+  // file carries in full - verified against the whole capture, not just this round - which is the producer
+  // compacting something it never logged, not a check that failed to run. Reported as "not checked" it
+  // read as a fault in the report, so it sits beside the result instead of being it.
+  it("counts the repeats it could compare, and states the rest as a property of the log", () => {
+    const round = parseGameRound(fixtureEntries())
+
+    expect(named(round.checks, "Prompts and tool descriptions").detail)
+      .toBe("5 of 5 texts logged in full hashed to the checksum beside them")
+
+    const repeats = named(round.checks, "Trimmed checksummed repeats")
+    expect(repeats.outcome).toBe("passed")
+    // Only what this row owns: the 76 trimmed tool descriptions and user messages. A trimmed persona is
+    // not a repeat of a text this round logged - it is the next prompt in a sequence Tapoo never logs in
+    // full - so all 32 of its appearances are the personas row's to report.
+    expect(repeats.detail).toBe("76 of 76 repeats matched the full text logged under the same checksum")
+    expect(named(round.checks, "Agent personas").detail)
+      .toBe("3 distinct system prompts across 32 appearances, of the 4 personas Tapoo defines")
   })
 
   // Two checks cover the file rather than a round, and say so: an entry that fails the contract is
@@ -987,6 +1166,145 @@ describe("the prompts and tool descriptions a round carried", () => {
     expect(parseGameRound((fixtureData as unknown as {entries: LogEntry[]}).entries).warnings).toEqual([])
   })
 
+  // The invariant the repeat denominator rests on: a trimmed text always carries a checksum, so nothing
+  // trimmed is dropped for lack of one and "N of N repeats" is every repeat the round logged. Verified
+  // across the whole capture - 107 trimmed texts, 107 checksums, no exception - and asserted here so a
+  // producer that stops doing it is caught by the suite rather than by a denominator quietly shrinking.
+  it("finds every trimmed text in the real capture carrying a checksum", () => {
+    const trimmed: Array<{text: string; checksum: unknown}> = []
+    for (const logEntry of (fixtureData as unknown as {entries: LogEntry[]}).entries) {
+      const details = logEntry.details as {messages?: unknown[]; tools?: unknown[]} | undefined
+      const texts = [
+        ...(details?.messages ?? []).map((message) => {
+          const one = message as {content?: unknown; content_checksum?: unknown}
+          return {text: one.content, checksum: one.content_checksum}
+        }),
+        ...(details?.tools ?? []).map((declared) => {
+          const one = declared as {description?: unknown; description_checksum?: unknown}
+          return {text: one.description, checksum: one.description_checksum}
+        }),
+      ]
+      for (const {text, checksum} of texts) {
+        if (typeof text === "string" && text.endsWith("...")) trimmed.push({text, checksum})
+      }
+    }
+
+    expect(trimmed).toHaveLength(107)
+    expect(trimmed.filter((one) => typeof one.checksum !== "string")).toEqual([])
+  })
+
+  // The prefix is the whole identifier, so it is worth pinning what it does and does not catch: an extra
+  // user message that is not a warning is ordinary text, and a warning is a warning wherever it sits.
+  it("tells a warning from an ordinary user message by its prefix", () => {
+    const plain = "It is Momo's turn to predict the next moves."
+    const extra = "Reminder: two to four moves per turn."
+    const warning = "Warning: keep your reasoning brief this time."
+    const round = parseGameRound([
+      request([
+        systemMessage(PROMPT),
+        {role: "user", content: warning, content_checksum: sum(warning)},
+        {role: "user", content: plain, content_checksum: sum(plain)},
+        {role: "user", content: extra, content_checksum: sum(extra)},
+      ]),
+    ])
+
+    const named_ = (name: string) => must(round.checks.find((one) => one.name === name), name)
+    // The warning came first here and is still the warning; the other two are texts like any other.
+    expect(named_("User warnings").detail).toBe("1 of 1 user warnings validated against their checksums")
+    expect(named_("Prompts and tool descriptions").detail)
+      .toBe("3 of 3 texts logged in full hashed to the checksum beside them")
+  })
+
+  // Anthropic allows one user message per request, so Tapoo merges the warning into the instruction
+  // instead of appending it. The warning is then in the middle of the text, which is why the identifier
+  // searches the whole message rather than testing its opening.
+  //
+  // No Anthropic log has been read - this is the shape its adapter implies, the same gap assistantMessage
+  // records for its own Anthropic branch - so what is pinned here is that the identifier can see it, not
+  // that Tapoo writes exactly this.
+  it("sees a warning merged into the instruction, as a one-user-message API forces", () => {
+    const merged =
+      "It is Momo's turn to predict the next moves. Warning: keep your reasoning brief this time."
+    const round = parseGameRound([
+      request([systemMessage(PROMPT), {role: "user", content: merged, content_checksum: sum(merged)}]),
+    ])
+
+    const named_ = (name: string) => must(round.checks.find((one) => one.name === name), name)
+    expect(named_("User warnings").detail).toBe("1 of 1 user warnings validated against their checksums")
+    // Counted there and not twice: the prompt alone remains for the row above.
+    expect(named_("Prompts and tool descriptions").detail)
+      .toBe("1 of 1 texts logged in full hashed to the checksum beside them")
+  })
+
+  // A warning that arrives trimmed has never been seen. If it starts happening the row has to say so
+  // rather than report a smaller total, so it counts and goes unvalidated.
+  it("counts a trimmed warning it cannot validate rather than dropping it", () => {
+    const warning = "Warning: keep your reasoning brief this time."
+    const round = parseGameRound([
+      request([{role: "user", content: `${warning.slice(0, 25)}...`, content_checksum: sum(warning)}]),
+    ])
+
+    const check = must(round.checks.find((one) => one.name === "User warnings"), "the warnings check")
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toBe("0 of 1 user warnings validated against their checksums")
+  })
+
+  // A damaged warning: the text does not hash to the checksum beside it. This is the point of the row -
+  // it acknowledges that a warning reached the model and that the log's encoding of it holds up, so a
+  // warning whose bytes do not match has to be the one thing that fails it.
+  it("fails when a warning does not hash to the checksum beside it", () => {
+    const instruction = "It is Momo's turn to predict the next moves."
+    const round = parseGameRound([
+      request([
+        systemMessage(PROMPT),
+        {role: "user", content: instruction, content_checksum: sum(instruction)},
+        {role: "user", content: "Warning: keep your reasoning brief.", content_checksum: "0xdeadbeefdeadbeef"},
+      ]),
+    ])
+
+    const check = must(round.checks.find((one) => one.name === "User warnings"), "the warnings check")
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toBe("0 of 1 user warnings validated against their checksums")
+  })
+
+  // A warned-mode request, in the shape Tapoo writes one: the turn's instruction trimmed as usual, an
+  // assistant message holding the model's own tool calls and no checksum at all, and the warning appended
+  // as a second user message logged in full - warnings are rare and each says something different, so
+  // there is nothing to trim it against.
+  //
+  // Nothing here is damage or drift. The warning is one more text hashing to its own checksum, and the
+  // assistant message is not text the agent was shown. The snapshot carries no warned request at all -
+  // 32 requests, one user message each - so nothing in it exercises this.
+  it("reads a warned request's appended warning as one more full text", () => {
+    const instruction = "It is Momo's turn to predict the next moves."
+    const warning =
+      "Warning: Your previous response had a token-limit-exhaustion error and used 10000 tokens without " +
+      "returning a prediction."
+    const round = parseGameRound([
+      request([systemMessage(PROMPT), {role: "user", content: instruction, content_checksum: sum(instruction)}]),
+      request([
+        systemMessage(`${PROMPT.slice(0, 25)}...`, sum(PROMPT)),
+        {role: "user", content: `${instruction.slice(0, 25)}...`, content_checksum: sum(instruction)},
+        {role: "assistant", content: "", tool_calls: [{id: "call_1", function: {name: "get_maze_structure"}}]},
+        {role: "user", content: warning, content_checksum: sum(warning)},
+      ]),
+    ])
+
+    expect(round.warnings).toEqual([])
+    const named_ = (name: string) => must(round.checks.find((check) => check.name === name), name)
+    // Two logged in full for that row: the prompt and the instruction. The warning is hashed by its own
+    // row instead, and the assistant message carries no checksum at all.
+    expect(named_("Prompts and tool descriptions").detail)
+      .toBe("2 of 2 texts logged in full hashed to the checksum beside them")
+    expect(named_("User warnings").detail)
+      .toBe("1 of 1 user warnings validated against their checksums")
+    // One trimmed repeat, the instruction on the second request. The trimmed persona is the personas row's.
+    expect(named_("Trimmed checksummed repeats").detail)
+      .toBe("1 of 1 repeats matched the full text logged under the same checksum")
+    expect(named_("Agent personas").detail)
+      .toBe("1 distinct system prompt across 2 appearances, of the 4 personas Tapoo defines")
+  })
+
   it("checks a prompt logged in full against its own checksum", () => {
     const warnings = parseGameRound([request([systemMessage(PROMPT, "0xdeadbeefdeadbeef")])]).warnings
 
@@ -1075,14 +1393,21 @@ describe("the prompts and tool descriptions a round carried", () => {
     expect(at(warnings, 0).message).toMatch(/dmigwi\.github\.io\/tapoo\/prompts\.html/)
   })
 
-  // Counted on the system prompt, not the user message: that one is the same fixed instruction on every
-  // request - one checksum across all 32 in the snapshot - so it carries no persona to count.
-  it("does not count the user message, which never changes", () => {
+  // Counted on the system prompt, not the user message. Not because the user message never changes - Tapoo
+  // rewrites it to attach a warning, and this round carries six distinct ones - but because what it says
+  // is the turn's instruction rather than who the agent is being told to be. Six of them raise nothing:
+  // only a fifth *persona* is a finding.
+  it("counts personas on the system prompt, whatever the user message does", () => {
     const many = [0, 1, 2, 3, 4, 5].map((n) =>
       request([{role: "user", content: `Turn ${n}.`, content_checksum: sum(`Turn ${n}.`)}]),
     )
 
     expect(parseGameRound(many).warnings).toEqual([])
+    const personas = must(
+      parseGameRound(many).checks.find((check) => check.name === "Agent personas"), "the personas check",
+    )
+    expect(personas.outcome).toBe("unchecked")
+    expect(personas.detail).toBe("the round carried no system prompt")
   })
 
   // A tool result is compacted rather than trimmed, so it neither hashes nor ends in an ellipsis.

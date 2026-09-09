@@ -24,6 +24,7 @@ import {
   warningHeadline,
 } from "./report-adapters";
 import type { AgentRow } from "./report-adapters";
+import { CHANGED_JOIN } from "./report-adapters";
 import { createInitialLogTabs, roundReportFor } from "./log-tabs";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
@@ -143,9 +144,14 @@ function agentsTable({Inputs, html}: ReportUi, agents: Report["agents"]): HTMLEl
 /** runningCell renders one seat's setup with the values weighted above the words joining them.
  *
  * Comparing two seats means comparing three values, and as one flat sentence they sit at the same weight
- * as the "through" and the "at" between them - so the three are bold and the words joining them go
- * muted. The model is additionally set in mono, being a string copied out of the log, where "Ollama" and
- * "max" are this page's own wording for what the log spelled differently.
+ * as the words between them - so the three are bold and the joining words go muted. The model is
+ * additionally set in mono, being a string copied out of the log, where "Ollama" and "max" are this
+ * page's own wording for what the log spelled differently.
+ *
+ * "on the X API", not "through X". The api field is a wire protocol, and naming it the way a provider is
+ * named claimed something it does not say: Hugging Face answers on OpenAI's API, so a seat served there
+ * reads "OpenAI" - true of the protocol, false of who ran the model. The endpoint beneath it is what
+ * answers that.
  *
  * Deliberately not .rubric-code: that chip means "an identifier defined elsewhere on this page", and
  * nothing defines a model name anywhere else. A second tinted chip would send a reader looking.
@@ -154,6 +160,12 @@ function agentsTable({Inputs, html}: ReportUi, agents: Report["agents"]): HTMLEl
  * value on the page and the one this two-column shape exists for; wrapped inline it broke mid-host and
  * pushed the effort onto a line of its own anyway.
  *
+ * A setting the seat did not hold still is marked, and its values joined by an arrow in the order the
+ * turns ran. Comma-joined and in the same ink as a clean row, two models read as a list - and at a
+ * glance as one long name - so the row agentSettingsCheck is reporting looked exactly like the rows it
+ * is not. The mark is the page's caveat colour, not a verdict colour: a changed setting is a caveat
+ * about what the report can be compared against, not a finding against the agent.
+ *
  * Falls back to the sentence if the row is somehow missing, which no caller can currently produce -
  * rows is the array the table was built from. */
 const runningCell = (html: ReportUi["html"], rows: AgentRow[]) =>
@@ -161,11 +173,23 @@ const runningCell = (html: ReportUi["html"], rows: AgentRow[]) =>
     const running = rows[index]?.running;
     if (!running) return value;
 
+    // One setting, as one span: its values joined, and marked when there is more than one of them.
+    const setting = (values: string[], extra = ""): unknown =>
+      values.length === 0
+        ? ""
+        : html`<span class=${`agent-value ${extra} ${values.length > 1 ? "agent-changed" : ""}`.trim()}
+            >${values.join(CHANGED_JOIN)}</span>`;
+
     return html`<span
-      >${running.models === "" ? "" : html`<span class="agent-value agent-model">${running.models}</span>`}${
-        running.provider === "" ? "" : html`<span class="agent-joiner"> through </span><span class="agent-value">${running.provider}</span>`}${
-        running.effort === "" ? "" : html`<span class="agent-joiner"> at </span><span class="agent-value">${running.effort}</span><span class="agent-joiner"> reasoning effort</span>`}${
-        running.endpoint === "" ? "" : html`<span class="agent-endpoint">${running.endpoint}</span>`}</span>`;
+      >${running.models.length === 0
+        ? html`<span class="agent-value agent-model">not recorded</span>`
+        : setting(running.models, "agent-model")}${
+        running.api.length === 0 ? "" : html`<span class="agent-joiner"> on the </span>${setting(running.api)}<span class="agent-joiner"> API</span>`}${
+        running.effort.length === 0 ? "" : html`<span class="agent-joiner"> at </span>${setting(running.effort)}<span class="agent-joiner"> reasoning effort</span>`}${
+        running.endpoint.length === 0
+          ? ""
+          : html`<span class=${`agent-endpoint ${running.endpoint.length > 1 ? "agent-changed" : ""}`.trim()}
+              >${running.endpoint.join(CHANGED_JOIN)}</span>`}</span>`;
   };
 
 // One scope's worth of checks: what was verified, and what could not be.

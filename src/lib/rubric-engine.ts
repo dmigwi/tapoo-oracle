@@ -123,7 +123,7 @@ function noteSetup(context: Context, turn: number, seen: Partial<TurnSetup>): vo
 }
 
 /** buildContext walks the log once and derives everything the questions need. It takes already-parsed
- * entries rather than a path so the same derivation serves a file on disk and a pasted payload. */
+ * entries rather than text so the same derivation serves a fetched log and a pasted one. */
 export function buildContext(
   entries: LogEntry[],
   { label = "log", index = indexLog(entries) }: { label?: string; index?: LogIndex } = {},
