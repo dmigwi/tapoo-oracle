@@ -81,9 +81,9 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
         // move, which is the opposite of what the questions are asking. The key is still recorded in
         // `keys`, so the difference between "no moves key" and "a moves key holding junk" survives.
         //
-        // Before this returned whatever the model sent, and a string reached `.every` in the rubric -
-        // not a function on a string - so one malformed response threw out of answerRubric and took
-        // the whole page render with it.
+        // Returning whatever the model sent instead lets a string reach `.every` in the rubric, which is
+        // not a method on a string: one malformed response then throws out of answerRubric and takes the
+        // whole page render with it.
         const moves: unknown = parsed.moves
         return {moves: Array.isArray(moves) ? moves : [], tier, keys: Object.keys(parsed)}
       }
@@ -131,9 +131,9 @@ export function buildContext(
   // Which turn an entry belongs to is the index's answer, not a cursor's.
   //
   // `turnSource === "field"` means the index placed every entry in a span, so each entry's own turn
-  // number is authoritative and the spans tile the array with no gap or overlap. That is a stronger
-  // guarantee than this loop used to have: it tracked the turn on request entries only, and everything
-  // between two requests inherited whatever the last one set.
+  // number is authoritative and the spans tile the array with no gap or overlap. A cursor is the weaker
+  // answer: tracking the turn on request entries alone leaves everything between two requests inheriting
+  // whatever the last one set.
   //
   // Two weaker cases remain, and neither can be answered by a map:
   //
@@ -260,7 +260,7 @@ export function buildContext(
           const statuses = new Map<CellKey, VisitStatus>()
 
           // Guarded as an array: the key being present does not make the value iterable, and a non-list
-          // here used to throw straight out of the report.
+          // here throws straight out of the report.
           for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
             const cell = cellKeyFromLogged(record.cell)
             if (cell) {
@@ -717,10 +717,9 @@ function availableContextDisregard(context: Context): Record<string, boolean> {
       // isMove is part of the same test rather than a separate branch after it: the exits set holds
       // Moves, so a name the maze cannot apply is not in it and is not something the cell offered.
       //
-      // There used to be a second branch here for a move the cell *did* list that was not a Tapoo
-      // command - the agent used what it was told, so nothing was disregarded, and the walk stopped
-      // rather than inventing a verdict. openMovesFromLogged now drops such a name at the parse, so a
-      // cell can no longer be recorded as offering one and the branch had nothing left to catch.
+      // Which leaves no third case to handle: a cell cannot be recorded as offering a name the maze
+      // cannot apply, because openMovesFromLogged drops it at the parse. Were one to reach here, the
+      // agent would have used what it was told and nothing would have been disregarded.
       if (!isMove(move) || !known.has(move)) {
         return true
       }

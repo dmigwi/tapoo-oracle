@@ -70,7 +70,7 @@ describe("index.md regions", () => {
 
   it("interpolates every region renderReportSections returns, and nothing else", () => {
     // A region added to the module but never interpolated renders nowhere, and an interpolation naming
-    // a region that no longer exists prints "undefined" to the reader. Neither fails anywhere else.
+    // a region that does not exist prints "undefined" to the reader. Neither fails anywhere else.
     const interpolated = [...page.matchAll(/\$\{report\.(\w+)\}/g)].map((match) => match[1])
 
     expect(interpolated).toEqual(["emptyState", "notices", "methodology", "profile", "detail"])

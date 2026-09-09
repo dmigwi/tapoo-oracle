@@ -62,7 +62,7 @@ describe("which round an entry belongs to", () => {
     expect(buildLevels(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
   })
 
-  it("still separates rounds that do name themselves", () => {
+  it("separates two rounds that each name themselves", () => {
     const levels = buildLevels([
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 0, game: 6, level: 54}),
       prediction(["MoveDown"], 0),
@@ -96,10 +96,10 @@ describe("which round an entry belongs to", () => {
 
 describe("reading a turn from the outcome Tapoo reported", () => {
   // Tapoo reports each turn's outcome to the turn *after* it, and that record states where replay
-  // began and which move was the last to land. The oracle used to infer both, keying the same payload
-  // by its move list - and a move list is not unique to a turn. In a real 464-turn log, 502 readings
-  // collapsed onto 86 sequences, 30 of them seen with different applied indexes, and 63 turns ended up
-  // with another turn's path.
+  // began and which move was the last to land. Inferring both instead means keying the same payload by its
+  // move list, and a move list is not unique to a turn: in a real 464-turn log, 502 readings collapse onto
+  // 86 sequences, 30 of them seen with different applied indexes, which puts another turn's path on 63 of
+  // them.
   const outcomeTool = (turn: number, body: Record<string, unknown>) =>
     entry(LOG_EVENTS.request, {
       messages: [{role: "tool", tool_name: "get_last_prediction_outcome",
@@ -219,10 +219,10 @@ describe("reading a turn from the outcome Tapoo reported", () => {
 
 describe("a turn that produced no prediction", () => {
   // A malformed response, an exhausted token cap, or a failed request leaves no moves to replay, so
-  // nothing becomes a submission. The turn used to vanish from the replay - while Tapoo still counted
-  // it and still charged three units for it, its heaviest penalty. The report showed 464 turns against
-  // Tapoo's own 473 in one real log, and the decay strip could never reach the round total because its
-  // most expensive turns were the missing ones.
+  // nothing becomes a submission - so without this the turn is absent from the replay while Tapoo still
+  // counts it and still charges three units for it, its heaviest penalty. On one real log that is 464 turns
+  // reported against Tapoo's own 473, and a decay strip that can never reach the round total because its
+  // most expensive turns are the missing ones.
   const outcomeTool = (turn: number, body: Record<string, unknown>) =>
     entry(LOG_EVENTS.request, {
       messages: [{role: "tool", tool_name: "get_last_prediction_outcome",

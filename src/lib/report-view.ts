@@ -1,7 +1,7 @@
-// The page's view layer, lifted out of src/index.md.
+// The page's view layer.
 //
-// Everything here used to live in a fenced js block in the markdown, where it was neither linted nor
-// testable: src/index.md is not in eslint's file list and vitest cannot import a markdown fence.
+// A module rather than a fenced js block in the markdown, because a fence is neither linted nor testable:
+// src/index.md is not in eslint's file list and vitest cannot import one.
 //
 // Inputs and html arrive as arguments rather than imports. Both are Observable Framework globals in
 // markdown, and pulling them in here would mean either an "npm:" specifier that only the framework's
@@ -112,11 +112,10 @@ function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement
 
 // Field and value down the page, not eight columns across it.
 //
-// One row of eight columns fits a wide screen and trims its own values on anything narrower, each
-// squeezed into an eighth of the width. Two of those eight were a model name and a reasoning effort,
-// which have since moved to the Agents table, where they belong to a seat. Every other summary here is
-// already two columns, including Model Output directly above, so this now reads the same way and the
-// values have the room to be read.
+// One row of eight columns fits a wide screen and trims its own values on anything narrower, each squeezed
+// into an eighth of the width - and two of the eight it would hold, a model name and a reasoning effort,
+// describe a seat and live in the Agents table instead. Every other summary here is two columns, including
+// Model Output directly above, so this reads the same way and the values have the room to be read.
 function provenanceTable({Inputs}: ReportUi, source: TapooLog): HTMLElement {
   const rows = provenanceRows(source);
   return enableRowSelection(Inputs.table(rows, {
@@ -249,10 +248,10 @@ function emptyState({html}: ReportUi, tab: LogTab | undefined): RegionView {
 // The export's own caveats, at the top of the page where they bound everything below them: a mode the
 // rubric was not written for, a build the report cannot name, entries that did not decode.
 //
-// A round's caveats are not here. They used to be - pooled into this one list - and a reader on game 1
-// was told that game 2's maze failed its checksum, a caveat about a report they were not reading, while
-// game 1's own sat in the same list looking equally unrelated. They now render beside the round they
-// describe; see roundNotices.
+// A round's caveats are not here; see roundNotices, which renders them beside the round they describe.
+// Pooled into this one list, a reader on game 1 is told that game 2's maze failed its checksum - a caveat
+// about a report they are not reading - while game 1's own sits in the same list looking equally
+// unrelated.
 function notices({html}: ReportUi, tab: LogTab | undefined): RegionView {
   const result = tab?.result;
   if (tab?.status === "error") {
@@ -299,9 +298,9 @@ function roundNotices({html}: ReportUi, round: RoundReport): RegionView {
  *
  * Throws on an identity naming no round, because that is a programming error rather than anything a
  * reader did: every identity reaching here came off a round tab this module drew, so a miss means the
- * tabs and the analysis have gone out of step. It used to fall back to the first round, which read as
- * correct - the report rendered, the first tab highlighted - and said nothing about having been asked
- * for another. The same reasoning as stepFrom, which throws on a key it did not build. */
+ * tabs and the analysis have gone out of step. Falling back to the first round hides that - the report
+ * renders, the first tab highlights, and nothing says another round was asked for. The same reasoning as
+ * stepFrom, which throws on a key it did not build. */
 export function activeRound(tab: LogTab | undefined, wanted: GameIdentity | null): RoundReport | undefined {
   const result = tab?.result;
   if (!result?.ok) return undefined;
@@ -411,11 +410,10 @@ function profile(
 // state telling the reader to paste a URL, explaining the treatment of evidence that does not exist
 // yet. It renders here so it appears with the thing it describes.
 //
-// It is also the one home for how the report is made. Three claims used to appear here and twice more
-// elsewhere - that no combined score is produced, that every question answers YES or NO, and what a NO
-// means - once in the hero lede and once in the profile summary. A rule stated three times reads as
-// three separate hedges rather than one method, so the lede and the summary now say what they are for
-// and leave the method to the section named after it.
+// It is also the one home for how the report is made: that no combined score is produced, that every
+// question answers YES or NO, and what a NO means. A rule stated in three places - here, the hero lede,
+// the profile summary - reads as three separate hedges rather than one method, so the lede and the summary
+// say what they are for and leave the method to the section named after it.
 function methodology({html}: ReportUi, result: Analysis | undefined): RegionView {
   if (!result?.ok) return "";
   return html`<details class="events-section methodology-section">

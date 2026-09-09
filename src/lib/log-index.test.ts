@@ -123,7 +123,7 @@ describe("classification", () => {
 
   it("names events the rubric has no question for", () => {
     // Both of these are real: they appear in a 2,004-entry glm-5.1 log and in no LOG_EVENTS entry, so
-    // before this they fell through every branch in buildContext and were counted nowhere.
+    // without it they fall through every branch in buildContext and are counted nowhere.
     const index = indexLog([
       entry(LOG_EVENTS.request),
       entry("Malformed agent prediction response.", {log: "warn"}),

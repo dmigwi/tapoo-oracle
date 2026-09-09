@@ -47,13 +47,13 @@ export default {
   // Says only what a reader needs to trust the page: which build answered, where the logs come from,
   // and what does and does not leave their browser.
   //
-  // What this is and when it was built. The privacy claim that used to sit here has moved to the hero,
-  // above the URL field: it is the thing a reader needs before they paste an address, and a footer is
-  // where a page puts what it does not expect to be read.
+  // What this is and when it was built, and nothing else. The privacy claim belongs in the hero, above
+  // the URL field: it is what a reader needs before they paste an address, and a footer is where a page
+  // puts what it does not expect to be read.
   //
-  // It moved intact, including the clause after the semicolon. "Never uploaded" was true of the log and
-  // false of its address - a shared report is a /r/<token> route, so the token, which decodes back to
-  // the log URL, travels in the request path and lands in the host's access logs on every visit. A
+  // The wording there carries a clause after the semicolon for a reason. "Never uploaded" is true of the
+  // log and false of its address - a shared report is a /r/<token> route, so the token, which decodes
+  // back to the log URL, travels in the request path and lands in the host's access logs on every visit. A
   // blanket "never uploaded" beside a feature that does send something is the kind of sentence this
   // project exists to avoid, and shortening it on the way up would have reintroduced exactly that.
   footer:
@@ -77,10 +77,10 @@ export default {
     // dependencies and runs at parse time, so it does not wait on the framework's own JS - which is the
     // point, because on that page the framework may not have loaded at all.
     //
-    // It used to also document.write('<base href="../">') to correct the page's asset paths. That never
-    // worked: Observable emits its own <base> from the `base` option above, before any of this, and a
-    // document honours only its first <base href> - so the second was parsed and ignored. The asset
-    // links are emitted ahead of this script too, so even a winning base would have arrived late.
+    // It deliberately writes no <base href="../"> to correct the page's asset paths. That cannot work
+    // here: Observable emits its own <base> from the `base` option above, before any of this, and a
+    // document honours only its first <base href>, so a second is parsed and ignored. The asset links are
+    // emitted ahead of this script too, so even a winning base would arrive late.
     //
     // `base` handles normal assets. The build additionally makes 404.html references and every favicon
     // absolute because a fallback page is served at an arbitrary depth and History API can defer

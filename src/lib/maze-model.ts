@@ -30,10 +30,10 @@ export function mazeReplayModel(report: Report): LevelModel[] {
   const levels = report?.levels ?? [];
 
   return levels.map((level) => {
-    // The destination arrives already resolved to a cell key. It used to be converted here from
-    // {row, col}, which silently produced "undefined,undefined" whenever a downloaded log had
-    // compacted it to [row, col] - no destination drawn, and "no route found" reported as evidence.
-    // One reader in the contract now handles both shapes for every field that carries a cell.
+    // The destination arrives already resolved to a cell key: one reader in the contract handles both
+    // logged shapes, for every field carrying a cell. Converting here instead means handling {row, col}
+    // and turning a compacted [row, col] into "undefined,undefined" - no destination drawn, and
+    // "no route found" reported as evidence.
     const destination = level.destinationCell;
     const built = mazeFromEncoded(level.encodedMaze, {
       startCell: level.startCell,
@@ -61,9 +61,8 @@ export function mazeReplayModel(report: Report): LevelModel[] {
 /** agentIndexOf resolves a turn to the seat that played it, as an index into `agents`, or -1 for a turn
  * no seat claims.
  *
- * By the stated seat first and the name second, which is how agentsFromRound gathered these records in
- * the first place - resolving them differently here would colour a trail for a seat the table does not
- * list. The name still has to work on its own: a legacy log states no seat on any turn, and the one
+ * By the stated seat first and the name second, which is how agentsFromRound gathers these records -
+ * resolving them differently here would colour a trail for a seat the table does not list. The name still has to work on its own: a legacy log states no seat on any turn, and the one
  * seatId such a log carries reaches the record from the round-end entry, so the seat matches nothing and
  * the name is all there is.
  *
@@ -133,8 +132,8 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
   const visited = new Map<CellKey, {playerName: string | null; status: VisitStatus | null}>();
   const enter = (cell: CellKey, playerName: string | null): void => {
     // null means the log never graded this cell, and the view draws that as its own mark rather than
-    // guessing. It used to answer "explored" - the weakest rung of the scale, but still a grade Tapoo
-    // never issued, which is the one thing this report must not do.
+    // guessing. Answering "explored" would be a grade Tapoo never issued - the weakest rung of the scale
+    // is still a rung, and inventing one is the thing this report must not do.
     //
     // Two ways a walked cell has no usable grade. No payload ever named it: get_maze_structure is a
     // tool the model chooses to call, so a cell can be walked in a turn that never asked. Or the newest

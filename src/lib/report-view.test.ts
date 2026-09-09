@@ -198,9 +198,9 @@ describe("profile", () => {
   })
 
   it("keeps the metric strip inside the profile it summarises, under the prose", () => {
-    // The strip used to be a section of its own between the maze and the profile, which read as three
-    // unrelated blocks. It belongs to the Behavior Profile: same section, after the sentence, so the
-    // cards are the figures for the paragraph above them rather than a floating row of numbers.
+    // The strip belongs to the Behavior Profile: same section, after the sentence, so the cards are the
+    // figures for the paragraph above them. A section of its own between the maze and the profile reads as
+    // three unrelated blocks and the cards as a floating row of numbers.
     const summary = query(profile(), ".oracle-summary")
     expect(summary.querySelector(".analysis-strip")).not.toBeNull()
 
@@ -284,8 +284,8 @@ describe("profile", () => {
     ])
   })
 
-  // One page, one explanation of what a NO means: the methodology section. The summary and the hero
-  // lede used to carry copies of it, and three statements of one rule read as three hedges.
+  // One page, one explanation of what a NO means: the methodology section. Copies in the summary and the
+  // hero lede make three statements of one rule, which read as three hedges.
   it("leaves what a negative answer means to the methodology section", () => {
     const sections = renderReportSections(ui, stateWith(loadedTab()))
     expect(text(sections.profile)).not.toMatch(/not that the model is incapable/)
@@ -308,9 +308,8 @@ describe("activeRound", () => {
   })
 
   // An identity can only come from a round tab this module drew, so one that matches nothing means the
-  // tabs and the analysis have gone out of step - a bug here, not anything a reader did. It used to
-  // fall back to the first round, which looked entirely correct and said nothing about having been
-  // asked for another.
+  // tabs and the analysis have gone out of step - a bug here, not anything a reader did. Falling back to
+  // the first round looks entirely correct and says nothing about having been asked for another.
   it("throws on an identity naming no round, rather than quietly showing the first", () => {
     expect(() => activeRound(twoRoundTab(), {game: 99, level: 99})).toThrow(/no round 99\/99/)
   })
@@ -366,8 +365,8 @@ describe("when a round is answered", () => {
 // The whole point of the parser split: a caveat about one round is shown with that round and nowhere
 // else, while a caveat about the file is shown whatever is open.
 describe("where a warning is attributed", () => {
-  // Round 2 carries a get_maze_structure result whose content no longer matches the checksum stamped on
-  // it. Round 1 carries nothing of the kind, so it has no caveat of its own.
+  // Round 2 carries a get_maze_structure result whose content does not match the checksum stamped on it.
+  // Round 1 carries nothing of the kind, so it has no caveat of its own.
   //
   // A damaged *maze* would not do: that is reported by the replay, in the space the traversal should
   // have occupied, and deliberately not repeated here. A payload that fails its checksum has no such
@@ -478,8 +477,8 @@ describe("payload validation", () => {
     expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)
   })
 
-  // Provenance used to be one row of eight columns, which trimmed its own values on a narrow viewport.
-  // Two columns down the page, like Model Output directly above it.
+  // Field and value down the page, like Model Output directly above it. One row of eight columns trims its
+  // own values on a narrow viewport.
   it("renders provenance as field and value rows", () => {
     const node = detail(loadedTab())
     const headers = queryAll<HTMLElement>(node, "thead th").map((th) => th.textContent?.trim())
@@ -745,8 +744,8 @@ describe("methodology", () => {
   })
 
   it("renders nothing before a report is loaded", () => {
-    // It used to be static markup in index.md, so an untouched page showed five stages describing the
-    // treatment of evidence it did not have yet, directly above an empty state asking for a URL.
+    // Static markup in index.md renders whatever the state: five stages describing the treatment of
+    // evidence the page does not have yet, directly above an empty state asking for a URL.
     expect(sectionsFor().methodology).toBe("")
     expect(renderReportSections(ui, createInitialLogTabs()).methodology).toBe("")
   })

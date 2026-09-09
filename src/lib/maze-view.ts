@@ -51,9 +51,9 @@ const createHtmlElement = (
   return node;
 };
 
-// cellXY is the key's coordinates plus where they land on the canvas. cellFromKey does the reading -
-// this file used to split the string itself, which is the duplication that let a key and a drawing
-// disagree about what row meant.
+// cellXY is the key's coordinates plus where they land on the canvas. cellFromKey does the reading, so
+// nothing here splits the string itself: two readers of one format are free to disagree about which half
+// is the row, and a drawing that disagrees with a key is a maze drawn transposed.
 const cellXY = (cell: CellKey): {row: number; col: number; x: number; y: number} => {
   const {row, col} = cellFromKey(cell);
   return {row, col, x: col * CELL, y: row * CELL};
@@ -561,9 +561,9 @@ function drawFrame(overlay: SVGElement, frame: Frame, model: LevelModel, colorOf
   // clean traversal.
   //
   // The tint is never the only cue: the agent-coloured trail drawn below crosses every visited cell by
-  // construction, and the legend names the three colours. An earlier version put a coloured bar along
-  // each cell's lower edge instead, which was the same weight and orientation as a wall and read as one
-  // - it made the maze look like it had walls the log never described.
+  // construction, and the legend names the three colours. It is a tint and not a bar along each cell's
+  // lower edge, which would carry the same weight and orientation as a wall and read as one - making the
+  // maze look like it had walls the log never described.
   for (const [cell, {status}] of frame.visited) {
     const {x, y} = cellXY(cell);
     const rect = createSvgElement("rect", {
@@ -618,9 +618,9 @@ function drawFrame(overlay: SVGElement, frame: Frame, model: LevelModel, colorOf
 // words - a colour-coded path is not readable to everyone looking at it.
 // turnNarrative names the frame you are on, in the little the bars cannot carry.
 //
-// It used to spell out the whole turn - who acted, every move submitted, how many landed, what was
-// refused - which is now the bar strips' job across the entire round rather than one sentence about
-// one turn. What is left is what a bar cannot say: which turn this is, and which move hit a wall.
+// Not the whole turn: who acted, how many moves landed and what was refused are the bar strips' job,
+// across the whole round rather than one sentence about one turn. What is left is what a bar cannot say -
+// which turn this is, and which move hit a wall.
 //
 // The agent is named only in a round that has more than one. On a single-agent round it was the same
 // word on every frame, and the trail colour already identifies seats.
@@ -753,8 +753,8 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
 // Within the card, metrics are presented as a single-row horizontal table — column headers on top,
 // values below — so the label and its value share a column rather than a row.
 //
-// The numbers arrive already gathered on LevelModel.agents, one record per seat. They used to come as
-// four arrays lined up by index, where nothing but convention kept a speed beside the seat that ran it.
+// The numbers arrive already gathered on LevelModel.agents, one record per seat - so a card reads one
+// object, rather than several lists where only a shared index keeps a speed beside the seat that ran it.
 // Formatting stays here because "18 of 24 (75%)" needs the maze's cell count, which is this view's.
 function agentStatsRow(model: LevelModel): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
@@ -873,7 +873,7 @@ export function createMazeReplay(report: Report): HTMLElement {
   // both and lets the key drop underneath when there is not.
   const stage = createHtmlElement("div", "maze-stage");
   // The lens takes the column the key sits in, above it, so the magnified view reads at the same height
-  // as the grid it is reading. With the mode off the column is the key alone, exactly as before.
+  // as the grid it is reading. With the mode off the column is the key alone.
   const aside = createHtmlElement("div", "maze-aside");
   const lens = createHtmlElement("div", "maze-lens");
   // The button lives inside the lens, and the body is what gets replaced on every paint - so the
@@ -953,8 +953,8 @@ export function createMazeReplay(report: Report): HTMLElement {
     if (overlay) drawFrame(overlay, frame, active, colorOf);
     caption.textContent = turnNarrative(frame, active);
     // The log's own turn number, the same identifier the caption and the bar tooltips use - read from
-    // frame.turn so the two cannot drift. It used to be `turnIndex / totalTurns`, a count of turns
-    // played, so the readout said "16 / 16" beside a caption reading "Turn 15".
+    // frame.turn so the two cannot drift. `turnIndex / totalTurns` counts turns *played* instead, which
+    // reads "16 / 16" beside a caption saying "Turn 15".
     const last = active.turns.at(-1)?.turn;
     readout.textContent = frame.turn === null || last === undefined ? "Start" : `Turn ${frame.turn.turn} / ${last}`;
     range.setAttribute("aria-valuetext", turnNarrative(frame, active));

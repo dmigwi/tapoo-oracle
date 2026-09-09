@@ -57,9 +57,9 @@ export const cellFromKey = (key: CellKey): Cell => {
  *
  * A downloaded log compacts every get_maze_structure result before writing it, turning {row, col}
  * into [row, col]. Both shapes are real, so this is the one place that decides which is which -
- * every field carrying a logged cell goes through here. Handling it per-caller is what previously
- * produced "undefined,undefined" keys: one reader was taught the compact form and another, reading a
- * different field, was not.
+ * every field carrying a logged cell goes through here. Handled per-caller, one reader knows the compact
+ * form and another, reading a different field, does not - and the one that does not writes
+ * "undefined,undefined" as a cell key.
  *
  * The parameter is `unknown`, not LoggedCell: every caller reads this straight out of parsed JSON,
  * where the value is whatever the producer wrote. Taking the narrow type would only move the cast to
@@ -93,12 +93,12 @@ export function cellFromLogged(cell: unknown): Cell | null {
  * cannot apply is dropped at the parse rather than guarded against at each use.
  *
  * That narrowing is also what makes this the same shape as `Maze.exits`, which the decoded maze
- * produces - the observed exits and the structural ones can now be compared without a coercion between
+ * produces, so the observed exits and the structural ones compare directly, with no coercion between
  * them.
  *
  * Reading the compacted form with Object.keys yields array indices - "0", "1" - which match no move
- * command, so every exit check silently failed. That failure is now a dropped entry rather than a
- * member of the returned set.
+ * command, so every exit check against one silently fails. Such a name is dropped here instead of
+ * reaching the returned set.
  *
  * `unknown` for the same reason as cellFromLogged: the value comes straight from a parsed log. */
 export function openMovesFromLogged(openMoves: unknown): Set<Move> {

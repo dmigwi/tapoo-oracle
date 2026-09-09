@@ -141,9 +141,9 @@ export function analyzeLogText(
  *
  * Built here rather than kept as a .json file. The real capture in _snapshot_/ is a capture - bytes
  * Tapoo wrote, which is what makes it evidence - and a synthetic log saved beside it in the same shape
- * invites being read as one more. Twice in the making of this fixture a hand-built stand-in was mistaken
- * for real output, so the difference is worth keeping structural: this one exists only while a test runs,
- * and it is TypeScript, which is how every other fixture in this suite is written.
+ * invites being read as one more - a mistake easily made and hard to see. So the difference is kept
+ * structural: this one exists only while a test runs, and it is TypeScript, like every other fixture in
+ * this suite.
  *
  * It exists because the real capture has one seat that never changed anything, so it cannot show what
  * agentSettingsCheck reports, or what the Agents cell does with a setting that moved. Everything but

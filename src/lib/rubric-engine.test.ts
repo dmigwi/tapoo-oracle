@@ -98,9 +98,9 @@ describe("parsePrediction", () => {
 // A round's identity is the running cursor's, not its first entry's - Tapoo stamps game and level only
 // at round boundaries, so the entries that open a group often carry neither.
 //
-// Level used to read them off `groupEntries[0]` while taking its key from the group, so on such a log
-// the same record said "7/3" and `game: null, level: null` at once. The maze replay builds its level
-// select from those numbers, so it read "Level null". One identity, one answer.
+// Reading them off `groupEntries[0]` while taking the key from the group makes one record say "7/3" and
+// `game: null, level: null` at once, and the maze replay - which builds its level select from those
+// numbers - says "Level null". One identity, one answer.
 describe("a round's identity on a log that labels only its boundaries", () => {
   it("takes game and level from the round, not from the entry that opens it", () => {
     const entries = [
@@ -355,9 +355,9 @@ describe("answerRubric", () => {
 // V5.Q1 asks whether any known cell was entered more times than its confirmed open-move count. That is
 // the definition of Tapoo's `oscillating`, so the label answers it directly.
 //
-// It used to be derived, and the derivation could not see the case below. It counted context.positions,
-// one cell per turn, so a cell passed through inside a multi-move batch contributed nothing at all - and
-// it needed an exit count from filteredTraversalHistory, skipping any cell that had none.
+// Deriving it instead cannot see the case below: counting context.positions is one cell per turn, so a
+// cell passed through inside a multi-move batch contributes nothing, and an exit count taken from
+// filteredTraversalHistory skips any cell that has none.
 describe("V5.Q1, excess visits", () => {
   const answer = (entries: LogEntry[]) =>
     must(VIOLATIONS.find((group) => group.id === "V5"), "the V5 group").evaluate(buildContext(entries)).Q1
@@ -380,8 +380,8 @@ describe("V5.Q1, excess visits", () => {
     expect(answer(structure(0, [1, 1], [["MoveUp", "backtracking"], ["MoveDown", "explored"]]))).toBe(false)
   })
 
-  // The exact shape the old derivation missed: one turn, one tool result, and a cell the agent never
-  // ended a turn on - so it never entered context.positions and was never counted.
+  // The shape a turn-boundary count cannot see: one turn, one tool result, and a cell the agent never ended
+  // a turn on, so it never enters context.positions.
   it("sees a cell the turn-boundary count could never reach", () => {
     const entries = structure(0, [0, 0], [["MoveDown", "oscillating"]])
     const context = buildContext(entries)
@@ -460,10 +460,10 @@ describe("harvesting visit statuses", () => {
 })
 
 // Downloaded logs compact every get_maze_structure result before writing it: cells become [row, col]
-// arrays and openMoves becomes [move, visitStatus] pairs. Only the uncompacted object form used to be
-// read, so against a real export every cell key became "undefined,undefined" and every move name became
-// an array index - which did not fail, it just answered C4, C7, V4 and V5 about nothing at all. These
-// fixtures are in the shape a real download actually carries.
+// arrays and openMoves becomes [move, visitStatus] pairs. Reading only the uncompacted object form turns
+// every cell key of a real export into "undefined,undefined" and every move name into an array index -
+// which does not fail, it answers C4, C7, V4 and V5 about nothing at all. These fixtures are in the shape
+// a real download actually carries.
 describe("compacted log shape", () => {
   const compactStructure = (currentCell: [number, number], history: Array<[[number, number], string[]]>) =>
     toolMessage({
@@ -516,7 +516,7 @@ describe("compacted log shape", () => {
     expect(group(answerRubric(walledLog), "V4").met).toBe(true)
   })
 
-  it("still reads the uncompacted shape, which older logs carry", () => {
+  it("reads the uncompacted shape too, which older logs carry", () => {
     const uncompacted = [
       ...turn(0, {
         tools: ["get_maze_structure"],
@@ -653,9 +653,9 @@ describe("how buildContext decides which turn an entry belongs to", () => {
   })
 
   it("attributes an entry to its own turn, not to whichever request preceded it", () => {
-    // The cursor this replaced only moved on request entries, so anything between two requests
-    // inherited the earlier one's number. Here the response says turn 4 and there is no request for
-    // it - under the old rule the prediction would have been filed under turn 0.
+    // A cursor moving only on request entries leaves anything between two requests inheriting the earlier
+    // one's number. Here the response says turn 4 and there is no request for it, so a cursor would file
+    // the prediction under turn 0.
     const context = buildContext([
       entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 4}),
@@ -664,7 +664,7 @@ describe("how buildContext decides which turn an entry belongs to", () => {
     expect(context.submissions.map((s) => s.turn)).toEqual([4])
   })
 
-  it("still infers boundaries from predictions when no entry carries a turn", () => {
+  it("infers boundaries from predictions when no entry carries a turn", () => {
     // Without this every entry collapses onto turn 0 and the per-turn questions pass trivially, which is
     // worse than being unable to answer them.
     const withoutTurns = [

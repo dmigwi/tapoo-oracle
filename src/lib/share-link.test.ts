@@ -148,7 +148,7 @@ describe("decodeReportPayload", () => {
 
   // The two sentences are asserted literally here and nowhere else. Every other case below compares
   // against these instead of repeating the prose, so rewording a message is a one-line change rather
-  // than a sweep through the file - which it was, three times over, before this was pulled out.
+  // than a sweep through the file for every spelling of the same mistake.
   const UNNAMED = "This link does not name a report."
   const ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
 

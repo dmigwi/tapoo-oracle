@@ -65,7 +65,7 @@ export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? va
 /** Capitalises the first character and leaves the rest of the string exactly as it was.
  *
  * Deliberately not a CSS `text-transform`: that would leave the DOM holding one string while the screen
- * showed another, so a test could no longer assert on what a reader actually sees. And deliberately not
+ * showed another, leaving a test unable to assert on what a reader actually sees. And deliberately not
  * a title-caser - the callers are single words whose remainder is already correct, and a helper that
  * rewrote the tail would quietly mangle any value that had a capital of its own.
  */

@@ -1,9 +1,9 @@
 // What the first scan of a downloaded log produces, beside the entries themselves.
 //
-// One pass over the validated entries yields two things every later reader wants: a summary of what
-// the log contains, and a map of where each turn begins and ends. Before this, a turn was something
-// each consumer re-derived by walking the whole array with a cursor, and "what is in this log" was not
-// answered anywhere at all.
+// One pass over the validated entries yields two things every later reader wants: a summary of what the
+// log contains, and a map of where each turn begins and ends. Answered here once, rather than left to
+// each consumer to re-derive by walking the whole array with a cursor - and "what is in this log" has
+// somewhere to be answered at all.
 //
 // The index describes the log. It does not interpret it: no rubric question is answered here, and no
 // verdict depends on anything in this file. That separation is deliberate - the summary is meant to be

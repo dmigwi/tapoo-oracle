@@ -140,8 +140,8 @@ describe("createLogTabsInput sharing", () => {
     document.body.append(node)
     await settle()
 
-    // Strict now that the panel shows the share link instead of the log address: no part of the
-    // address survives anywhere, not even the host. The report is named by its label instead.
+    // Strict because the panel shows the share link and not the log address: no part of the address
+    // survives anywhere, not even the host. The report is named by its label.
     expect(node.innerHTML).not.toContain(gistUrl)
     expect(node.innerHTML).not.toContain("gist.githubusercontent.com")
     expect(node.innerHTML).not.toContain("908ef03ef653fe39581f0756122ffe4c")

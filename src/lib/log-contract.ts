@@ -74,10 +74,10 @@ export {
  * Tapoo reports a turn's outcome on the request that *follows* it, so a payload logged on turn N -
  * get_maze_structure, get_prediction_rules, get_last_prediction_outcome - covers turn N - 1.
  *
- * That offset lives on one line, inside this store, and nowhere else. It used to be a bare `- 1` beside
- * a plain Map, which meant every writer had to remember it and every reader had to trust that they had:
- * it was written `.get(turn + 1)` in one place, `reportedAt - 1` in another, and left out entirely in a
- * third, which is how the maze overlay came to draw its colours a turn behind the maze.
+ * That offset lives on one line, inside this store, and nowhere else. Held as arithmetic at each call
+ * site instead, every writer has to remember it and every reader has to trust that they did - and the
+ * three spellings it invites, `turn + 1`, `reportedAt - 1`, and no adjustment at all, are all valid
+ * TypeScript. A reader that shifts the wrong way draws the maze overlay a turn behind the maze.
  *
  * `record` is the only way in and takes the turn that *carried* a payload; `get` is the only way out and
  * takes the turn it *covers*. A caller holding the offset separately is the bug this closes, so there is
@@ -323,9 +323,8 @@ function unreadableResponseWarnings({responses, unreadable}: ResponseTally): Log
 
 /** A logged message's text and the checksum beside it, each proved once.
  *
- * Both readers below take the same two fields off the same records, and both used to narrow them for
- * themselves - two places to keep in step about what a readable message even is, and four checks over two
- * values.
+ * Both readers below take the same two fields off the same records. Narrowed at each of them instead,
+ * "a readable message" has two definitions free to drift apart, and two values cost four checks.
  *
  * What they do not share is what a *missing* checksum means. promptWarnings has nothing to compare and
  * passes over it; traversalPayloadWarnings counts it as a payload it could not verify, which is a number
@@ -449,8 +448,8 @@ function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[];
 
       // Is this a get_maze_structure result at all? Decided before anything is counted, because a round
       // carries three tools' results and only this one is reconstructable. Counting the other two as
-      // "not checkable" read as a gap in the checking when they are simply not this check's business -
-      // it reported 32 unverifiable payloads on a log where every payload this check covers verified.
+      // "not checkable" reads as a gap in the checking when they are simply not this check's business:
+      // it would report 32 unverifiable payloads on a log where every payload this check covers verified.
       let payload: unknown;
       try {
         payload = JSON.parse(text.content);
@@ -743,9 +742,9 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
       // agent is being told to be.
       if (!isPersona) continue;
 
-      // Appearances as well as distinct prompts, because this row owns the whole population now: three
-      // personas over thirty-two turns and three over three are different rounds, and the trimmed-repeat
-      // row no longer says how often each was seen.
+      // Appearances as well as distinct prompts, because this row owns the whole population: three
+      // personas over thirty-two turns and three over three are different rounds, and nothing else in the
+      // summary says how often each was seen.
       personas.add(text.checksum);
       personaAppearances += 1;
     }
@@ -900,9 +899,8 @@ type RepeatTally = {
  * something different, so there is never an earlier copy to trim it against - which makes it checkable the
  * simple way, and counting it in the row above as well would report the same texts twice.
  *
- * A round with none is `passed` and says so. Nothing failed to run: the round was searched and there was
- * nothing to find, and "not checked" on the ordinary, good case is the reading this section keeps having
- * to be rescued from. */
+ * A round with none is `passed` and says so. Nothing failed to run - the round was searched and there is
+ * nothing to find - and "not checked" would read as a fault in the report on the ordinary, good case. */
 function userWarningCheck(warnings: number, verified: number): ValidationCheck {
   const name = "User warnings";
   const scope = "round" as const;
@@ -1318,9 +1316,9 @@ function mazeCheck(maze: MazeResult | null): ValidationCheck {
 /** parseTapooLogText is the ingress point: every log the app reads enters here, and nothing else in
  * this module takes a log from outside.
  *
- * Text in, because text is what arrives - a fetch body, a paste, a file. The parse and the envelope
- * contract were once two exported functions with a type between them that existed only to carry the
- * halfway point, and nothing ever called the second half alone.
+ * Text in, because text is what arrives - a fetch body, a paste, a file. Parsing the JSON and checking
+ * the envelope are one operation here rather than two exported halves: nothing outside this function has
+ * any use for the value between them, and a type declared to carry it would exist for no reader.
  *
  * Returns a discriminated result rather than throwing, because every failure here is reported to a
  * person - the app renders it beside the input the reader typed - and none of them is exceptional.

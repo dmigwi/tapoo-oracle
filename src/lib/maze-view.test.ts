@@ -129,9 +129,9 @@ describe("createMazeReplay", () => {
     expect(overlayCircles(node)).toHaveLength(1)
   })
 
-  // The refusal is named in the caption and shown on the bars, and no longer drawn on the grid: a bar
-  // whose green share falls short of its height is a turn that asked for more than it got, and that
-  // reads across the whole run rather than only on the turn you have scrubbed to.
+  // The refusal is named in the caption and shown on the bars, and not drawn on the grid: a bar whose
+  // green share falls short of its height is a turn that asked for more than it got, and that reads across
+  // the whole run rather than only on the turn you have scrubbed to.
   it("names the refused move on the turn that produced it, without marking the grid", () => {
     const node = build([level()])
 

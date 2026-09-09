@@ -17,10 +17,10 @@ import {asTrimmedText, clamp} from "./utils";
 /** buildReportAnalysis cuts a parsed log into rounds: one slice per round, not one report per log.
  *
  * A Tapoo log is a sequence of independent games: a new maze, a new start cell, a fresh decay budget.
- * Aggregating them produced verdicts that belonged to no maze in particular - a capability answered YES
- * because round 3 showed it, printed above round 1's replay - and a "Rounds" count that existed only to
- * admit the report was a blend. A round is now the unit a verdict is about, so every answer on screen
- * is a statement about the maze beside it.
+ * Aggregating them gives verdicts that belong to no maze in particular - a capability answered YES because
+ * round 3 showed it, printed above round 1's replay - and a "Rounds" count whose only job is to admit the
+ * report is a blend. A round is the unit a verdict is about, so every answer on screen is a statement
+ * about the maze beside it.
  *
  * It answers nothing itself. A slice is entries and an identity, which costs no rubric pass - that is
  * roundReportFor's job, done for the round a reader opened rather than for all of them at load.
@@ -69,7 +69,7 @@ const answered = new WeakMap<RoundSlice, RoundReport>();
  *
  * This is where a log stops being cheap. Opening a file reads its envelope and slices it into rounds;
  * everything expensive - the rubric pass, the maze decode, the checksum reconstruction - happens here,
- * for the round a reader actually opened. A file of fourteen rounds used to do all fourteen up front.
+ * for the round a reader actually opened, rather than all fourteen of a fourteen-round file up front.
  *
  * Memoized, so returning to a round is free and the object identity of what the view holds is stable
  * across renders. */
@@ -225,10 +225,10 @@ type LoadedLogTabFields =
  * A log tab, specifically: it fetches, and a round tab is never fetched - it is a slice of a log
  * already in memory.
  *
- * The half both loaders share, extracted because it is the half where a divergence would be a bug: the
- * two used to build `{status, result, loadedUrl, error}` separately, and nothing would have caught them
- * disagreeing about whether a failed reload keeps its stale report. They already disagreed harmlessly -
- * one wrote `loaded.url ?? state.draftUrl` for the label, the other `loaded.url ?? ""`.
+ * The half both loaders share, extracted because it is the half where a divergence would be a bug.
+ * Building `{status, result, loadedUrl, error}` in each of them instead, nothing catches the two
+ * disagreeing about whether a failed reload keeps its stale report - and the label alone offers two
+ * plausible spellings, `loaded.url ?? state.draftUrl` and `loaded.url ?? ""`.
  *
  * `unvalidated` is returned rather than folded in because it is the one outcome the two callers handle
  * differently: it has no tab to attach an error to on the add path, so that path leaves it in the draft

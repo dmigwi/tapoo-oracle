@@ -165,7 +165,7 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
     groups.set(key, group)
   }
 
-  // A log that never names a round at all: one round, everything in it, as before.
+  // A log that never names a round at all: one round, holding everything.
   if (beforeFirstRound.length > 0) {
     groups.set(gameIdentityKey({game: null, level: null}), {identity: {game: null, level: null}, entries: beforeFirstRound})
   }
@@ -183,9 +183,9 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
   const groups = groupEntriesByRound(entries)
 
   return groups.map(({identity, entries: groupEntries}) => {
-    // The caller's context when it has one, which is now the common case: answerRubric has already
-    // built a context over exactly these entries, and building a second identical one was the largest
-    // avoidable cost of opening a log.
+    // The caller's context when it has one, which is the common case: answerRubric has already built a
+    // context over exactly these entries, and building a second identical one is the largest avoidable
+    // cost of opening a log.
     //
     // Only when there is one group. With several, each needs its own - positions and exits from one
     // maze leaking into another is the bug this file exists to prevent - and the caller's context spans
@@ -198,9 +198,9 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
     )
     const actingAgents = resolveActingAgents(groupEntries)
 
-    // Keyed by the turn it covers, so this is a plain lookup. The offset that used to live here - Tapoo
-    // reports a prediction's outcome on the request that follows it - now belongs to the store that
-    // holds these records. A later record must never be substituted: repeated move sequences could make
+    // Keyed by the turn it covers, so this is a plain lookup. The offset behind that - Tapoo reports a
+    // prediction's outcome on the request that follows it - belongs to the store holding these records,
+    // not to its callers. A later record must never be substituted: repeated move sequences could make
     // one look compatible while attributing another turn's position, charge and applied count to this.
     const recordFor = (turn: number): Replay | null => context.replayByTurn.get(turn) ?? null
 
@@ -268,7 +268,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
     // A turn that produced no prediction is a turn all the same.
     //
     // When a response is malformed, exhausts the token cap, or fails on the wire, there are no moves to
-    // replay - nothing becomes a submission, and the turn used to vanish from the replay entirely.
+    // replay - nothing becomes a submission, so without this the turn is absent from the replay.
     // Tapoo counted it and charged for it regardless, three units, its heaviest penalty. So the report
     // showed fewer turns than the round had (464 against Tapoo's own 473 in one log), and the decay
     // strip could never add up to the round total because its most expensive turns were missing.

@@ -31,11 +31,11 @@ export type Move = "MoveUp" | "MoveDown" | "MoveLeft" | "MoveRight";
 
 /** Which moves lead *out* of each cell - the open exits, keyed by cell.
  *
- * Two things wear this type and the whole point is that they are comparable: the exits a decoded maze
+ * Two things wear this type, and their being comparable is the whole point: the exits a decoded maze
  * *has*, and the exits a log's tool results say the agent was *shown*. Reading one against the other is
- * why the maze is drawn beside the profile at all, and while they were spelled out separately at each
- * declaration it was possible for one to drift - it did, as `Set<string>` against `Set<Move>`, and the
- * comment claiming they matched was wrong for as long as that lasted.
+ * why the maze is drawn beside the profile at all, and that reading holds only while both sides are the
+ * same shape. Declared separately they are two shapes that happen to agree: each compiles alone, nothing
+ * fails when one widens, and a comment asserting they match cannot enforce it. One name can.
  *
  * "Open" is the load-bearing word. A move absent from a cell's set is a wall - the set is the complete
  * statement of where movement is possible from that cell, not a list of the ones anybody happened to
@@ -56,11 +56,10 @@ export type VisitStatus = "unvisited" | "explored" | "backtracking" | "oscillati
 
 /** Per-turn payloads, stored so the turn offset cannot be applied twice or forgotten.
  *
- * Tapoo reports a turn's outcome on the request that *follows* it. That rule used to be a bare `- 1`
- * beside a plain Map, which meant every writer had to remember it and every reader had to trust that
- * they had - and one of them did not, so the maze overlay ran a turn behind. Here the two are one
- * thing: `record` is the only way in and takes the turn that *carried* the payload, `get` is the only
- * way out and takes the turn it *covers*. There is no key to get wrong.
+ * Tapoo reports a turn's outcome on the request that *follows* it. The offset that fact implies lives
+ * here and nowhere else: `record` is the only way in and takes the turn that *carried* a payload, `get`
+ * is the only way out and takes the turn it *covers*. No caller holds a key, so no caller can shift one -
+ * and a reader that shifted the wrong way would draw the maze overlay a turn behind the maze.
  *
  * Key -1 is the state before the first turn - what the payload logged on turn 0 covers. */
 export type TurnReports<T> = {
@@ -108,11 +107,10 @@ export type LogEntry = {
 
 /** Which game and level a round is - the two facts that name it, and the only two.
  *
- * Carried as a record rather than as the `"game/level"` string it serialises to: a round used to hold
- * the key *and* the two numbers it was built from, three fields for two facts, with nothing keeping the
- * string in step with the numbers beside it - and they did diverge, a Level reporting key "7/3" beside
- * `game: null`. The string is derived by gameIdentityKey wherever one is needed - a Map key, a message
- * naming the round - and stored nowhere.
+ * Carried as a record, never as the `"game/level"` string it serialises to. Storing both is three fields
+ * for two facts with nothing holding them in step, and they can then disagree - a round reporting key
+ * "7/3" beside `game: null`, each half true of a different round. The string is derived by
+ * gameIdentityKey wherever one is needed - a Map key, a message naming the round - and stored nowhere.
  *
  * The base of the turn types below, because a turn is named by the round it belongs to plus its number.
  * Everything that identifies a round in this codebase is this record. */
@@ -222,19 +220,18 @@ export type LogWarning = {impact: WarningImpact; message: string};
  * Warnings travel with a *success*: a log can be readable and still worth a caveat, and dropping them
  * on the way out is how a caveat goes unsaid.
  *
- * There was a second result type beside this one carrying the same pair, for the halfway point between
- * parsing the JSON and checking the envelope. Nothing outside that one function ever held the halfway
- * value, so the two steps - and the two types - are now one. */
+ * One type for the whole ingress, not one per step: parsing the JSON and checking the envelope are two
+ * halves of one operation, and nothing outside parseTapooLogText ever holds the value between them. */
 export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]}>;
 /** A share-link payload, or why the token could not be read. */
 export type PayloadResult = Result<{payload: string}>;
 
 /** A rejected share link always carries the link it is about, so the view can mark it up.
  *
- * `link` is required on the failure arm deliberately. It used to be absent on one path - the last
- * line delegated to `validateOnlineJsonUrl`, whose failure has no `link` - and the caller read it
- * unconditionally, so the "(broken link: ...)" hint silently vanished for that one failure. Declaring
- * it required is what makes that path a compile error rather than an undefined. */
+ * `link` is required on the failure arm deliberately. Callers read it unconditionally to build the
+ * "(broken link: ...)" hint, so a failure path that omitted it would drop the hint silently - and
+ * `validateOnlineJsonUrl`, which this delegates to, returns a failure without one. Requiring it makes
+ * forwarding that failure a compile error instead. */
 export type DecodedPayload = {ok: true; url: string} | {ok: false; error: string; link: string | null};
 
 // --- Maze ---
@@ -418,15 +415,16 @@ export type Turn = {
  * Named for the level it played, but keyed by (game, level) - a retry is a different round with a
  * brand-new maze, and merging two would draw a path crossing walls that exist in neither. */
 export type Level = {
-  /** Which round this is. The key it used to carry beside these two numbers is derived by
-   * gameIdentityKey where one is wanted - the two disagreed once, and one fact cannot. */
+  /** Which round this is. A key is derived from it by gameIdentityKey where one is wanted, and never
+   * stored beside it: two representations of one fact are free to disagree. */
   identity: GameIdentity;
   encodedMaze: EncodedMaze | null;
   startPosition: {x?: number; y?: number} | null;
   startCell: CellKey | null;
-  /** Resolved to a cell key here, not carried in the logged shape. The view used to do this conversion
-   * itself and handled only {row, col}, so a compacted [row, col] silently became
-   * "undefined,undefined" - no destination drawn, and the shortest route reported as "no route found". */
+  /** Resolved to a cell key here, not carried in the logged shape. A log writes a cell either way - as
+   * {row, col} or compacted to [row, col] - and a reader handling one shape turns the other into
+   * "undefined,undefined": no destination drawn, and the shortest route reported as "no route found".
+   * Resolving once, through the contract that knows both shapes, is what keeps that out of every view. */
   destinationCell: CellKey | null;
   historyWindowRadius: number | null;
   endCell: CellKey | null;
@@ -468,9 +466,8 @@ export type TurnSetup = {
 /** Everything one seat was running, and everything it did, gathered in one pass over the round.
  *
  * The setup fields are lists deliberately - a seat that ran two models across a round holds two here,
- * and agentSettingsCheck reports it. The performance fields are raw numbers rather than the formatted
- * strings the replay used to build, because formatting "18 of 24 (75%)" needs the maze's cell count,
- * which belongs to the view that has it. */
+ * and agentSettingsCheck reports it. The performance fields are raw numbers, not formatted strings:
+ * "18 of 24 (75%)" needs the maze's cell count, which belongs to the view that has it. */
 export type AgentSummary = {
   /** The player this seat was playing, or "" where no turn of the round named one. */
   name: string;

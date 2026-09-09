@@ -34,8 +34,8 @@ const envelope = (over = {}) => ({
   ...over,
 })
 
-// Every parse goes in through text, because that is the only way in: the envelope contract used to be a
-// second exported function taking already-parsed JSON, and nothing but this file ever called it so.
+// Every parse goes in through text, because that is the only way in: nothing exposes the envelope check
+// on already-parsed JSON, so a test cannot reach a halfway state the app never holds.
 const parse = (value: unknown) => parseTapooLogText(JSON.stringify(value))
 
 describe("maze geometry", () => {
@@ -91,8 +91,8 @@ describe("statusesFromLogged", () => {
   })
 
   // The move is narrowed here so a caller can hand it straight to stepFrom. A name the maze cannot
-  // apply is dropped at the parse rather than passed on for every caller to guard against - which is
-  // what they used to do, each with its own isMove check beside its own call.
+  // apply is dropped at the parse rather than passed on for every caller to guard against, each with its
+  // own isMove check beside its own call.
   it("drops a name that is not one of the four commands, in either shape", () => {
     expect(statusesFromLogged([["MoveSideways", "explored"], ["MoveUp", "explored"]])).toEqual([
       ["MoveUp", "explored"],
@@ -226,8 +226,8 @@ describe("parseTapooLogText", () => {
 // would be drawn as fact. content_checksum is over the content Tapoo sent, not the compacted form the
 // log keeps, so the check rebuilds the original and hashes that.
 // The store exists so the turn offset cannot be applied twice or forgotten. `record` takes the turn that
-// carried a payload, `get` takes the turn it covers, and nothing exposes the raw key - which is what
-// makes the bug it was extracted from unrepeatable rather than merely fixed.
+// carried a payload, `get` takes the turn it covers, and nothing exposes the raw key - so a caller has no
+// offset to hold and no way to shift one twice.
 describe("turnReports", () => {
   it("stores what a request carried under the turn it covers", () => {
     const reports = turnReports<string>()
@@ -446,7 +446,7 @@ describe("what reaches the reader as a warning", () => {
     expect(expectOk(result).warnings).toEqual([])
   })
 
-  it("still reports the caveats that are about the log itself", () => {
+  it("reports the caveats that are about the log itself", () => {
     const result = parse(envelope({mode: "human", version: undefined}))
     const warnings = messagesOf(expectOk(result).warnings).join(" ")
 
@@ -834,7 +834,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   })
 
   // A round where only some turns state a seat is one seat, not two halves of one. Mixed logs are what a
-  // rollout looks like from the outside: the fix lands mid-experiment, or a replayed round predates it.
+  // rollout looks like from the outside: the change lands mid-experiment, or a replayed round is older.
   it("adopts a seat met earlier by name alone", () => {
     const entries = [
       entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
@@ -855,11 +855,10 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       .toEqual([[1, "Katara", ["gemma4:cloud"]]])
   })
 
-  // The other half of the promise: the upstream fields are additions, and a log carrying none of them
-  // still reads exactly as it does today. Everything the two shapes can agree on, they agree on - the
-  // names, the order, and every performance figure - and the only differences are the two things the
-  // legacy log genuinely does not carry.
-  it("still reads a log that states neither, exactly as it does today", () => {
+  // The other half of the promise: the stated fields are additions, and a log carrying none of them reads
+  // the same. Everything the two shapes can agree on, they agree on - the names, the order, and every
+  // performance figure - and the only differences are the two things a log without them cannot carry.
+  it("reads a log that states neither of them, unchanged", () => {
     const legacy = agentsOf("legacy")
 
     expect(legacy.map((agent) => [agent.name, agent.uniqueCells, agent.decayCharged, agent.traversalSpeed]))
@@ -1098,8 +1097,8 @@ describe("the validation summary", () => {
       .not.toMatch(/not checkable/)
   })
 
-  // The case the summary exists for. Strip the history window and the reconstruction has nothing to
-  // work from - which is not damage, and is no longer indistinguishable from success either.
+  // The case the summary exists for. Strip the history window and the reconstruction has nothing to work
+  // from - which is not damage, and must not read as success either.
   it("says a check could not run, rather than that it passed", () => {
     const stripped = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
     for (const entry of stripped.entries) {
@@ -1441,10 +1440,9 @@ describe("reading the model's message from a provider response", () => {
     })).toEqual({content: '{"moves":["MoveDown"]}', toolNames: ["get_prediction_rules"], reasoning: "considering"})
   })
 
-  // typeof [] is "object", so the coercion this module used to carry reported a list as a record and
-  // handed the reader a message whose every field was undefined. Consolidating on the shared asRecord,
-  // which excludes arrays, is a behaviour change: an array where an object is expected now reads as
-  // absent. Pinned here because it is the only behaviour this refactor altered.
+  // typeof [] is "object", so a coercion that only checks that reports a list as a record and hands the
+  // reader a message whose every field is undefined. asRecord excludes arrays, so an array where an object
+  // is expected reads as absent - pinned here because it is the one place that distinction is visible.
   it("reads an array where a message object is expected as absent, not as a record", () => {
     // null, not an empty message: the two are read differently downstream - an empty message is a
     // response the model gave and said nothing in, and null is no assistant message in the payload.

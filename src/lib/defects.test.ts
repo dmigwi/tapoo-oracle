@@ -88,9 +88,9 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
     expect(cellKeyFromLogged("2,3")).toBeNull()
   })
 
-  // getCellKey takes a cell rather than two loose numbers. A transposed cellKey(col, row) produced a
-  // key that looked entirely valid and addressed the wrong square; naming the fields removes the
-  // ordering from the call site, and cellFromKey is the only thing that reads one back.
+  // getCellKey takes a cell rather than two loose numbers, so a call cannot transpose them: a swapped
+  // (col, row) yields a key that looks entirely valid and addresses the wrong square. Naming the fields
+  // removes the ordering from the call site, and cellFromKey is the only thing that reads one back.
   it("round-trips a cell through its key", () => {
     expect(getCellKey({row: 2, col: 3})).toBe("2,3")
     expect(getCellKey([2, 3])).toBe("2,3")
@@ -108,8 +108,8 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   })
 
   // The set holds Moves, so a caller can test it against a maze's own exits or step through it without
-  // re-checking each name. A key the maze cannot apply - including the "0"/"1" indices the compacted
-  // form used to yield - is dropped here rather than left for every reader to guard against.
+  // re-checking each name. A key the maze cannot apply is dropped here rather than left for every reader
+  // to guard against.
   it("drops a name that is not one of the four commands", () => {
     expect([...openMovesFromLogged({MoveUp: "unvisited", Teleport: "unvisited"})]).toEqual(["MoveUp"])
     expect([...openMovesFromLogged([["MoveUp", "unvisited"], ["Teleport", "unvisited"]])]).toEqual(["MoveUp"])
@@ -131,7 +131,7 @@ describe("defect 2: a model can answer with a moves key that is not a list", () 
     expect(must(parsePrediction('{"moves": "MoveUp"}'), "a parsed prediction").moves).toEqual([])
   })
 
-  it("still records that the key was present", () => {
+  it("records that the key was present even so", () => {
     // The difference between "no moves key" and "a moves key holding junk" is what C1 asks about.
     expect(must(parsePrediction('{"moves": "MoveUp"}'), "a parsed prediction").keys).toEqual(["moves"])
   })

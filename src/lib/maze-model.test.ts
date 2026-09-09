@@ -133,9 +133,9 @@ describe("mazeFrameAt", () => {
     expect(mazeFrameAt(model, 99).turnIndex).toBe(3)
   })
 
-  // The replay used to key trails, markers and colours by the player's name. A seat that states its
-  // number and no player answers to "", so two of them shared one key: one trail walking both paths, one
-  // marker, one colour - drawn as a single agent that was in two places.
+  // Keyed by the player's name, trails, markers and colours collapse here: a seat that states its number
+  // and no player answers to "", so two of them share one key - one trail walking both paths, one marker,
+  // one colour, drawn as a single agent in two places.
   it("keeps two seats apart when neither states a player", () => {
     const nameless = modelFor({
       turns: [
@@ -230,9 +230,9 @@ describe("visit statuses across a scrub", () => {
     expect(mazeFrameAt(model, 2).visited.get("1,0")?.status).toBe("backtracking")
   })
 
-  // Frame 0 has played nothing, so it may read only the opening payload - the one logged on turn 0,
-  // stored under -1. Bounded by `undefined` it used to fall through the guard and swallow every report
-  // in the round, showing the end state before a single move had been drawn.
+  // Frame 0 has played nothing, so it may read only the opening payload - the one logged on turn 0, stored
+  // under -1. A bound of `undefined` falls through the guard and swallows every report in the round,
+  // showing the end state before a single move is drawn.
   it("shows only the opening payload before any turn is played", () => {
     const model = withStatuses([
       [0, [["0,0", "backtracking"]]],
@@ -276,7 +276,7 @@ describe("mazeLevelRows", () => {
     // Cells, not moves: the 17-move route passes through 18 cells, and the row compares it against
     // the maze's 24 cells. Counting moves here read "17 of 24 (71%)" - one short in both halves.
     expect(value(rows, "Success path")).toBe("18 of 24 (75%)")
-    // Agent-specific rows are no longer in mazeLevelRows.
+    // Agent-specific rows belong to the per-seat cards, not to this table.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
   })
@@ -339,9 +339,9 @@ describe("decayTally", () => {
   })
 })
 
-// The per-seat figures, now gathered by agentsFromRound rather than by four arrays lined up by index.
-// The formatting they used to carry - "3 of 24 (13%)" - belongs to the replay panel, which has the
-// maze's cell count; these assert the numbers, and maze-view.test.ts asserts what a reader sees.
+// The per-seat figures, gathered by agentsFromRound as one record each. Formatting - "3 of 24 (13%)" -
+// belongs to the replay panel, which has the maze's cell count; these assert the numbers, and
+// maze-view.test.ts asserts what a reader sees.
 describe("agentsFromRound", () => {
   const seatsOf = (over: Parameters<typeof level>[0] = {}) => level(over).agents
 

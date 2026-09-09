@@ -351,10 +351,10 @@ describe("groupResultTone", () => {
 })
 
 describe("warningHeadline", () => {
-  // A warning is only shown when it costs the reader something, so the banner names that cost instead
-  // of asking them to infer it. The old heading was "Read with care", which is a tone rather than a
-  // finding - a reader could not tell from it whether a verdict below was wrong or whether the report
-  // was merely missing its provenance.
+  // A warning is only shown when it costs the reader something, so the banner names that cost instead of
+  // asking them to infer it. A heading like "Read with care" sets a tone rather than stating a finding, and
+  // leaves a reader unable to tell whether a verdict below is wrong or the report is merely missing its
+  // provenance.
   const inaccurate = {impact: "inaccurate", message: "x"} as const
   const incomplete = {impact: "incomplete", message: "y"} as const
 

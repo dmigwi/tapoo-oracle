@@ -570,10 +570,9 @@ a[href] {
 /* One group per line, so the codes stack into a column down the left edge - the same reading order the
    rubric table below opens with, and the reason the code leads the name in the first place.
  *
- * Run together on wrapped lines the codes started wherever the previous name happened to end, which
- * looked like a column that had failed rather than a sentence. The cost is a line per group: five
- * lines where three ran on. A separator is no longer needed to say where an item ends - the line
- * break does it - so the middot is gone with it. */
+ * Run together on wrapped lines, the codes start wherever the previous name happens to end, which reads
+ * as a column that has failed rather than as a sentence. The cost is a line per group: five lines where
+ * three would run on. No separator is needed to say where an item ends - the line break does it. */
 .metric-group {
   display: block;
 }

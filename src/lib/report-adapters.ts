@@ -10,9 +10,9 @@ import { capitalize, formatCount } from "./utils"
 /** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
  *
  * A warning is only shown when it costs the reader something, so the banner says what that cost is
- * rather than asking them to work it out from a list. "Read with care" was the old heading and it did
- * not do that: it is a tone, not a finding, and a reader cannot tell from it whether a verdict below
- * is wrong or whether the report is merely missing its provenance.
+ * rather than asking them to work it out from a list. A heading like "Read with care" sets a tone
+ * instead of stating a finding, and leaves a reader unable to tell whether a verdict below is wrong or
+ * the report is merely missing its provenance.
  *
  * The two impacts are reported together when both are present, because they are different harms and
  * collapsing them would understate one of them. */
@@ -66,11 +66,10 @@ export function profileCards(
 
 /** narrativeSummary states, in a sentence, only what nothing else on the page says.
  *
- * Twice now it has been trimmed for restating a neighbour. It used to close by explaining what a NO
- * means, which is the method rather than the finding and was already in "How this report is generated".
- * It then opened "gemma4, through ollama at max reasoning effort, demonstrated 5 of 9 capabilities" -
- * three setup facts now held per seat in the Agents table, where a two-seat round can say which seat ran
- * which, and a fraction the profile cards state directly beneath it as 5/9.
+ * Which rules out most of what a summary is tempted to say. What a NO means is the method, and
+ * "How this report is generated" states it. The model, the provider and the effort belong to a seat, and
+ * the Agents table gives each its own row - a sentence naming one of them speaks for a round that may
+ * have seated two. The capability fraction is on the profile cards directly beneath, as 5/9.
  *
  * What is left is the prediction count and the winning speed, which no card and no table carries. */
 export function narrativeSummary(report: Report): string {
@@ -194,8 +193,8 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
 /** provenanceRows describe which build and which round produced the log, so a profile is never read
  * detached from what it was measured against.
  *
- * Only what belongs to the file and the round. The model, provider, effort and player it used to carry
- * describe a *seat*, and a round can seat more than one - see agentRows. */
+ * Only what belongs to the file and the round. A model, a provider, an effort and a player describe a
+ * *seat* instead, and a round can seat more than one, so those live per seat - see agentRows. */
 export function provenanceRows(source: TapooLog): Array<{field: string; value: string}> {
   return [
     // No source URL row. It is the one field here that is not read out of the log itself, the panel
@@ -275,8 +274,8 @@ const apiName = (api: string): string => API_NAMES[api.toLowerCase()] ?? capital
 
 /** agentRows says what each seat was running, one row per seat.
  *
- * Two columns, not five, for the reason Provenance is no longer one wide row either: a column
- * per fact trims its own values on a narrow viewport, and an endpoint is the widest value on the page.
+ * Two columns, not five, for the reason Provenance is two as well: a column per fact trims its own
+ * values on a narrow viewport, and an endpoint is the widest value on the page.
  * The seat is the row's name and the rest reads as a sentence, so a two-seat round is two lines rather
  * than a grid to scan across. */
 export function agentRows(agents: AgentSummary[]): AgentRow[] {
@@ -309,8 +308,8 @@ export const LOG_SCOPE_MARK = "*";
 /** validationRows turns the checks an analyzer ran into rows a reader can scan.
  *
  * The outcome leads the value, not the name, so a column of results reads down: passed, passed,
- * not checked. It is the third that this table exists for - the checks report only their failures, so
- * before this a clean page and an unchecked one looked the same.
+ * not checked. It is the third that this table exists for: the checks raise warnings only on failure, so
+ * without a table saying what ran, a clean page and an unchecked one look identical.
  *
  * "not checked" rather than "unchecked": the reader is being told what this analyzer did, and the
  * useful distinction is between a check that ran and one that could not.
