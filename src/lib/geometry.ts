@@ -31,7 +31,7 @@ export const isMove = (value: unknown): value is Move => typeof value === "strin
 /** getCellKey builds the `"row,col"` key a cell travels as when it is a Map or Set key.
  *
  * Takes a cell rather than two loose numbers, so the argument order cannot be swapped silently - a
- * transposed `cellKey(col, row)` produced a key that looked entirely valid and addressed the wrong
+ * transposed `(col, row)` call produced a key that looked entirely valid and addressed the wrong
  * square. It accepts either logged shape, so a caller holding a cell straight out of a log does not
  * have to normalise it first.
  *

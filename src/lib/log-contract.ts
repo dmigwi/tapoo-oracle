@@ -190,12 +190,12 @@ function toolNamesOf(calls: unknown): string[] {
     .filter((name): name is string => typeof name === "string" && name !== "");
 }
 
-/** responseUsage reads what the provider reported about its own work, from either API shape.
+/** responseUsage reads what the provider reported about its own work, in any of the three shapes.
  *
- * The two report overlapping but different things, so every field is nullable and a null means "this
- * provider did not say" rather than zero. Ollama counts tokens at the payload root; OpenAI nests them
- * under `usage` and adds the two that matter most for a reasoning model - how many of the completion
- * tokens were spent thinking, and how much of the prompt was served from cache rather than re-read. */
+ * They report overlapping but different things, so every field is nullable and a null means "this
+ * provider did not say" rather than zero. Ollama counts tokens at the payload root; OpenAI and Anthropic
+ * nest them under `usage`. Only OpenAI says how many completion tokens were spent thinking, and both it
+ * and Anthropic say how much of the prompt was served from cache rather than re-read. */
 export function responseUsage(payload: unknown): ResponseUsage {
   const body = asRecord(payload);
   const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -223,9 +223,27 @@ export function responseUsage(payload: unknown): ResponseUsage {
 
 // --- Validating an export ---
 
-// isLogEntry reports whether one array element carries the fields every consumer relies on. turn,
-// level, and game are checked but not required to be present: logs written before those counters
-// landed still analyze correctly, and buildContext has an explicit fallback for a missing turn.
+// isLogEntry reports whether one array element carries the three fields every consumer relies on: a
+// payload, a timestamp, and a level it knows.
+//
+// turn, level and game are deliberately not among them, and this is the one thing here worth arguing
+// about, because the current producer always writes them. logTapooRecordEntry in frontend/app/logs.ts
+// stamps level, turn and game on every entry it writes, from the counters it holds - `details` is the
+// sole field it writes conditionally - and the v2.5.0 vendored sample and the v2.5.1 snapshot both carry
+// all three on every entry.
+//
+// A gate is not written for the producer of the day, though. rounds.test.ts records a real log of
+// hundreds of turns that stamped game and level on its round boundaries only, and a gate insisting on
+// them would have dropped every entry between those boundaries - which is the whole of the round. Older
+// logs are exactly what an analyzer of logs is for.
+//
+// So the counters are read where present and worked around where not, and each fallback carries its own
+// argument at its own site: a cursor in buildContext, an in-progress round in groupEntriesByRound,
+// "Whole log" in roundLabel. Tightening this gate means dropping those logs, not tidying dead code.
+//
+// This holds for every Tapoo shape from v2.5.1 on, deliberately and until further notice. Neither
+// project is settled enough to declare a version floor, so the analyzer reads what it is given rather
+// than what the current build happens to write.
 function isLogEntry(value: unknown): value is LogEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
@@ -238,27 +256,15 @@ function isLogEntry(value: unknown): value is LogEntry {
 }
 
 
-// unreadableResponseWarnings reports responses whose body this contract could not read at all.
-//
-// This is the check that was missing when it was needed most. A log of 1,459 entries analyzed to zero
-// predictions and zero turns because every response was written in a provider shape the contract did
-// not know, and nothing said so: each one was counted as an "empty response", which is a thing that
-// legitimately happens, and 719 of them in a row looked no different from 719 quiet failures.
-//
-// The signal is precise rather than heuristic. Across every real log to hand - Ollama and OpenAI,
-// 1,744 responses - not one has an unreadable *shape*; the 49 blank ones all have a readable message
-// holding no text, which is a model stopping early and not a contract gap. So a single unreadable body
-// means a shape this file does not handle, and that is worth saying on the first occurrence.
-//
-// Inaccurate, not incomplete: the rubric answers NO on absent evidence, so a prediction that was made
-// but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
-/** How many of a list's model responses this contract could read.
+/** How many of a list's model responses this contract could read, and how many it could not. */
+type ResponseTally = {responses: number; unreadable: number};
+
+/** Counts a list's model responses, and how many of their bodies this contract could not read.
  *
- * Counted once and read twice: the export warns when any response in the file is unreadable, and a
- * round reports the same count over its own entries. The warning is about the file - "no prediction in
- * this log was scored" is a claim about the whole of it - while the check belongs to the round a reader
- * is looking at. */
-function countResponses(entries: LogEntry[]): {responses: number; unreadable: number} {
+ * Counted once and read twice, which is why it is a tally passed to both readers rather than a call each
+ * makes for itself: the file warns when any response in it is unreadable, and the same numbers are
+ * reported as a check. Two calls walked every response in the log twice to reach the same pair. */
+function countResponses(entries: LogEntry[]): ResponseTally {
   const responses = entries.filter((entry) => entry.payload === LOG_EVENTS.response);
   const unreadable = responses.filter((entry) => {
     const details = entry.details;
@@ -275,8 +281,7 @@ function countResponses(entries: LogEntry[]): {responses: number; unreadable: nu
  * Scoped to the file rather than the round: the question is whether this contract recognises the shape
  * the provider writes, and one file is one provider. Per-round counts would differ only in how many
  * responses each round happened to hold, which is not what the check is asking. */
-function responseCheck(entries: LogEntry[]): ValidationCheck {
-  const {responses, unreadable} = countResponses(entries);
+function responseCheck({responses, unreadable}: ResponseTally): ValidationCheck {
   return {
     name: "Model responses",
     scope: "log",
@@ -290,9 +295,17 @@ function responseCheck(entries: LogEntry[]): ValidationCheck {
   };
 }
 
-function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
-  const {responses, unreadable} = countResponses(entries);
-
+// unreadableResponseWarnings reports responses whose body this contract could not read at all.
+//
+// The check that was missing when it was needed most: a 1,459-entry log analyzed to zero predictions and
+// zero turns because every response was in a provider shape this file did not know, and each was counted
+// as an "empty response" - a thing that legitimately happens, so 719 quiet failures read as 719 models
+// stopping early. One unreadable body is enough to say so: across 1,744 real responses not one has an
+// unreadable *shape*, and the 49 blank ones all parse to a message holding no text.
+//
+// Inaccurate rather than incomplete, because the rubric answers NO on absent evidence: a prediction that
+// was made but could not be read turns a YES into a NO. The verdicts are wrong, not merely fewer.
+function unreadableResponseWarnings({responses, unreadable}: ResponseTally): LogWarning[] {
   if (unreadable === 0) {
     return [];
   }
@@ -310,23 +323,24 @@ function unreadableResponseWarnings(entries: LogEntry[]): LogWarning[] {
 
 // traversalPayloadWarnings verifies that every get_maze_structure result arrived intact.
 //
-// The visit-status overlay on the replay is read straight out of these payloads, so a damaged one would
-// be drawn as fact. `content_checksum` is fnv1a64Checksum of the content Tapoo actually sent - not of
-// the compacted form the log keeps - so it cannot be checked against what is on disk directly. It can be
-// checked by rebuilding the original, which every field needed for is either in the record or on the
-// round's "Agent level started." entry.
+// The replay's visit-status overlay is drawn from these payloads with nothing in between to question
+// them, so a damaged payload reaches the grid as an overlay that looks exactly as certain as a correct
+// one. Hence checking them here.
+//
+// `content_checksum` is fnv1a64Checksum of the content Tapoo sent, not of the compacted form the log
+// keeps, so hashing the text on disk would never reproduce it. Verifying means rebuilding the original
+// first, and every field that takes is either in the record itself or on the round's "Agent level
+// started." entry.
 //
 // Verified byte-exact against a real export: the key order, the compact separators, and cellType's
 // precedence are all as Tapoo writes them, and 8 of 8 checksummed results in the snapshot log reproduce.
 //
-// Given one round's entries, by parseGameRound. It still runs a cursor rather than assuming a single
+// Given one round's entries, by parseGameRound, and still running a cursor rather than assuming a single
 // maze: a group keyed game/level holds a replay of that level too, and each opening resets the facts the
-// reconstruction needs. The cursor also predates the split - it used to walk the whole log - which is
-// why the per-round call needs no other change.
+// reconstruction needs.
 //
-// Checked when the round is opened rather than when its maze is drawn: a damaged payload is reported
-// once, above the report, instead of being discovered by whoever happens to scrub to the turn holding
-// it.
+// Run when the round is opened, not when its maze is drawn, so a damaged payload is reported once above
+// the report instead of being found by whoever happens to scrub to the turn holding it.
 function traversalPayloadWarnings(entries: LogEntry[]): {warnings: LogWarning[]; check: ValidationCheck} {
   const warnings: LogWarning[] = [];
 
@@ -510,8 +524,9 @@ const compacted = (full: string): string => `${full.slice(0, COMPACT_HEAD)}${COM
  *
  * So a round has at most four distinct system-prompt checksums. A fifth is not a slow agent or a long
  * round; it means this file and the producer disagree about how many personas exist, and every count
- * here that assumes four is then describing something else. The snapshot log carries three - Default,
- * Navigator, Backtracker - never having reached Trailblazer mid-round. */
+ * here that assumes four is then describing something else. The snapshot log carries three, of which
+ * only the opening Default is logged in full - the later two are compacted well past the word naming
+ * the persona, so which brackets they are is not readable from the log. */
 const PERSONA_FORMS = 4;
 
 // promptWarnings checks that a round told the agent one consistent story.
@@ -534,8 +549,8 @@ const PERSONA_FORMS = 4;
 //
 // The *system prompt* is deliberately not held to one-per-round. It changes mid-round by design: it
 // opens "You are Katara, and you start this level primed for success" and is rewritten as the player's
-// speed class changes, so a real 16-turn round carries three - Trailblazer, Navigator, then
-// Backtracker. Requiring one prompt per round would put an accuracy warning on every clean log.
+// speed class changes, so a real 16-turn round carries three. Requiring one prompt per round would put
+// an accuracy warning on every clean log.
 //
 // Tool *results* are excluded here for the same reason they are hashed elsewhere: their content is
 // compacted rather than truncated, so it neither hashes nor ends in an ellipsis, and mistaking that for
@@ -709,14 +724,13 @@ function promptTextCheck(hashed: number, damaged: number, matched: number, unmat
 
 /** agentsFromRound reads one round into one record per seat: what each was running, and what it did.
  *
- * A single pass, deliberately. The setup half and the performance half used to be gathered in different
- * places - round-wide `Set`s in buildContext, parallel arrays in mazeLevelAgentStats - and neither could
- * answer "what was seat 2 running". Gathering both here means a seat is one record, so a row cannot be
- * assembled out of two arrays that agree only by index.
+ * A single pass, deliberately. The setup half and the performance half were once gathered in two places,
+ * one of them a set of parallel arrays whose rows held together only by shared index, and neither could
+ * answer "what was seat 2 running". One record per seat cannot come apart that way.
  *
  * A separate pass from parseGameRound, though they share this file. That one asks whether a round's
- * payloads arrived intact; this one asks who played and under what. Same entries, different questions,
- * and a caller that wants one should not pay for the other.
+ * payloads arrived intact; this one asks who played and under what - different questions over the same
+ * round, and a caller that wants one should not pay for the other.
  *
  * Takes the setup map rather than the whole Context: it reads one field, and a caller with turns and an
  * outcome should not have to build a rubric context to name the seats that played them.
@@ -809,7 +823,10 @@ export function agentsFromRound(
   // reconcile with playerUniqueCellsVisited.
   for (const turn of turns) {
     const setup = setupByTurn.get(turn.turn)
-    const seat = seatFor(setup?.seatId ?? null, turn.playerName ?? "")
+    // The seat off the turn, not off the setup map beside it. Both carry it - buildLevels fills one from
+    // the other - but the replay reads the turn, and one authority is what keeps a trail's colour and
+    // the row above it naming the same seat.
+    const seat = seatFor(turn.seatId, turn.playerName ?? "")
     if (!seat) continue
 
     if (setup) {
@@ -946,7 +963,7 @@ export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationC
 /** parseGameRound reads one round's entries: its maze, and whether what the log carries about that
  * round arrived intact.
  *
- * The round half of the contract. parseTapooLog answers for the file - is this a Tapoo export, are the
+ * The round half of the contract. parseTapooLogText answers for the file - is this a Tapoo export, are
  * entries readable - and this answers for a round: what its maze decodes to, and whether every
  * get_maze_structure result still hashes to the `content_checksum` Tapoo stamped on it before
  * compaction. Both are statements about *this* round, so they travel with it instead of pooling into a
@@ -957,11 +974,10 @@ export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationC
  * expensive half of reading a log - a JSON round-trip and a byte-at-a-time hash per tool result - and a
  * file of fourteen rounds was paying all fourteen to show one.
  *
- * A maze that is absent or will not decode is *returned*, not warned about. It used to raise a warning
- * too, and that put the same finding in two places: the replay already says so where the reader is
- * looking at the empty space the traversal should occupy, and says it far better - what is missing,
- * what it costs, and that the rubric verdicts still stand. Two notices for one fault made the round
- * look twice as broken and gave the reader nothing the second one did not already have.
+ * A maze that is absent or will not decode is *returned*, not warned about. A warning as well put one
+ * fault in two places and made the round look twice as broken: the replay already says it where the
+ * reader is looking at the empty space, and says it better - what is missing, what it costs, and that
+ * the rubric verdicts still stand.
  *
  * The verdicts do stand either way: no rubric question reads this payload. The corridor questions
  * answer from the exits the log's own tool results confirmed. */
@@ -1022,10 +1038,9 @@ function mazeCheck(maze: MazeResult | null): ValidationCheck {
 /** parseTapooLogText is the ingress point: every log the app reads enters here, and nothing else in
  * this module takes a log from outside.
  *
- * Text in, because text is what arrives - a fetch body, a paste, a file. The JSON parse and the
- * envelope contract used to be two exported functions with a LogParseResult passed between them, and
- * nothing ever called the second half on its own: it was one operation split across a type that existed
- * only to carry the halfway point.
+ * Text in, because text is what arrives - a fetch body, a paste, a file. The parse and the envelope
+ * contract were once two exported functions with a type between them that existed only to carry the
+ * halfway point, and nothing ever called the second half alone.
  *
  * Returns a discriminated result rather than throwing, because every failure here is reported to a
  * person - the app renders it beside the input the reader typed - and none of them is exceptional.
@@ -1111,7 +1126,11 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
   // turn starts and ends. Every later reader indexes into this instead of walking the array again.
   const index = indexLog(entries);
 
-  warnings.push(...unreadableResponseWarnings(entries));
+  // One walk over the responses, read by both the warning and the check below. They say the same two
+  // numbers to different audiences - the warning that a verdict may be wrong, the check what was
+  // verified - so a disagreement between them would be a contradiction on the same page.
+  const responses = countResponses(entries);
+  warnings.push(...unreadableResponseWarnings(responses));
 
   // Both true of every round in the file: an entry that fails the contract is dropped before rounds
   // exist, and the provider's response shape does not change between them.
@@ -1128,7 +1147,7 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
           ? `${formatCount(skipped)} of ${formatCount(envelope.entries.length)} log entries lacked a payload, a timestamp or a known log level, and were dropped`
           : `${formatCount(entries.length)} of ${formatCount(entries.length)} log entries carried a payload, a timestamp and a known log level`,
     },
-    responseCheck(entries),
+    responseCheck(responses),
   ];
 
   // Only the export's own caveats. A round's are parseGameRound's; unknownEvents and

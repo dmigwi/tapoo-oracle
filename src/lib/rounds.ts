@@ -246,6 +246,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
 
       const turn: Turn = {
         turn: submission.turn,
+        seatId: context.setupByTurn.get(submission.turn)?.seatId ?? null,
         playerName: actingAgents.get(submission.turn) ?? null,
         before,
         moves: submission.moves,
@@ -282,6 +283,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
 
       turns.push({
         turn,
+        seatId: context.setupByTurn.get(turn)?.seatId ?? null,
         playerName: actingAgents.get(turn) ?? null,
         before: null,
         moves: [],

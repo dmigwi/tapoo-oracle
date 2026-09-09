@@ -52,7 +52,7 @@ const isOpen = (token: string | undefined): boolean =>
 
 /** decodeEncodedMaze expands the compact structure string back into the exact token grid Tapoo rendered.
  *
- * Returns a discriminated result rather than throwing, matching parseTapooLogExport: every failure here
+ * Returns a discriminated result rather than throwing, matching parseTapooLogText: every failure here
  * is something a reader has to be told about, not an exceptional condition. A corrupt maze must not
  * degrade into a plausible-looking grid - a maze drawn from damaged bytes would be read as evidence. */
 export function decodeEncodedMaze(encoded: EncodedMaze | null | undefined): Result<{grid: string[][]}> {

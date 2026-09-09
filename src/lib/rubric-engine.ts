@@ -5,7 +5,7 @@
 // app renders its views from this object. Keeping definitions beside their evaluators prevents the
 // report from describing a different question than the engine actually answered.
 //
-// Like log-contract.mjs, this file must stay free of node: imports so it can be bundled for the
+// Like log-contract.ts, this file must stay free of node: imports so it can be bundled for the
 // browser.
 //
 // Every question returns strictly true or false, never null. A question quantified over an empty set
@@ -103,9 +103,10 @@ const textOrNull = (value: unknown): string | null =>
 
 /** Merges what one entry said about a turn's seat into what is already known about it.
  *
- * Merged rather than overwritten because the facts arrive on two entries - the request carries the
- * provider and effort, the response the model - and a turn is one seat's, so neither should erase the
- * other. Only fields with something to say are written. */
+ * Merged rather than overwritten because the facts arrive on two entries - the request carries the seat,
+ * the model it was configured with, the provider and the effort; the response carries the provider's
+ * echo of that model - and a turn is one seat's, so neither should erase the other. Only fields with
+ * something to say are written. */
 function noteSetup(context: Context, turn: number, seen: Partial<TurnSetup>): void {
   const known = context.setupByTurn.get(turn) ?? {
     seatId: null, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
@@ -139,8 +140,8 @@ export function buildContext(
   //   Mixed - some entries carry a turn and some do not. The index will not place those, but the field
   //   is still the best evidence there is, so the cursor behaviour is kept for them.
   //
-  //   None - logs written before the turn counter landed. Boundaries come from predictions instead,
-  //   exactly one closing each turn. Without this every entry collapses onto turn 0 and the per-turn
+  //   None - no entry carries a turn at all. Boundaries come from predictions instead, exactly one
+  //   closing each turn. Without this every entry collapses onto turn 0 and the per-turn
   //   questions pass trivially.
   const indexedTurns = index.turnSource === "field"
   const hasTurnField = indexedTurns || entries.some((entry) => "turn" in entry)
@@ -254,12 +255,12 @@ export function buildContext(
 
         if ("filteredTraversalHistory" in payload) {
           noteTool("get_maze_structure")
-          // Guarded as an array: the key being present does not make the value iterable, and a
-          // non-list here used to throw straight out of the report.
           // Built for this payload, then handed to the store, which is what knows the turn it covers. A
           // turn can carry more than one tool message, so the store merges rather than overwrites.
           const statuses = new Map<CellKey, VisitStatus>()
 
+          // Guarded as an array: the key being present does not make the value iterable, and a non-list
+          // here used to throw straight out of the report.
           for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
             const cell = cellKeyFromLogged(record.cell)
             if (cell) {
@@ -589,6 +590,7 @@ function resourceEfficiency(context: Context): Record<string, boolean> {
   // the final turn resolved - on a won round that undercounts both terms and answers no for an agent
   // that finished at exactly 1.0000. The round-end entry carries the settled totals, so it is preferred
   // and the last reading is used only when no round ended in this sample.
+  //
   // A round-end entry is only preferable when it actually carries both totals: older logs record the
   // outcome without them, and reading those as a zero pair would answer no for a round whose per-turn
   // readings prove otherwise. Absent totals fall through to the last reading rather than to a verdict.

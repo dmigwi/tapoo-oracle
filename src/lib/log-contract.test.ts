@@ -5,7 +5,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
-import {buildLevels, groupEntriesByRound} from "./rounds"
+import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
 import {fnv1a64Checksum} from "./utils"
 import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
@@ -201,11 +201,14 @@ describe("parseTapooLogText", () => {
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/did not match the log entry shape/)
   })
 
-  it("keeps an entry that predates the turn, level and game counters", () => {
-    // Those fields are checked but not required: older logs still analyze, and buildContext has an
-    // explicit fallback for a missing turn.
-    // Deleted through a partial view: on LogEntry these fields are required, and that is the point -
-    // the test is about a log that predates them, which is not a LogEntry any producer would write.
+  it("keeps an entry that carries no turn, level or game", () => {
+    // Not required, and deliberately so: rounds.test.ts records a real log - hundreds of turns - that
+    // stamped game and level on its round boundaries only, and every entry between them would be
+    // dropped by a gate that insisted. buildContext, groupEntriesByRound and roundLabel each place such
+    // an entry rather than refusing it.
+    //
+    // Deleted through a partial view: on LogEntry these fields are optional, and this is the shape that
+    // makes them so.
     const older: Partial<LogEntry> = entry()
     delete older.turn
     delete older.level
@@ -489,8 +492,10 @@ describe("the encoded maze payload", () => {
 // One record per seat, from one pass over the round. Everything here is what a single-agent log could
 // not distinguish: a round-wide set says which providers appeared in a file, never which seat used one.
 describe("agentsFromRound", () => {
-  const seat = (name: string, turn: number, cells: string[], decay: number | null = null) => ({
-    turn, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+  const seat = (
+    name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
+  ) => ({
+    turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
     cells, rejectedMove: null, decayCharged: decay,
   })
   const setup = (over: Partial<TurnSetup> = {}): TurnSetup =>
@@ -500,8 +505,8 @@ describe("agentsFromRound", () => {
   // nothing has to be recovered from a decorated label.
   it("reads a turn that states its own seat and model", () => {
     const [only] = agentsFromRound(
-      new Map([[0, setup({seatId: 2, model: "deepseek-v4-pro:cloud", api: "ollama"})]]),
-      [seat("Momo", 0, ["0,0", "1,0"])],
+      new Map([[0, setup({model: "deepseek-v4-pro:cloud", api: "ollama"})]]),
+      [seat("Momo", 0, ["0,0", "1,0"], null, 2)],
       null,
     )
 
@@ -559,8 +564,8 @@ describe("agentsFromRound", () => {
   // A stated seat is the log's answer; acting order is only a stand-in for logs that state none.
   it("orders by the seat the log stated, not by who moved first", () => {
     const seats = agentsFromRound(
-      new Map([[0, setup({seatId: 2})], [1, setup({seatId: 1})]]),
-      [seat("Katara", 0, ["0,0", "1,0"]), seat("Bumi", 1, ["1,0", "2,0"])],
+      new Map(),
+      [seat("Katara", 0, ["0,0", "1,0"], null, 2), seat("Bumi", 1, ["1,0", "2,0"], null, 1)],
       null,
     )
 
@@ -585,6 +590,29 @@ describe("agentsFromRound", () => {
 // Tapoo is being changed to attach the seat and the full model name to every request payload. This block
 // is that contract, written down and checked before the change lands: the fields in the places agreed,
 // and the same round in the shape logs are written in today, so neither can be broken for the other.
+// A log that stamps no game and no level on any entry is still one round, and it still needs something
+// to click. The branch that names it was reachable and unasserted - deleting it as dead weight would
+// have left a tab with an empty label, which is why it is pinned here rather than trusted to be unused.
+//
+// No log in this repo takes this path: the v2.5.0 sample and the v2.5.1 snapshot both stamp all three
+// counters on every entry. It is asserted because the code tolerates the shape, not because one is known
+// to exist - and a tolerance nothing checks is a tolerance that quietly stops working.
+describe("a log that names no round at all", () => {
+  it("gathers it as one round with a name a reader can click", () => {
+    const unstamped = [
+      entry({turn: 1, game: undefined, level: undefined}),
+      entry({turn: 2, game: undefined, level: undefined}),
+    ]
+
+    const groups = groupEntriesByRound(unstamped)
+
+    expect(groups).toHaveLength(1)
+    expect(at(groups, 0).identity).toEqual({game: null, level: null})
+    expect(at(groups, 0).entries).toHaveLength(2)
+    expect(roundLabel(at(groups, 0).identity)).toBe("Whole log")
+  })
+})
+
 describe("agentsFromRound, on a log that states its own seats", () => {
   const MAZE = {
     index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -622,7 +650,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       messages: [
         {role: "tool", content: JSON.stringify({
           currentCell: [0, 0],
-          filteredTraversalHistory: [{playerName: seat.name, cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          filteredTraversalHistory: [{seatId: null, playerName: seat.name, cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
         })},
         ...(replay ? [{role: "tool", content: JSON.stringify(replayOfPreviousTurn)}] : []),
       ],
@@ -722,7 +750,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
         // Katara's history, not Aang's: the name "Aang" appears in this log only inside the label.
         messages: [{role: "tool", content: JSON.stringify({
           currentCell: [0, 0],
-          filteredTraversalHistory: [{playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          filteredTraversalHistory: [{seatId: null, playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
         })}],
       }}),
       entry({turn: 1, payload: LOG_EVENTS.response, details: {

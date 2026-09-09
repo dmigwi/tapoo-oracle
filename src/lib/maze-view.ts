@@ -10,7 +10,7 @@
 // document is hidden.
 
 import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
-import { DECAY_REASONS, MOST_DECAY, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
+import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
 
@@ -201,7 +201,7 @@ function buildLens(
   cell: CellKey,
   radius: number,
   showScrim: boolean,
-  colorOf: (name: string) => string,
+  colorOf: (seat: number) => string,
 ): SVGElement | null {
   if (!model.maze) return null;
 
@@ -218,7 +218,7 @@ function buildLens(
   drawWalls(svg, model.maze);
   const overlay = createSvgElement("g", {class: "maze-overlay"});
   svg.append(overlay);
-  drawFrame(overlay, frame, colorOf);
+  drawFrame(overlay, frame, model, colorOf);
   drawMarkers(svg, model);
   if (showScrim) svg.append(scrim(cell, radius));
 
@@ -553,7 +553,7 @@ function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame):
 
 // drawFrame paints everything that changes as the scrubber moves. Kept in its own group so a repaint
 // removes exactly the previous frame and never the walls beneath it.
-function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) => string): void {
+function drawFrame(overlay: SVGElement, frame: Frame, model: LevelModel, colorOf: (seat: number) => string): void {
   overlay.replaceChildren();
 
   // Visited cells are tinted by how heavily Tapoo says they were worked, not by whether they were
@@ -580,14 +580,15 @@ function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) =>
     overlay.append(rect);
   }
 
-  // The path walked so far, per agent, so crossing trails stay tellable apart.
-  const byAgent = new Map<string, CellKey[]>();
+  // The path walked so far, per seat, so crossing trails stay tellable apart. Grouped by the seat rather
+  // than by the name for the reason agentIndexOf gives: two seats that named no player are two seats.
+  const bySeat = new Map<number, CellKey[]>();
   for (const turn of frame.played) {
-    const name = turn.playerName ?? "";
-    if (!byAgent.has(name)) byAgent.set(name, []);
-    byAgent.get(name)?.push(...turn.cells);
+    const seat = agentIndexOf(model.agents, turn);
+    if (!bySeat.has(seat)) bySeat.set(seat, []);
+    bySeat.get(seat)?.push(...turn.cells);
   }
-  for (const [name, cells] of byAgent) {
+  for (const [seat, cells] of bySeat) {
     if (cells.length < 2) continue;
     const points = cells.map((cell) => {
       const {x, y} = cellXY(cell);
@@ -595,19 +596,19 @@ function drawFrame(overlay: SVGElement, frame: Frame, colorOf: (name: string) =>
     });
     overlay.append(
       createSvgElement("polyline", {
-        points: points.join(" "), fill: "none", stroke: colorOf(name),
+        points: points.join(" "), fill: "none", stroke: colorOf(seat),
         "stroke-width": 2.5, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: 0.9
       })
     );
   }
 
 
-  for (const [name, cell] of frame.positions) {
+  for (const [seat, cell] of frame.positions) {
     const {x, y} = cellXY(cell);
     overlay.append(
       createSvgElement("circle", {
         cx: x + CELL / 2, cy: y + CELL / 2, r: 7,
-        fill: colorOf(name), stroke: "var(--oracle-paper)", "stroke-width": 2
+        fill: colorOf(seat), stroke: "var(--oracle-paper)", "stroke-width": 2
       })
     );
   }
@@ -630,7 +631,12 @@ function turnNarrative(frame: Frame, model: LevelModel): string {
   if (frame.turnIndex === 0 || !turn) return "Start position, before the first turn.";
 
   const parts = [`Turn ${turn.turn}`];
-  if (model.agents.length > 1 && turn.playerName) parts.push(turn.playerName);
+  // A seat that stated no player is still named, by the one thing known about it - falling silent would
+  // leave two seats' frames reading identically.
+  const seat = model.agents[agentIndexOf(model.agents, turn)];
+  if (model.agents.length > 1 && seat) {
+    parts.push(seat.name === "" ? `Seat ${seat.seatId ?? "?"}` : seat.name);
+  }
   parts.push(
     turn.applied === null
       ? `${turn.moves.length} submitted, applied unrecorded`
@@ -654,7 +660,7 @@ function linkedLabel(text: string, href: string): HTMLElement {
   return a;
 }
 
-// MAZE_SUMMARY_LINKS maps the stable field keys returned by mazeSummaryRows to linked labels for
+// MAZE_SUMMARY_LINKS maps the stable field keys returned by mazeStructureRows to linked labels, for the
 // rows whose names describe a mathematical concept worth linking to.
 const MAZE_SUMMARY_LINKS: Record<string, HTMLElement> = {
   "Acyclic graph proof": linkedLabel(
@@ -892,10 +898,11 @@ export function createMazeReplay(report: Report): HTMLElement {
   let magnifying = false;
   let focused: CellKey | null = null;
 
-  const colorOf = (name: string): string => {
-    const index = active.agents.findIndex((agent) => agent.name === name);
-    return AGENT_COLORS[(index < 0 ? 0 : index) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
-  };
+  // Keyed by the seat's place in the round's roster, resolved once by agentIndexOf so the trail, the
+  // marker and the stats card beside them all name the same seat. -1 is a turn no seat claims, which
+  // takes the first colour rather than none at all: an uncoloured trail reads as a wall.
+  const colorOf = (seat: number): string =>
+    AGENT_COLORS[(seat < 0 ? 0 : seat) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
 
   let overlay: SVGElement | null = null;
 
@@ -943,7 +950,7 @@ export function createMazeReplay(report: Report): HTMLElement {
 
   const paint = (): void => {
     const frame = mazeFrameAt(active, Number(range.value));
-    if (overlay) drawFrame(overlay, frame, colorOf);
+    if (overlay) drawFrame(overlay, frame, active, colorOf);
     caption.textContent = turnNarrative(frame, active);
     // The log's own turn number, the same identifier the caption and the bar tooltips use - read from
     // frame.turn so the two cannot drift. It used to be `turnIndex / totalTurns`, a count of turns

@@ -665,8 +665,8 @@ describe("how buildContext decides which turn an entry belongs to", () => {
   })
 
   it("still infers boundaries from predictions when no entry carries a turn", () => {
-    // Pre-counter logs. Without this every entry collapses onto turn 0 and the per-turn questions pass
-    // trivially, which is worse than being unable to answer them.
+    // Without this every entry collapses onto turn 0 and the per-turn questions pass trivially, which is
+    // worse than being unable to answer them.
     const withoutTurns = [
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}),
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}),

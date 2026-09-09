@@ -21,10 +21,11 @@ type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
 const DEFAULT_TURNS: Turn[] = [
-  { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-  { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
   {
     turn: 2,
+    seatId: null,
     playerName: "Katara",
     before: "2,0",
     moves: ["MoveRight", "MoveUp"],
@@ -70,7 +71,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
 // A round of n turns whose only interesting property is what each was charged.
 const charged = (charges: Array<number | null>): Turn[] =>
   charges.map((decayCharged, turn) => ({
-    turn, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1,
+    turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1,
     cells: ["0,0", "1,0"], rejectedMove: null, decayCharged,
   }))
 
@@ -116,7 +117,8 @@ describe("mazeFrameAt", () => {
   it("accumulates the path as turns are played", () => {
     expect([...mazeFrameAt(model, 1).visited.keys()]).toEqual(["0,0", "1,0"])
     expect(mazeFrameAt(model, 2).currentCell).toBe("2,0")
-    expect(mazeFrameAt(model, 2).positions.get("Katara")).toBe("2,0")
+    // Keyed by seat, and Katara is the round's only one.
+    expect(mazeFrameAt(model, 2).positions.get(0)).toBe("2,0")
   })
 
   it("surfaces the refused move only on the turn that produced it", () => {
@@ -131,18 +133,37 @@ describe("mazeFrameAt", () => {
     expect(mazeFrameAt(model, 99).turnIndex).toBe(3)
   })
 
+  // The replay used to key trails, markers and colours by the player's name. A seat that states its
+  // number and no player answers to "", so two of them shared one key: one trail walking both paths, one
+  // marker, one colour - drawn as a single agent that was in two places.
+  it("keeps two seats apart when neither states a player", () => {
+    const nameless = modelFor({
+      turns: [
+        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+      ],
+      outcome: null,
+    })
+
+    expect(nameless.agents.map((agent) => [agent.seatId, agent.name])).toEqual([[1, ""], [2, ""]])
+
+    const frame = mazeFrameAt(nameless, 2)
+    expect(frame.positions.get(0)).toBe("1,0")
+    expect(frame.positions.get(1)).toBe("2,0")
+  })
+
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
       ],
     })
 
     const frame = mazeFrameAt(shared, 2)
     expect(shared.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
-    expect(frame.positions.get("Katara")).toBe("1,0")
-    expect(frame.positions.get("Bumi")).toBe("2,0")
+    expect(frame.positions.get(0)).toBe("1,0")
+    expect(frame.positions.get(1)).toBe("2,0")
   })
 })
 
@@ -359,8 +380,8 @@ describe("agentsFromRound", () => {
   it("accumulates per-turn decay per agent", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
       ],
     })
 
@@ -370,8 +391,8 @@ describe("agentsFromRound", () => {
   it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
       ],
       outcome: {
         outcome: "won",
@@ -395,7 +416,7 @@ describe("agentsFromRound", () => {
 
   it("names no seat for a round whose turns name no player", () => {
     const anonymous = [
-      { turn: 0, playerName: null, before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
     ]
 
     expect(seatsOf({turns: anonymous})).toEqual([])

@@ -111,10 +111,11 @@ function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement
 
 // Field and value down the page, not eight columns across it.
 //
-// One row of eight columns fits a wide screen and trims its own values on anything narrower - a Tapoo
-// version, a model name and a reasoning effort each squeezed into an eighth of the width. Every other
-// summary here is already two columns, including Model Output directly above, so this now reads the
-// same way and the values have the room to be read.
+// One row of eight columns fits a wide screen and trims its own values on anything narrower, each
+// squeezed into an eighth of the width. Two of those eight were a model name and a reasoning effort,
+// which have since moved to the Agents table, where they belong to a seat. Every other summary here is
+// already two columns, including Model Output directly above, so this now reads the same way and the
+// values have the room to be read.
 function provenanceTable({Inputs}: ReportUi, source: TapooLog): HTMLElement {
   const rows = provenanceRows(source);
   return enableRowSelection(Inputs.table(rows, {

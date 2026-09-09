@@ -255,7 +255,7 @@ export type AgentRow = {
 
 /** agentRows says what each seat was running, one row per seat.
  *
- * Two columns, not five. Provenance was just changed from one wide row for the same reason: a column
+ * Two columns, not five, for the reason Provenance is no longer one wide row either: a column
  * per fact trims its own values on a narrow viewport, and an endpoint is the widest value on the page.
  * The seat is the row's name and the rest reads as a sentence, so a two-seat round is two lines rather
  * than a grid to scan across. */

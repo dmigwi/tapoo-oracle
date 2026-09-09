@@ -91,7 +91,7 @@ export type LogLevel = "error" | "info" | "warn";
 export type LogClass = "neutral" | "penalised" | "external";
 
 /** One entry, carrying only the fields `isLogEntry` actually verifies. `turn`, `level` and `game`
- * are optional because logs written before those counters landed still analyze. `details` is
+ * are optional because nothing rejects an entry for lacking them - see isLogEntry. `details` is
  * `unknown` on purpose: it is arbitrary JSON, and every read of it has to narrow first. */
 export type LogEntry = {
   epochMs: number;
@@ -128,9 +128,8 @@ export type TurnSpan = TurnIdentity & {start: number; end: number};
 
 /** How the turn spans were arrived at.
  *
- * "field" means every entry carried a turn number. "unavailable" means at least one did not: logs
- * written before the turn counter landed infer their boundaries from predictions instead, which
- * buildContext still does for itself. The index says so rather than guessing, so a caller never reads
+ * "field" means every entry carried a turn number. "unavailable" means at least one did not, and such
+ * a log has its boundaries inferred from predictions instead, which buildContext still does for itself. The index says so rather than guessing, so a caller never reads
  * spans that were invented. */
 export type TurnSource = "field" | "unavailable";
 
@@ -400,6 +399,9 @@ export type Outcome = {
  * `applied` and `decayCharged` are null where the log did not say - not zero, which is a reading. */
 export type Turn = {
   turn: number;
+  /** The seat that played this turn, where the request stated one - see agentsFromRound, which gathers
+   * seats by this in preference to the name. Null on every log written before Tapoo attached it. */
+  seatId: number | null;
   playerName: string | null;
   before: CellKey | null;
   moves: unknown[];
@@ -445,7 +447,8 @@ export type GroupKind = "capability" | "violation";
  *
  * Recorded per turn rather than folded into round-wide sets, because a setting that changes mid-round
  * is a finding: turns before and after were not answering under the same setup. A set would average
- * that away, which is what `Report.model` did when it took whichever response came last. */
+ * that away, which is what the single model field this replaced did, taking whichever response came
+ * last. */
 export type TurnSetup = {
   seatId: number | null;
   playerName: string | null;
@@ -655,7 +658,10 @@ export type Frame = {
    * frame. The status is the last one reported at or before this turn, so it changes as you scrub, and
    * null where the log never graded the cell - never a grade inferred here. */
   visited: Map<CellKey, {playerName: string | null; status: VisitStatus | null}>;
-  positions: Map<string, CellKey>;
+  /** Where each seat stands as of this frame, keyed by its index into LevelModel.agents rather than by
+   * its name - two seats that named no player are still two seats, and one key of "" would draw them as
+   * one. */
+  positions: Map<number, CellKey>;
   currentCell: CellKey | null;
   rejected: {cell: CellKey | null; move: string} | null;
   turn: Turn | null;

@@ -14,8 +14,8 @@ import type {GameIdentity, LogEntry, LogIndex, LogSummary, TurnIdentity, TurnSpa
 
 /** True when every entry carries a turn number.
  *
- * Logs written before the turn counter landed carry none, and their boundaries can only be inferred
- * from predictions - which buildContext still does for itself, because inferring them needs to know
+ * A log carrying none can only have its boundaries inferred from predictions - which buildContext still
+ * does for itself, because inferring them needs to know
  * what a parsed prediction is. Rather than reproduce that here and risk two disagreeing answers, the
  * index reports that it cannot say. */
 const hasTurnNumbers = (entries: LogEntry[]): boolean =>

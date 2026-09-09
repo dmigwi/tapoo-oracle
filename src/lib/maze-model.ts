@@ -9,7 +9,7 @@
 
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
 
 /** levelSelectLabel names a round in the replay's level picker.
  *
@@ -56,6 +56,30 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       agents: level.agents
     };
   });
+}
+
+/** agentIndexOf resolves a turn to the seat that played it, as an index into `agents`, or -1 for a turn
+ * no seat claims.
+ *
+ * By the stated seat first and the name second, which is how agentsFromRound gathered these records in
+ * the first place - resolving them differently here would colour a trail for a seat the table does not
+ * list. The name still has to work on its own: a legacy log states no seat on any turn, and the one
+ * seatId such a log carries reaches the record from the round-end entry, so the seat matches nothing and
+ * the name is all there is.
+ *
+ * An index rather than a name, because a name is not an identity. Two seats that stated a number and no
+ * player both answer to "", and keyed by that they would share one trail, one colour and one marker -
+ * drawn as a single agent that walked both paths. */
+export function agentIndexOf(
+  agents: readonly AgentSummary[],
+  turn: {seatId: number | null; playerName: string | null},
+): number {
+  if (turn.seatId !== null) {
+    const stated = agents.findIndex((agent) => agent.seatId === turn.seatId);
+    if (stated >= 0) return stated;
+  }
+  if (turn.playerName === null) return -1;
+  return agents.findIndex((agent) => agent.name === turn.playerName);
 }
 
 /** mazeFrameAt reports the state of the replay after `turnIndex` turns have been played.
@@ -128,10 +152,11 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
   }
 
   const current = played.at(-1);
-  const positions = new Map<string, CellKey>();
+  const positions = new Map<number, CellKey>();
   for (const turn of played) {
-        const last = turn.cells.at(-1);
-    if (turn.playerName && last) positions.set(turn.playerName, last);
+    const last = turn.cells.at(-1);
+    const seat = agentIndexOf(levelModel.agents, turn);
+    if (seat >= 0 && last) positions.set(seat, last);
   }
 
   return {
