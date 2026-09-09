@@ -16,12 +16,14 @@ import {
   narrativeSummary,
   profileCards,
   LOG_SCOPE_MARK,
+  agentRows,
   provenanceRows,
   validationRows,
   modelOutputRows,
   rubricQuestionRows,
   warningHeadline,
 } from "./report-adapters";
+import type { AgentRow } from "./report-adapters";
 import { createInitialLogTabs, roundReportFor } from "./log-tabs";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
@@ -113,8 +115,8 @@ function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement
 // version, a model name and a reasoning effort each squeezed into an eighth of the width. Every other
 // summary here is already two columns, including Model Output directly above, so this now reads the
 // same way and the values have the room to be read.
-function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): HTMLElement {
-  const rows = provenanceRows(source, report);
+function provenanceTable({Inputs}: ReportUi, source: TapooLog): HTMLElement {
+  const rows = provenanceRows(source);
   return enableRowSelection(Inputs.table(rows, {
     columns: ["field", "value"],
     header: {field: "MEASURE", value: "VALUE"},
@@ -123,6 +125,47 @@ function provenanceTable({Inputs}: ReportUi, source: TapooLog, report: Report): 
     layout: "auto"
   }));
 }
+
+// What each seat was running, one row per seat.
+function agentsTable({Inputs, html}: ReportUi, agents: Report["agents"]): HTMLElement {
+  const rows = agentRows(agents);
+  return enableRowSelection(Inputs.table(rows, {
+    columns: ["field", "value"],
+    header: {field: "AGENT", value: "RUNNING"},
+    format: {value: runningCell(html, rows)},
+    sort: false,
+    rows: rows.length,
+    layout: "auto"
+  }));
+}
+
+/** runningCell renders one seat's setup with the values weighted above the words joining them.
+ *
+ * Comparing two seats means comparing three values, and as one flat sentence they sit at the same weight
+ * as the "through" and the "at" between them - so the three are bold and the words joining them go
+ * muted. The model is additionally set in mono, being a string copied out of the log, where "Ollama" and
+ * "max" are this page's own wording for what the log spelled differently.
+ *
+ * Deliberately not .rubric-code: that chip means "an identifier defined elsewhere on this page", and
+ * nothing defines a model name anywhere else. A second tinted chip would send a reader looking.
+ *
+ * The endpoint takes its own line rather than the parentheses the plain sentence keeps. It is the widest
+ * value on the page and the one this two-column shape exists for; wrapped inline it broke mid-host and
+ * pushed the effort onto a line of its own anyway.
+ *
+ * Falls back to the sentence if the row is somehow missing, which no caller can currently produce -
+ * rows is the array the table was built from. */
+const runningCell = (html: ReportUi["html"], rows: AgentRow[]) =>
+  (value: string, index: number): unknown => {
+    const running = rows[index]?.running;
+    if (!running) return value;
+
+    return html`<span
+      >${running.models === "" ? "" : html`<span class="agent-value agent-model">${running.models}</span>`}${
+        running.provider === "" ? "" : html`<span class="agent-joiner"> through </span><span class="agent-value">${running.provider}</span>`}${
+        running.effort === "" ? "" : html`<span class="agent-joiner"> at </span><span class="agent-value">${running.effort}</span><span class="agent-joiner"> reasoning effort</span>`}${
+        running.endpoint === "" ? "" : html`<span class="agent-endpoint">${running.endpoint}</span>`}</span>`;
+  };
 
 // One scope's worth of checks: what was verified, and what could not be.
 function validationTable({Inputs}: ReportUi, checks: ValidationCheck[]): HTMLElement {
@@ -448,7 +491,16 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
       <section class="events-section">
         <h2>Provenance</h2>
         <p class="section-note">A profile is only meaningful against the build and round it was measured from.</p>
-        ${provenanceTable(ui, result.source, report)}
+        ${provenanceTable(ui, result.source)}
+      </section>
+      <section class="events-section">
+        <h2>Agents</h2>
+        <p class="section-note">
+          One row per seat that played this round. A turn is played by exactly one agent, so what it was
+          running belongs to the seat rather than to the report - a round seating two agents on two
+          models has no single answer to give.
+        </p>
+        ${agentsTable(ui, report.agents)}
       </section>
       <section class="events-section">
         <h2>Payload validation</h2>

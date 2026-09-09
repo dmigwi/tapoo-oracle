@@ -96,6 +96,32 @@ const twoRoundExport = JSON.stringify({
   ]
 })
 
+// The same round with a fully stated setup on its request - the shape every log takes once Tapoo
+// attaches them - and credentials on the endpoint, which no real log should carry but the renderer must
+// never print. The base export states none of these, so it cannot prove any of the formatting.
+const fullSetupExport = JSON.stringify({
+  ...JSON.parse(logExport) as Record<string, unknown>,
+  entries: (JSON.parse(logExport) as {entries: LogEntry[]}).entries.map((logEntry) =>
+    logEntry.payload === "Agent request."
+      ? {...logEntry, details: {
+          ...logEntry.details as Record<string, unknown>,
+          seatId: 1,
+          model: "moonshotai/Kimi-K3:baseten",
+          api: "ollama",
+          endpoint: "http://user:pass@localhost:11434/api/chat",
+          reasoning: "max",
+        }}
+      : logEntry
+  )
+})
+
+const fullSetupTab = (): LogTab => {
+  const result = analyzeLogText(fullSetupExport, {label: "full-setup.json"})
+  expect(result.ok).toBe(true)
+  return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
+    label: "full-setup.json", status: "loaded", result}
+}
+
 const twoRoundTab = (): LogTab => {
   const result = analyzeLogText(twoRoundExport, {label: "two-rounds.json"})
   expect(result.ok).toBe(true)
@@ -445,6 +471,7 @@ describe("payload validation", () => {
       "Tool descriptions",
       "Agent personas",
       "Traversal payloads",
+      "Agent settings",
     ])
     expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)
   })
@@ -584,6 +611,44 @@ describe("detail", () => {
     expect(headings).toEqual(
       expect.arrayContaining(["Capabilities", "Violations", "Operational Diagnostics", "Provenance"])
     )
+  })
+
+  // The formatting is what a reader actually sees, so it is asserted on the DOM rather than on the
+  // sentence agentRows also returns - the two could drift, and only one of them is rendered.
+  it("weights each seat's values above the words joining them", () => {
+    const host = rendered(renderReportSections(ui, stateWith(fullSetupTab())).detail)
+
+    // All three of the values a reader compares, and only those three.
+    expect(queryAll<HTMLElement>(host, ".agent-value").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten", "Ollama", "max"])
+    // Mono is the model's alone: it is the one literal string of the three.
+    expect(queryAll<HTMLElement>(host, ".agent-model").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten"])
+    expect(queryAll<HTMLElement>(host, ".agent-joiner").map((node) => node.textContent))
+      .toEqual([" through ", " at ", " reasoning effort"])
+
+    // A model name is not a rubric identifier, and that chip is this page's promise that a code it marks
+    // is defined somewhere else on the page.
+    expect(queryAll<HTMLElement>(host, ".rubric-code").map((node) => node.textContent))
+      .not.toContain("moonshotai/Kimi-K3:baseten")
+  })
+
+  // The rendered cell reads the endpoint from its own field now rather than from the sentence, so
+  // stripping the credentials on the way into the sentence alone would leave them in the DOM.
+  it("keeps credentials out of the rendered endpoint", () => {
+    const host = rendered(renderReportSections(ui, stateWith(fullSetupTab())).detail)
+
+    expect(queryAll<HTMLElement>(host, ".agent-endpoint").map((node) => node.textContent))
+      .toEqual(["http://localhost:11434/api/chat"])
+    expect(host.innerHTML).not.toMatch(/user:pass/)
+  })
+
+  // Nothing in this log declared a model, so the provider's echo is what there is to show - short of the
+  // ":provider" suffix a declared name would carry, and still better than a seat reported running
+  // nothing. The fixture above is the declared path; this is every log written before it.
+  it("shows the provider's echo where no request declared a model", () => {
+    expect(queryAll<HTMLElement>(detail(), ".agent-model").map((node) => node.textContent))
+      .toEqual(["gemma4"])
   })
 
   // Which cells are identifiers comes from the data, not from what the text looks like. An unscored

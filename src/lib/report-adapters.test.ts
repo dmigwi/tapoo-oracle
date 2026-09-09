@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
-import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, rubricQuestionRows, warningHeadline} from "./report-adapters"
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, warningHeadline} from "./report-adapters"
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, LogTabsState, TapooLog} from "./types"
@@ -36,7 +36,9 @@ describe("analyzeLogText", () => {
     // One report per round, each carrying the full rubric. The fixture is a single-round log, so the
     // count is 1 - a multi-round log is what the round tabs exist for.
     expect(expectOk(result).rounds).toHaveLength(1)
-    expect(firstRound(result).model).toBe("gemma4")
+    // The declared name, not the "gemma4" the provider echoed back: an echo drops the ":cloud" saying
+    // where the model was served from, and that is the half a reader comparing two runs needs.
+    expect(firstRound(result).agents.map((agent) => agent.models)).toEqual([["gemma4:cloud"]])
     expect(firstRound(result).capabilities).toHaveLength(9)
     expect(firstRound(result).violations).toHaveLength(6)
   })
@@ -285,7 +287,7 @@ describe("presentation", () => {
   })
 
   it("keeps the log address out of provenance", () => {
-    const rows = provenanceRows(fixtureSource, fixtureReport)
+    const rows = provenanceRows(fixtureSource)
 
     // The one field here that the log does not vouch for, and a table cell is the most screenshotted
     // place on the page to print an address the rest of this change keeps out of it. The share link
@@ -295,26 +297,27 @@ describe("presentation", () => {
   })
 
   it("describes provenance without inventing missing fields", () => {
-    const rows = provenanceRows(fixtureSource, fixtureReport)
+    const rows = provenanceRows(fixtureSource)
     expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.1")
 
     const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
-    const missing = provenanceRows(withoutVersionOk.source, firstRound(withoutVersionOk))
+    const missing = provenanceRows(withoutVersionOk.source)
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
 
-  it("states the profile as a finding, leaving the method to the methodology", () => {
+  it("says only what no card and no table already says", () => {
     const summary = narrativeSummary(fixtureReport)
-    expect(summary).toMatch(/5 of 9 capabilities/)
+
+    expect(summary).toMatch(/predictions?\./)
     expect(summary).toMatch(/Navigator/)
-    // Which groups were met now lives on the cards. Repeating the ids here made the reader parse a
-    // sentence to learn what a number beside it already counted.
+    // The fraction is on the cards directly beneath, and the setup is on the Agents table - which can
+    // say which seat ran which, where a single sentence had to pick one.
+    expect(summary).not.toMatch(/of 9 capabilities/)
+    expect(summary).not.toMatch(/reasoning effort/)
     expect(summary).not.toMatch(/\(C\d/)
-    expect(summary).not.toMatch(/Confirmed violations/)
-    // What a NO means is explained once, in "How this report is generated". A summary that repeated
-    // it here would be the third copy on the page.
+    // What a NO means is explained once, in "How this report is generated".
     expect(summary).not.toMatch(/not that the model is incapable/)
   })
 })
@@ -437,12 +440,52 @@ describe("modelOutputRows", () => {
 })
 
 describe("provenance names the setup a verdict depends on", () => {
-  it("reports the API provider and the reasoning effort", () => {
-    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
-    const value = (field: string) =>
-      provenanceRows(result.source, firstRound(result)).find((row) => row.field === field)?.value
+  // The endpoint is an address, and this file already keeps one out of the DOM. This one is wanted - a
+  // reader cannot compare two runs without knowing where each was answered - but credentials in it are
+  // not, and validateOnlineJsonUrl already refuses them on the way in.
+  it("prints an endpoint without its credentials", () => {
+    expect(withoutCredentials("http://user:pass@host:11434/api/chat")).toBe("http://host:11434/api/chat")
+    expect(withoutCredentials("http://localhost:11434/api/chat")).toBe("http://localhost:11434/api/chat")
+    // Not a URL the constructor accepts: there is no userinfo to strip, so it passes through.
+    expect(withoutCredentials("not an address")).toBe("not an address")
+  })
 
-    expect(value("API provider")).toBe("ollama")
-    expect(value("Reasoning effort")).toBe("max")
+  it("keeps credentials out of the rendered agent row", () => {
+    const rows = agentRows([{
+      name: "Katara", seatId: 1, models: ["gemma4"], apis: ["ollama"],
+      endpoints: ["http://user:pass@host/api"], reasoningEfforts: ["max"],
+      uniqueCells: null, decayCharged: null, traversalSpeed: null,
+    }])
+
+    expect(rows[0]?.value).not.toMatch(/user:pass/)
+    expect(rows[0]?.value).toMatch(/http:\/\/host\/api/)
+  })
+
+  // Provenance carries only what belongs to the file and the round. The provider and the effort moved
+  // to the Agents table, where they belong to a seat: a round can seat two agents on two providers, and
+  // one row could only ever name one of them.
+  it("names each seat's provider and effort on the seat, not on the round", () => {
+    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
+    const fields = provenanceRows(result.source).map((row) => row.field)
+
+    expect(fields).toEqual(["Tapoo version", "Control mode", "Downloaded at", "Log entries"])
+    // Seat 1 because the log says so, on the round-end record - the only place v2.5.1 states a seat.
+    // Without reading it the label would fall back to acting order, which happens to agree here and so
+    // would hide the field being ignored.
+    expect(firstRound(result).agents.map((agent) => agent.seatId)).toEqual([1])
+    expect(agentRows(firstRound(result).agents)).toEqual([
+      {
+        field: "Katara \u00b7 Agent at Seat 1",
+        value: "gemma4:cloud through Ollama (http://localhost:11434/api/chat) at max reasoning effort",
+        // The same four values unjoined, which is what the table actually renders - the sentence is the
+        // fallback for anything that cannot weight them.
+        running: {
+          models: "gemma4:cloud",
+          provider: "Ollama",
+          endpoint: "http://localhost:11434/api/chat",
+          effort: "max",
+        },
+      },
+    ])
   })
 })

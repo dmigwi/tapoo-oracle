@@ -5,7 +5,7 @@
 // time, because a retry of a level is a different maze and merging the two would draw a path crossing
 // walls that exist in neither.
 
-import { LOG_EVENTS, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
+import { LOG_EVENTS, agentsFromRound, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
 import { buildContext } from "./rubric-engine"
 import { gameIdentityKey } from "./log-index"
@@ -17,11 +17,18 @@ import type { CellKey, Context, EncodedMaze, GameIdentity, Level, LogEntry, Repl
 
 // resolveActingAgents maps each turn number to the raw playerName that acted on it.
 //
-// "Agent request." records the acting seat as a decorated label - "Katara the Trailblazer - Default" -
-// not a bare name, so the name is recovered by matching against the names the log states outright:
-// every filteredTraversalHistory entry and every round-end agent record. Matching rather than splitting
-// on " the " matters because a player may name themselves anything, including something containing that
+// A request that names its own player is taken at its word - details.playerName. That is the shape Tapoo
+// is moving to, and it needs no recovery at all.
+//
+// Older logs record the acting seat only as a decorated label - "Katara the Trailblazer - Default" - not
+// a bare name, so the name is recovered by matching against the names the log states outright: every
+// filteredTraversalHistory entry and every round-end agent record. Matching rather than splitting on
+// " the " matters because a player may name themselves anything, including something containing that
 // phrase; an unmatched label is left unattributed rather than guessed at.
+//
+// This is the only thing that attributes a turn, and every per-seat figure is joined by the name it
+// returns - so a request whose stated name went unread would be a turn belonging to nobody, and a seat
+// that acted would go unreported unless the round-end record happened to name it.
 function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
   const known = new Set<string>()
   for (const entry of entries) {
@@ -56,7 +63,21 @@ function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
       continue
     }
 
-    const label = asRecord(entry.details).player
+    const details = asRecord(entry.details)
+    // Stated outright by the request itself, and not matched against the known names: a name the log
+    // states is the answer, and requiring it to appear elsewhere first would drop the one seat that
+    // acted but never reached a traversal history or a round-end record.
+    //
+    // details.agent.playerName is deliberately not accepted here. That record lives on the round-end
+    // entry, naming whoever finished the round - so on a two-seat round it would attribute every turn to
+    // one of them, including the turns the other played.
+    const stated = details.playerName
+    if (typeof stated === "string" && stated !== "") {
+      if (!byTurn.has(entry.turn)) byTurn.set(entry.turn, stated)
+      continue
+    }
+
+    const label = details.player
     if (typeof label !== "string") {
       continue
     }
@@ -360,6 +381,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
       positions: context.positions,
       turns,
       outcome,
+      agents: agentsFromRound(context.setupByTurn, turns, outcome),
     }
 
     return level

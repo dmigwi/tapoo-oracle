@@ -317,6 +317,9 @@ export type Context = {
   apis: Set<string>;
   /** Distinct reasoning-effort settings the requests carried, in first-seen order. */
   reasoningEfforts: Set<string>;
+  /** What each turn's request said about the seat playing it. The raw material agentsFromRound folds
+   * into one record per seat. */
+  setupByTurn: Map<number, TurnSetup>;
   /** The replay record each turn reported, keyed by the turn that *reported* it - which is the turn
    * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
    * transition key, so two turns submitting the same move with the same outcome collapse into one
@@ -430,10 +433,58 @@ export type Level = {
   positions: CellKey[];
   turns: Turn[];
   outcome: Outcome | null;
+  /** One record per seat that played, in stated-seat order. Gathered once by agentsFromRound, so the
+   * report and the replay read the same thing rather than deriving it twice. */
+  agents: AgentSummary[];
 };
 
 /** Which half of the rubric a group belongs to. The two are never combined into one score. */
 export type GroupKind = "capability" | "violation";
+
+/** What one turn's request and response said about the seat that played it.
+ *
+ * Recorded per turn rather than folded into round-wide sets, because a setting that changes mid-round
+ * is a finding: turns before and after were not answering under the same setup. A set would average
+ * that away, which is what `Report.model` did when it took whichever response came last. */
+export type TurnSetup = {
+  seatId: number | null;
+  playerName: string | null;
+  /** The model this turn was configured to use, as Tapoo declared it - "gemma4:cloud". */
+  model: string | null;
+  /** What the provider echoed back - "gemma4" for a declared "gemma4:cloud". Kept apart from the
+   * declared name because it is the trimmed form: an echo drops the ":provider" suffix saying where the
+   * model was served from, on any vendor - Hugging Face answers "moonshotai/Kimi-K3" to a request for
+   * "moonshotai/Kimi-K3:baseten". Reported only where nothing declared a model, never merged with one,
+   * or a seat that ran a single model would appear to have run two. */
+  echoedModel: string | null;
+  api: string | null;
+  endpoint: string | null;
+  reasoning: string | null;
+};
+
+/** Everything one seat was running, and everything it did, gathered in one pass over the round.
+ *
+ * The setup fields are lists deliberately - a seat that ran two models across a round holds two here,
+ * and agentSettingsCheck reports it. The performance fields are raw numbers rather than the formatted
+ * strings the replay used to build, because formatting "18 of 24 (75%)" needs the maze's cell count,
+ * which belongs to the view that has it. */
+export type AgentSummary = {
+  /** The player this seat was playing, or "" where no turn of the round named one. */
+  name: string;
+  /** The seat the log stated, or null when it never did - see agentSeatLabel.
+   *
+   * One id per seat, as one player name per seat, so either identifies it. This is the one the log states
+   * outright, which is why it is what a seat is gathered by - see seatFor. */
+  seatId: number | null;
+  models: string[];
+  apis: string[];
+  endpoints: string[];
+  reasoningEfforts: string[];
+  /** Cells this seat entered, its decay charge, and its speed. Null where the round did not say. */
+  uniqueCells: number | null;
+  decayCharged: number | null;
+  traversalSpeed: number | null;
+};
 
 /** One rubric group: its identity, the questions it asks, and the function that answers them. Keeping
  * the questions beside their evaluator is what stops the report describing a different question than
@@ -460,13 +511,13 @@ export type GroupResult = {
 /** One round's complete profile: what produced it, what it demonstrated, and what it violated. */
 export type Report = {
   label: string;
-  model: string | null;
-  player: string | null;
-  /** The API providers the sample was produced against, and the reasoning effort asked of the model.
-   * Both belong to provenance: the same model answers differently through a different provider or at a
-   * different effort, so a verdict is only comparable to another taken under the same two. */
-  apis: string[];
-  reasoningEfforts: string[];
+  /** One record per seat that played this round.
+   *
+   * Replaces four flattened fields - model, player, apis, reasoningEfforts - that could only describe a
+   * round with one agent: they collapsed every seat's setup into one value, so a two-seat round said
+   * `apis: ollama, openai` with no way to say which seat used which. The same facts belong to a seat,
+   * and a verdict is only comparable to another taken under the same setup. */
+  agents: AgentSummary[];
   output: ModelOutput;
   predictions: number;
   traversalSpeed: number | null;
@@ -589,7 +640,7 @@ export type LevelModel = {
   historyWindowRadius: number | null;
   turns: Turn[];
   outcome: Outcome | null;
-  agents: string[];
+  agents: AgentSummary[];
 };
 
 /** The replay at one scrubber position - everything the view draws for that turn.

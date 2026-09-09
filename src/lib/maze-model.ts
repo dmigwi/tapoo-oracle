@@ -7,7 +7,6 @@
 //
 // Pure and document-free, which is why it is tested in node while the view beside it needs jsdom.
 
-import { classifyTraversalSpeed } from "./log-contract"
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
 import type { CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
@@ -41,13 +40,6 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       destinationCell: destination
     });
 
-    // Colour is assigned per player in first-acting order, so a seat keeps the same colour across every
-    // level of a log rather than changing when another seat happens to move first.
-    const agents: string[] = [];
-    for (const turn of level.turns) {
-      if (turn.playerName && !agents.includes(turn.playerName)) agents.push(turn.playerName);
-    }
-
     return {
       identity: level.identity,
       maze: built.ok ? built.maze : null,
@@ -61,7 +53,7 @@ export function mazeReplayModel(report: Report): LevelModel[] {
       historyWindowRadius: level.historyWindowRadius,
       turns: level.turns,
       outcome: level.outcome,
-      agents
+      agents: level.agents
     };
   });
 }
@@ -276,87 +268,3 @@ export function mazeLevelRows(levelModel: LevelModel | null | undefined): Summar
     },
   ];
 }
-
-/** AgentLevelStats carries the per-agent metrics for a level. Each array is parallel to `agents`:
- * index 0 is the value for agents[0], index 1 for agents[1], and so on. */
-export type AgentLevelStats = {
-  agents: string[];
-  traversalSpeeds: string[];
-  decayCharged: string[];
-  cellsEntered: string[];
-};
-
-/** mazeLevelAgentStats derives the metrics that belong to each individual agent — traversal speed,
- * decay units charged, and cells entered — from the level's turn log and outcome record.
- *
- * Traversal speed comes from the outcome and is attributed to the agent named in outcome.agent. In a
- * single-agent level the outcome is always that agent's, even when the field is absent from older
- * logs. Per-turn decay is summed straight from the turn log.
- *
- * Cells entered drops each turn's first cell, which is where the turn *began* rather than somewhere it
- * went - for turn 0 that is the start square, which Tapoo credits to "Self" and leaves out of
- * playerUniqueCellsVisited. Counting it would put this figure one above Tapoo's own. */
-export function mazeLevelAgentStats(levelModel: LevelModel | null | undefined): AgentLevelStats | null {
-  if (!levelModel?.stats || levelModel.agents.length === 0) return null;
-
-  const stats = levelModel.stats;
-  const outcome = levelModel.outcome ?? {};
-
-  // The agent the outcome record belongs to. In older logs the field may be absent; a single-agent
-  // level still has exactly one owner, so we attribute the outcome to the only agent in that case.
-  const outcomeAgent = outcome.agent?.playerName;
-
-  // Unique cells *entered* per named agent - cells.slice(1), not the whole walk.
-  //
-  // Turn.cells opens with `before`, the cell the agent was already standing on, so the whole array is
-  // "where I was, then everywhere I went". Counting all of it credits the seat with a cell it never
-  // moved into, and for turn 0 that cell is the start square - which Tapoo does not treat as the
-  // player's at all. Its own traversal history labels the start `"Self"` on every single reading and
-  // every other cell by the player's name, and its outcome record counts 17 unique cells where the walk
-  // touches 18. The one it leaves out is the square the agent was placed on.
-  //
-  // For later turns the slice changes nothing - cells[0] is already in the set from the turn before -
-  // so this is precisely the start-square correction, and it is what makes our count reconcile with
-  // playerUniqueCellsVisited.
-  const cellsByAgent = new Map<string, Set<CellKey>>();
-  for (const turn of levelModel.turns) {
-    if (!turn.playerName) continue;
-    const existing = cellsByAgent.get(turn.playerName) ?? new Set<CellKey>();
-    for (const cell of turn.cells.slice(1)) existing.add(cell);
-    cellsByAgent.set(turn.playerName, existing);
-  }
-
-  // Decay units charged per named agent, summed from their turns.
-  const decayByAgent = new Map<string, number>();
-  for (const turn of levelModel.turns) {
-    if (!turn.playerName || turn.decayCharged === null) continue;
-    decayByAgent.set(turn.playerName, (decayByAgent.get(turn.playerName) ?? 0) + turn.decayCharged);
-  }
-
-  const traversalSpeeds: string[] = [];
-  const decayCharged: string[] = [];
-  const cellsEntered: string[] = [];
-
-  for (const agent of levelModel.agents) {
-    // Attribute the outcome to this agent if the record names them, or if this is the only agent
-    // and the record does not name anyone (older log format).
-    const ownsOutcome = outcomeAgent === agent || (!outcomeAgent && levelModel.agents.length === 1);
-    const speed = ownsOutcome ? Number(outcome.traversalSpeed) : NaN;
-    traversalSpeeds.push(
-      Number.isFinite(speed) ? `${classifyTraversalSpeed(speed)} (${speed.toFixed(4)})` : "not recorded",
-    );
-
-    const decay = decayByAgent.get(agent);
-    decayCharged.push(decay !== undefined ? formatCount(decay) : "not recorded");
-
-    const cells = cellsByAgent.get(agent);
-    cellsEntered.push(
-      cells
-        ? `${formatCount(cells.size)} of ${formatCount(stats.cells)} (${Math.round((cells.size / stats.cells) * 100)}%)`
-        : "not recorded",
-    );
-  }
-
-  return {agents: levelModel.agents, traversalSpeeds, decayCharged, cellsEntered};
-}
-

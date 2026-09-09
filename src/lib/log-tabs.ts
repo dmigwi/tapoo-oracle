@@ -6,7 +6,7 @@
 // Pure - no document, no Observable globals. The control that renders these lives in
 // log-tabs-control.ts; keeping the reducers here is what lets them be tested in node.
 
-import { parseGameRound } from "./log-contract"
+import { agentSettingsCheck, parseGameRound } from "./log-contract"
 import { loadTapooLogFromUrl } from "./share-link"
 import { answerRubric } from "./report"
 import { groupEntriesByRound, roundLabel } from "./rounds"
@@ -77,10 +77,15 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
   const cached = answered.get(slice);
   if (cached) return cached;
 
+  const report = answerRubric(slice.entries, {label: slice.reportLabel});
+  const round = parseGameRound(slice.entries);
   const resolved: RoundReport = {
     ...slice,
-    report: answerRubric(slice.entries, {label: slice.reportLabel}),
-    round: parseGameRound(slice.entries),
+    report,
+    // Composed here because the check needs both halves: parseGameRound reads the round's payloads and
+    // knows nothing of seats, while the summaries come from the answered report. Neither should have to
+    // reach for the other to say whether a seat's setup held for the whole round.
+    round: {...round, checks: [...round.checks, agentSettingsCheck(report.agents)]},
   };
   answered.set(slice, resolved);
   return resolved;

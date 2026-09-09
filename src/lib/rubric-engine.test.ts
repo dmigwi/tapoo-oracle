@@ -334,7 +334,8 @@ describe("answerRubric", () => {
 
       expect(report.traversalSpeed).toBe(1.5)
       expect(report.traversalSpeedClass).toBe("Trailblazer")
-      expect(report.player).toBe("Kora")
+      // Named on the seat that finished, not on the report: a round can seat more than one.
+      expect(report.agents.map((agent) => agent.name)).toContain("Kora")
     })
 
     it("leaves the speed unreported when no round was won", () => {

@@ -3,8 +3,9 @@
 // Nothing here invents a number. Every value traces to a rubric answer or to a field the log states
 // outright, which is why the adapters are pure and testable without a DOM.
 
-import type { LogWarning, GroupKind, GroupResult, Report, TapooLog, ValidationCheck } from "./types"
-import { formatCount } from "./utils"
+import { agentSeatLabel } from "./log-contract"
+import type { AgentSummary, LogWarning, GroupKind, GroupResult, Report, TapooLog, ValidationCheck } from "./types"
+import { capitalize, formatCount } from "./utils"
 
 /** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
  *
@@ -63,36 +64,25 @@ export function profileCards(
   ];
 }
 
-/** narrativeSummary states the run in a sentence: which model, through which provider, at what effort,
- * over how many predictions, and how fast a win came.
+/** narrativeSummary states, in a sentence, only what nothing else on the page says.
  *
- * It used to close by explaining what a NO means. That explanation is the method, not the finding, and
- * it was the third place on the page to say so - the hero lede and the methodology's third stage said
- * it too. It now lives only in "How this report is generated", the section named for exactly that, so
- * the summary reads as a result rather than as a result trailing its own disclaimer. */
+ * Twice now it has been trimmed for restating a neighbour. It used to close by explaining what a NO
+ * means, which is the method rather than the finding and was already in "How this report is generated".
+ * It then opened "gemma4, through ollama at max reasoning effort, demonstrated 5 of 9 capabilities" -
+ * three setup facts now held per seat in the Agents table, where a two-seat round can say which seat ran
+ * which, and a fraction the profile cards state directly beneath it as 5/9.
+ *
+ * What is left is the prediction count and the winning speed, which no card and no table carries. */
 export function narrativeSummary(report: Report): string {
-  const capabilities = report.capabilities.filter((group) => group.met).length;
   const speed =
     report.traversalSpeedClass !== null && Number.isFinite(report.traversalSpeed)
       ? `Winning traversal speed ${(report.traversalSpeed as number).toFixed(4)} (${report.traversalSpeedClass}).`
       : "No winning round in this sample.";
 
-  // Named in the summary, not only in the provenance table: a reader quoting one sentence about this
-  // agent should be quoting one that says what it was asked to do the work with.
-  const setup = [
-    report.apis.length > 0 ? `through ${report.apis.join(", ")}` : "",
-    report.reasoningEfforts.length > 0 ? `at ${report.reasoningEfforts.join(", ")} reasoning effort` : "",
-  ].filter(Boolean).join(" ");
-
-  // Which groups were met is on the cards below, so the sentence keeps only what no card says: who ran
-  // this round, through what, at what effort, over how many predictions, and how fast it finished.
   return [
-    `${report.model ?? "This agent"}${setup ? `, ${setup},` : ""} demonstrated ${capabilities} of ${report.capabilities.length} capabilities`,
-    `across ${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
+    `${formatCount(report.predictions)} prediction${report.predictions === 1 ? "" : "s"}.`,
     speed,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].join(" ");
 }
 
 /** groupResultTone names the class a group result should carry, or null for no colour at all.
@@ -207,8 +197,11 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
 }
 
 /** provenanceRows describe which build and which round produced the log, so a profile is never read
- * detached from what it was measured against. */
-export function provenanceRows(source: TapooLog, report: Report): Array<{field: string; value: string}> {
+ * detached from what it was measured against.
+ *
+ * Only what belongs to the file and the round. The model, provider, effort and player it used to carry
+ * describe a *seat*, and a round can seat more than one - see agentRows. */
+export function provenanceRows(source: TapooLog): Array<{field: string; value: string}> {
   return [
     // No source URL row. It is the one field here that is not read out of the log itself, the panel
     // above already carries the share link that identifies the same log, and a table cell is the
@@ -218,14 +211,72 @@ export function provenanceRows(source: TapooLog, report: Report): Array<{field: 
     {field: "Control mode", value: source.mode ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
     {field: "Log entries", value: formatCount(source.entries.length)},
-    {field: "Model", value: report.model ?? "not recorded"},
-    // The same model answers differently through a different provider, and differently again at a
-    // different reasoning effort. A verdict is only comparable to another taken under both, so neither
-    // is an implementation detail worth leaving out of provenance.
-    {field: "API provider", value: listOrNotRecorded(report.apis)},
-    {field: "Reasoning effort", value: listOrNotRecorded(report.reasoningEfforts)},
-    {field: "Player", value: report.player ?? "not recorded"}
   ];
+}
+
+/** Strips any userinfo from an endpoint before it is rendered.
+ *
+ * The endpoint is an address, and this file already keeps one out of the DOM - see the note above about
+ * a table cell being the most screenshotted place on the page. This address is wanted, a reader cannot
+ * compare two runs without knowing where each was answered, but `user:pass@host` must not be. Silent on
+ * a value that does not parse: an endpoint the URL constructor rejects carries no userinfo to strip.
+ */
+export function withoutCredentials(endpoint: string): string {
+  try {
+    const url = new URL(endpoint);
+    if (!url.username && !url.password) return endpoint;
+    url.username = "";
+    url.password = "";
+    return url.href;
+  } catch {
+    return endpoint;
+  }
+}
+
+/** The values one seat was running, each already rendered for reading - names capitalized, lists
+ * joined, credentials stripped - and each "" where the round stated none.
+ *
+ * Kept unjoined beside the sentence built from them because these four are the whole of what a reader
+ * comparing two seats compares, and a view that can weight them differently should not have to take the
+ * sentence apart again to find them. */
+export type AgentRunning = {
+  models: string;
+  provider: string;
+  endpoint: string;
+  effort: string;
+};
+
+/** One seat's row: the sentence to read, and the values it was built from. */
+export type AgentRow = {
+  field: string;
+  value: string;
+  running: AgentRunning;
+};
+
+/** agentRows says what each seat was running, one row per seat.
+ *
+ * Two columns, not five. Provenance was just changed from one wide row for the same reason: a column
+ * per fact trims its own values on a narrow viewport, and an endpoint is the widest value on the page.
+ * The seat is the row's name and the rest reads as a sentence, so a two-seat round is two lines rather
+ * than a grid to scan across. */
+export function agentRows(agents: AgentSummary[]): AgentRow[] {
+  return agents.map((agent, index) => {
+    const running: AgentRunning = {
+      models: listOrNotRecorded(agent.models),
+      provider: agent.apis.map(capitalize).join(", "),
+      endpoint: agent.endpoints.map(withoutCredentials).join(", "),
+      effort: agent.reasoningEfforts.join(", "),
+    };
+
+    const sentence = [
+      running.models,
+      running.provider === "" ? "" : `through ${running.provider}`,
+      running.endpoint === "" ? "" : `(${running.endpoint})`,
+      running.effort === "" ? "" : `at ${running.effort} reasoning effort`,
+    ].filter((part) => part !== "");
+
+    return {field: agentSeatLabel(agent, index), value: sentence.join(" "), running};
+  });
 }
 
 

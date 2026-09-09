@@ -523,6 +523,40 @@ a[href] {
   white-space: nowrap;
 }
 
+/* What one seat was running, in the Agents table.
+ *
+ * The three values a reader compares between two seats - the model, the provider, the effort - carry the
+ * weight, and the words joining them into a sentence do not: "through" and "at" are the same words on
+ * every row, so a row where they read as loudly as the values costs a reader a pass over each one to
+ * find the three that differ.
+ *
+ * Bold rather than tinted, and untinted unlike .rubric-code above. That chip means "defined elsewhere on
+ * this page, go look", and nothing on the page defines a model name. */
+.agent-value {
+  font-weight: 700;
+}
+
+/* Mono only for the model: it is a literal string copied out of the log, where "Ollama" and "max" are
+   this page's own wording for what the log spelled differently. */
+.agent-model {
+  font-family: var(--oracle-mono);
+  font-size: 0.92em;
+}
+
+.agent-joiner {
+  color: var(--oracle-muted);
+}
+
+/* Its own line, and breakable anywhere: a URL has no spaces to wrap at, so inline it either forced the
+   column wide or split mid-host wherever the cell happened to end. */
+.agent-endpoint {
+  display: block;
+  font-family: var(--oracle-mono);
+  font-size: 0.85em;
+  color: var(--oracle-muted);
+  overflow-wrap: anywhere;
+}
+
 /* One group per line, so the codes stack into a column down the left edge - the same reading order the
    rubric table below opens with, and the reason the code leads the name in the first place.
  *

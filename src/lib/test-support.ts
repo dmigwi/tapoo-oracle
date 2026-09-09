@@ -92,10 +92,7 @@ export function rendered(region: RegionView): HTMLElement {
 export function reportWith(...levels: Level[]): Report {
   return {
     label: "fixture",
-    model: null,
-    player: null,
-    apis: [],
-    reasoningEfforts: [],
+    agents: [],
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, finishReasons: []},
     predictions: 0,

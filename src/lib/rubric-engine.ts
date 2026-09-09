@@ -43,6 +43,7 @@ import type {
   Outcome,
   Submission,
   RubricGroup,
+  TurnSetup,
 } from "./types"
 
 // --- Reading a log entry ---
@@ -96,6 +97,30 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
 
 // --- Building the context ---
 
+const numberOrNull = (value: unknown): number | null => (typeof value === "number" ? value : null)
+const textOrNull = (value: unknown): string | null =>
+  typeof value === "string" && value !== "" ? value : null
+
+/** Merges what one entry said about a turn's seat into what is already known about it.
+ *
+ * Merged rather than overwritten because the facts arrive on two entries - the request carries the
+ * provider and effort, the response the model - and a turn is one seat's, so neither should erase the
+ * other. Only fields with something to say are written. */
+function noteSetup(context: Context, turn: number, seen: Partial<TurnSetup>): void {
+  const known = context.setupByTurn.get(turn) ?? {
+    seatId: null, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+  }
+  context.setupByTurn.set(turn, {
+    seatId: seen.seatId ?? known.seatId,
+    playerName: seen.playerName ?? known.playerName,
+    model: seen.model ?? known.model,
+    echoedModel: seen.echoedModel ?? known.echoedModel,
+    api: seen.api ?? known.api,
+    endpoint: seen.endpoint ?? known.endpoint,
+    reasoning: seen.reasoning ?? known.reasoning,
+  })
+}
+
 /** buildContext walks the log once and derives everything the questions need. It takes already-parsed
  * entries rather than a path so the same derivation serves a file on disk and a pasted payload. */
 export function buildContext(
@@ -126,6 +151,7 @@ export function buildContext(
     player: null,
     apis: new Set(),
     reasoningEfforts: new Set(),
+    setupByTurn: new Map(),
     replayByTurn: turnReports<Replay>(),
     output: {
       responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
@@ -180,6 +206,25 @@ export function buildContext(
       if (typeof details.reasoning === "string" && details.reasoning) {
         context.reasoningEfforts.add(details.reasoning)
       }
+
+      // The same facts kept per turn, which is what lets a seat be told from a seat. A round-wide set
+      // answers "which providers appeared in this file" - useful - but cannot answer "what was seat 2
+      // running", and a two-seat round needs the second question answered.
+      //
+      // Only the request's own flat fields. The `agent` record - {seatId, playerName, model, enabled} -
+      // is deliberately not read as a fallback here: in every log to hand it appears on the round-end
+      // entry and nowhere else, where it names whoever made the final dash rather than whoever played
+      // this turn. In a two-seat round those are different agents, so borrowing it would report the
+      // finisher's seat and model on every turn, including the turns the other seat played. The
+      // round-end record has its own reader, in agentsFromRound, which attributes it to that one seat.
+      noteSetup(context, currentTurn, {
+        seatId: numberOrNull(details.seatId),
+        playerName: textOrNull(details.playerName),
+        model: textOrNull(details.model),
+        api: textOrNull(details.api),
+        endpoint: textOrNull(details.endpoint),
+        reasoning: textOrNull(details.reasoning),
+      })
 
       for (const tool of asArray(details.tools).map(asRecord)) {
         // Logs record tools flat as { name, description }; the wire format nests them under
@@ -292,6 +337,14 @@ export function buildContext(
     if (entry.payload === LOG_EVENTS.response) {
       const body = asRecord(details.payload)
       context.model = typeof body.model === "string" ? body.model : context.model
+      // The provider's echo, recorded as its own field rather than as the model. The two differ -
+      // "gemma4:cloud" configured, "gemma4" answered - because an echo trims the ":provider" suffix
+      // saying where the model was served from, whoever serves it: Hugging Face answers
+      // "moonshotai/Kimi-K3" for "moonshotai/Kimi-K3:baseten". The declared name is the fuller one and
+      // the one to report; merging them would read as a seat that ran two models.
+      if (typeof body.model === "string" && body.model) {
+        noteSetup(context, currentTurn, {echoedModel: body.model})
+      }
 
       // Counted before the branches below, every one of which can skip the rest of this response. A
       // response with no usable message still cost tokens and still stopped for a reason, and a

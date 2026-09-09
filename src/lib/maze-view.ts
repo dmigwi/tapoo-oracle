@@ -9,10 +9,10 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { cellFromKey, getCellKey, isMove } from "./log-contract"
-import { DECAY_REASONS, MOST_DECAY, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelAgentStats, mazeLevelRows, mazeReplayModel, mazeStructureRows, type AgentLevelStats } from "./maze-model"
+import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
+import { DECAY_REASONS, MOST_DECAY, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
-import type { CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
 
 // --- Drawing constants ---
 
@@ -746,22 +746,42 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
 // five active seats are as legible as one: the card never shrinks to fit beside its neighbours.
 // Within the card, metrics are presented as a single-row horizontal table — column headers on top,
 // values below — so the label and its value share a column rather than a row.
-function agentStatsRow(stats: AgentLevelStats): HTMLElement {
+//
+// The numbers arrive already gathered on LevelModel.agents, one record per seat. They used to come as
+// four arrays lined up by index, where nothing but convention kept a speed beside the seat that ran it.
+// Formatting stays here because "18 of 24 (75%)" needs the maze's cell count, which is this view's.
+function agentStatsRow(model: LevelModel): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
+  const cells = model.stats?.cells ?? 0;
 
-  const metrics: Array<{label: string; key: keyof AgentLevelStats}> = [
+  const metrics: Array<{label: string; read: (agent: AgentSummary) => string}> = [
     // "Unique", not "new" and not bare "cells entered". The value counts each cell once however often
     // the agent went back to it, and this report is largely about how often they did - a label reading
     // "cells entered" beside an oscillating count would invite the two to be compared as if they
     // measured the same thing. "Unique" is also the log's own word: playerUniqueCellsVisited.
-    {label: "Unique cells", key: "cellsEntered"},
-    {label: "Decay units charged", key: "decayCharged"},
-    {label: "Traversal speed", key: "traversalSpeeds"},
+    {
+      label: "Unique cells",
+      read: (agent) =>
+        agent.uniqueCells === null || cells === 0
+          ? "not recorded"
+          : `${formatCount(agent.uniqueCells)} of ${formatCount(cells)} (${Math.round((agent.uniqueCells / cells) * 100)}%)`,
+    },
+    {
+      label: "Decay units charged",
+      read: (agent) => (agent.decayCharged === null ? "not recorded" : formatCount(agent.decayCharged)),
+    },
+    {
+      label: "Traversal speed",
+      read: (agent) =>
+        agent.traversalSpeed === null
+          ? "not recorded"
+          : `${classifyTraversalSpeed(agent.traversalSpeed)} (${agent.traversalSpeed.toFixed(4)})`,
+    },
   ];
 
-  stats.agents.forEach((agent, i) => {
+  model.agents.forEach((agent, i) => {
     const panel = createHtmlElement("div", "maze-agent-panel");
-    panel.append(createHtmlElement("p", "maze-agent-name", `${agent} \u00b7 Agent at Seat ${i + 1}`));
+    panel.append(createHtmlElement("p", "maze-agent-name", agentSeatLabel(agent, i)));
 
     const table = createHtmlElement("table", "maze-summary-table maze-agent-table");
     const head = createHtmlElement("thead");
@@ -769,9 +789,9 @@ function agentStatsRow(stats: AgentLevelStats): HTMLElement {
     const body = createHtmlElement("tbody");
     const bodyRow = createHtmlElement("tr");
 
-    for (const {label, key} of metrics) {
+    for (const {label, read} of metrics) {
       headRow.append(createHtmlElement("th", null, label));
-      bodyRow.append(createHtmlElement("td", null, stats[key][i] ?? ""));
+      bodyRow.append(createHtmlElement("td", null, read(agent)));
     }
 
     head.append(headRow);
@@ -873,7 +893,7 @@ export function createMazeReplay(report: Report): HTMLElement {
   let focused: CellKey | null = null;
 
   const colorOf = (name: string): string => {
-    const index = active.agents.indexOf(name);
+    const index = active.agents.findIndex((agent) => agent.name === name);
     return AGENT_COLORS[(index < 0 ? 0 : index) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
   };
 
@@ -1087,8 +1107,7 @@ export function createMazeReplay(report: Report): HTMLElement {
         ["Property", "Value"],
       ),
     );
-    const agentStats = mazeLevelAgentStats(model);
-    if (agentStats) levelPanel.append(agentStatsRow(agentStats));
+    if (model.stats && model.agents.length > 0) levelPanel.append(agentStatsRow(model));
 
     summary.append(
       summaryPanel("Maze", mazeStructureRows(model)),

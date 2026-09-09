@@ -17,6 +17,9 @@ import type { GroupKind, GroupResult, LogEntry, Report, RubricGroup } from "./ty
  * the difference the contract exists to preserve. */
 export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: string } = {}): Report {
   const context = buildContext(entries, { label })
+  // Built once and read twice: the report's agent summaries come from the same levels the replay draws,
+  // so the two cannot disagree about who played.
+  const levels = buildLevels(entries, context)
 
   const answerGroup = (
     {id, label: groupLabel, questions, evaluate}: RubricGroup,
@@ -42,10 +45,7 @@ export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: s
 
   return {
     label,
-    model: context.model,
-    player: context.player,
-    apis: [...context.apis],
-    reasoningEfforts: [...context.reasoningEfforts],
+    agents: levels.flatMap((level) => level.agents),
     output: {...context.output, finishReasons: [...context.output.finishReasons]},
     predictions: context.submissions.length,
     traversalSpeed: winningOutcome ? Number(winningOutcome.traversalSpeed) : null,
@@ -68,7 +68,7 @@ export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: s
     // The context this call already built, rather than a second identical one: answerRubric is
     // handed one round's entries, so buildLevels would regroup them into the one group it already
     // has and build the same context over the same entries again.
-    levels: buildLevels(entries, context),
+    levels,
   }
 }
 

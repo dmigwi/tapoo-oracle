@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest"
 
 import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
-import type {CellKey, EncodedMaze, Level, VisitStatus} from "./types"
+import {agentsFromRound} from "./log-contract"
+import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus} from "./types"
 import {at, query, queryAll, reportWith} from "./test-support";
 
 const REAL_MAZE = {
@@ -18,6 +19,24 @@ const REAL_MAZE = {
 }
 
 type LevelOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
+
+const TURNS: Turn[] = [
+  { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+  { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  {
+    turn: 2,
+    playerName: "Katara",
+    before: "2,0",
+    moves: ["MoveRight", "MoveUp"],
+    applied: 1,
+    cells: ["2,0", "2,1"],
+    rejectedMove: "MoveUp", decayCharged: null,
+  },
+]
+
+const OUTCOME: Outcome = {
+  outcome: "won", traversalSpeed: "1.0000", playerUniqueCellsVisited: 17, decayUnitsCharged: 17,
+}
 
 const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}): Level => ({
   identity: {game, level: lvl},
@@ -32,20 +51,10 @@ const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}
   observedExits: new Map(),
   visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
   positions: [],
-  turns: [
-    { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-    { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
-    {
-      turn: 2,
-      playerName: "Katara",
-      before: "2,0",
-      moves: ["MoveRight", "MoveUp"],
-      applied: 1,
-      cells: ["2,0", "2,1"],
-      rejectedMove: "MoveUp", decayCharged: null,
-    },
-  ],
-  outcome: { outcome: "won", traversalSpeed: "1.0000", playerUniqueCellsVisited: 17, decayUnitsCharged: 17 },
+  turns: TURNS,
+  outcome: OUTCOME,
+  // Derived the way buildLevels derives it, so the panels below are rendering the real parser's output.
+  agents: agentsFromRound(new Map(), TURNS, OUTCOME),
 })
 
 // The view shapes its own data now, so a test hands it the same report the page does.
