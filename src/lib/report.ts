@@ -58,6 +58,8 @@ export function answerRubric(entries: LogEntry[], { label = "log" }: { label?: s
     // reasoning behavior, so they are preserved as evidence but never scored as a violation.
     diagnostics: {
       endpointFailures: context.endpointFailures,
+      agentDisablings: context.agentDisablings,
+      harnessFailures: context.harnessFailures,
       emptyResponses: context.emptyResponses,
       unparseableResponses: context.unparseableResponses,
       tokenExhaustions: context.tokenExhaustions,

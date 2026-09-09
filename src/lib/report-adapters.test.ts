@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
-import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, warningHeadline} from "./report-adapters"
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
-import type {Report, LogTabsState, TapooLog} from "./types"
-import {analyzeLogText, at, expectErr, expectOk, firstRound, messagesOf, must} from "./test-support";
+import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
+import {analyzeLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
 // local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
@@ -269,21 +269,24 @@ describe("presentation", () => {
     // Null rather than the word "no": nothing scores an endpoint failure, and the table decides how to
     // print that. A display string here would put "no" and "V2.Q2" in one field, leaving the view to
     // tell a code from a word by looking at its characters.
-    expect(find("Endpoint failures").scoredBy).toBeNull()
-    expect(find("Empty responses").scoredBy).toBe("V2.Q2")
+    expect(find("Failed requests").scoredBy).toBeNull()
+    expect(find("Empty answers").scoredBy).toBe("V2.Q2")
   })
 
   it("pivots diagnostics into count and scoring rows", () => {
     const table = diagnosticTableData(fixtureReport)
     expect(table.columns).toEqual([
       "measure",
-      "Endpoint failures",
-      "Empty responses",
-      "Unparseable responses",
-      "Token cap exhaustions",
+      "Failed requests",
+      "Harness faults",
+      "Empty answers",
+      "Malformed predictions",
+      "Token cap hits",
+      "Times disabled",
     ])
-    expect(table.rows[0]).toMatchObject({measure: "Count", "Endpoint failures": 0})
-    expect(table.rows[1]).toMatchObject({measure: "Scored as", "Endpoint failures": "no"})
+    expect(table.rows[0]).toMatchObject({measure: "Count", "Failed requests": 0})
+    // "-" and not "no": nothing scores an endpoint failure, and "no" would read as a question answered.
+    expect(table.rows[1]).toMatchObject({measure: "Scored as", "Failed requests": "-"})
   })
 
   it("keeps the log address out of provenance", () => {
@@ -436,6 +439,77 @@ describe("modelOutputRows", () => {
 
   it("still says how many responses there were when nothing else was reported", () => {
     expect(modelOutputRows(reportWithOutput({responses: 1}))).toEqual([{field: "Responses", value: "1"}])
+  })
+})
+
+// The table reads in a declared order, not in whatever order three separate construction sites appended
+// their checks. Asserted on the adapter rather than on the page, because this is where the order is decided.
+// The counts reach the table, which nothing asserted end to end: the real capture is a clean run, so every
+// column reads zero and a count that never arrived would look exactly the same.
+describe("the diagnostics a round actually reports", () => {
+  it("carries a failed request and a harness fault through to the table", () => {
+    const analysis = analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const table = diagnosticTableData(firstRound(analysis))
+
+    expect(table.rows[0]).toMatchObject({
+      measure: "Count",
+      // One of each, and the two are counted apart: a request that never came back is somebody else's
+      // outage, a tool handler that threw is the harness breaking.
+      "Failed requests": 1,
+      "Harness faults": 1,
+      // The model itself answered every turn, so nothing it did is counted here.
+      "Empty answers": 0,
+      "Malformed predictions": 0,
+      "Token cap hits": 0,
+      // The round ran to its end - a failed request is not a disabling.
+      "Times disabled": 0,
+    })
+    // Neither is scored: the violation profile is about the model's reasoning.
+    expect(table.rows[1]).toMatchObject({"Failed requests": "-", "Harness faults": "-"})
+  })
+})
+
+describe("the order the validation table reads in", () => {
+  const check = (name: string, scope: "log" | "round" = "round"): ValidationCheck =>
+    ({name, scope, outcome: "passed", detail: "x"})
+
+  it("puts the file first, then the maze, then what the agent was shown, then who played", () => {
+    // Built in the order the code happens to produce them, which is not the order to read them in.
+    const rows = validationRows([
+      check("Agent settings"),
+      check("User warnings"),
+      check("Encoded maze"),
+      check("Model responses", "log"),
+      check("Seat roster"),
+      check("Trimmed checksummed repeats"),
+      check("Traversal payloads"),
+      check("Log entry fields", "log"),
+      check("Agent personas"),
+      check("Tool descriptions"),
+      check("Prompts and tool descriptions"),
+    ])
+
+    expect(rows.map((row) => row.field)).toEqual([
+      "Log entry fields*",
+      "Model responses*",
+      "Encoded maze",
+      "Traversal payloads",
+      "Prompts and tool descriptions",
+      "Trimmed checksummed repeats",
+      "Tool descriptions",
+      "Agent personas",
+      "User warnings",
+      "Seat roster",
+      "Agent settings",
+    ])
+  })
+
+  // A check nobody has placed yet is still a check a reader should see. Sorting it out of the table would
+  // hide a finding; sorting it last says there is one more thing, and where it belongs is undecided.
+  it("shows a check missing from the order, at the end", () => {
+    const rows = validationRows([check("Something new"), check("Encoded maze")])
+
+    expect(rows.map((row) => row.field)).toEqual(["Encoded maze", "Something new"])
   })
 })
 

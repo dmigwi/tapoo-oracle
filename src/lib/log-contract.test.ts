@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, seatIdentityCheck, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, seatRosterCheck, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
 import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
@@ -1018,7 +1018,7 @@ describe("a log whose seat changed model mid-round", () => {
       // No warning was issued, which is the good case and reads as one.
       ["User warnings", "passed"],
       ["Traversal payloads", "unchecked"],
-      ["Seat identity", "passed"],
+      ["Seat roster", "passed"],
       ["Agent settings", "failed"],
     ])
   })
@@ -1026,25 +1026,25 @@ describe("a log whose seat changed model mid-round", () => {
 
 // A seat is one player and a player is one seat. Both directions fail silently without a check, and they
 // fail differently - which is why the check reads the turns rather than the records they produce.
-describe("seatIdentityCheck", () => {
+describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
     turn, seatId, playerName, before: "0,0", moves: ["MoveDown"], applied: 1,
     cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null,
   })
 
   it("passes a round where each seat kept one player", () => {
-    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 2, "Bumi"), played(2, 1, "Katara")])
+    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 2, "Bumi"), played(2, 1, "Katara")])
 
     expect(check.outcome).toBe("passed")
     expect(check.detail).toBe("2 seats, one player each, throughout")
-    expect(seatIdentityCheck([played(0, 1, "Katara")]).detail).toBe("one seat, one player, throughout")
+    expect(seatRosterCheck([played(0, 1, "Katara")]).detail).toBe("one seat, one player, throughout")
   })
 
   // The destructive direction. The second turn matches the seat, so the record is found and its name kept,
   // and Bumi's turn is credited to Katara - one row on the page holding two agents' cells and charge, with
   // nothing about it out of place. Nothing downstream can find this, which is why it is caught here.
   it("reports one seat played under two players", () => {
-    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 1, "Bumi")])
+    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 1, "Bumi")])
 
     expect(check.outcome).toBe("failed")
     expect(check.detail).toBe(
@@ -1056,7 +1056,7 @@ describe("seatIdentityCheck", () => {
   // The visible direction: two records with one name, so the page shows the player twice and anything
   // reading a seat by name reaches whichever comes first.
   it("reports one player playing from two seats", () => {
-    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 2, "Katara")])
+    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 2, "Katara")])
 
     expect(check.outcome).toBe("failed")
     expect(check.detail).toMatch(/^Katara played from 2 seats \(1, 2\)/)
@@ -1065,7 +1065,7 @@ describe("seatIdentityCheck", () => {
   // A turn stating one of the two says nothing: a log that numbers no turn is the ordinary case, and this
   // check has no opinion on it.
   it("says nothing where no turn stated both a seat and a player", () => {
-    const check = seatIdentityCheck([played(0, null, "Katara"), played(1, 2, null)])
+    const check = seatRosterCheck([played(0, null, "Katara"), played(1, 2, null)])
 
     expect(check.outcome).toBe("unchecked")
     expect(check.detail).toBe("no turn stated both a seat and a player")

@@ -101,7 +101,10 @@ export function reportWith(...levels: Level[]): Report {
     traversalSpeedClass: null,
     capabilities: [],
     violations: [],
-    diagnostics: {endpointFailures: 0, emptyResponses: 0, unparseableResponses: 0, tokenExhaustions: 0},
+    diagnostics: {
+      endpointFailures: 0, emptyResponses: 0, unparseableResponses: 0, tokenExhaustions: 0,
+      agentDisablings: 0, harnessFailures: 0,
+    },
     levels,
   };
 }
@@ -146,7 +149,9 @@ export function analyzeLogText(
  * this suite.
  *
  * It exists because the real capture has one seat that never changed anything, so it cannot show what
- * agentSettingsCheck reports, or what the Agents cell does with a setting that moved. Everything but
+ * agentSettingsCheck reports, or what the Agents cell does with a setting that moved. It also carries one
+ * failed request and one harness fault, which the capture has none of, so the diagnostics table has
+ * something other than zeroes to render. Everything but
  * seat 1's model is held still, so the change is the only finding.
  *
  * Checksums are computed with the app's own hash, so the prompt and tool-description checks verify. The
@@ -165,9 +170,9 @@ export function twoSeatDriftLog(): Record<string, unknown> {
   const GAME = 4;
   const LEVEL = 12;
   let clock = 1788100000000;
-  const entry = (payload: string, details: unknown, turn: number) => ({
+  const entry = (payload: string, details: unknown, turn: number, log = "info") => ({
     epochMs: (clock += 1200), time: "2026-09-09 10:00:00",
-    turn, level: LEVEL, game: GAME, log: "info", payload, details,
+    turn, level: LEVEL, game: GAME, log, payload, details,
   });
 
   // One persona for the round: nobody's speed class changed, so the system prompt does not either.
@@ -237,6 +242,18 @@ export function twoSeatDriftLog(): Record<string, unknown> {
       // The change, and the only one in this log: same seat, same player, a model served elsewhere.
       ...turnOf(3, {...katara, model: "moonshotai/Kimi-K3:together"}, {row: 2, col: 0}, "MoveRight", ["MoveRight"], replayOf(["MoveDown"], [1, 0], 1)),
       ...turnOf(4, bumi, {row: 2, col: 1}, "MoveRight", ["MoveRight"], replayOf(["MoveRight"], [2, 0], 1)),
+      // Two failures that are nobody's reasoning, so the diagnostics table shows a figure rather than a
+      // column of zeroes. Logged at "error", which is the class both carry: a level that said otherwise
+      // would be a finding of its own - see levelDisagreements.
+      //
+      // A request that never came back, retried on the next turn.
+      entry("Request failed before a valid response.", {
+        endpoint: katara.endpoint, error: "TypeError: Failed to fetch",
+      }, 4, "error"),
+      // And a tool of Tapoo's own that threw, which is the harness breaking rather than the model failing.
+      entry("Tool request could not be serviced.", {
+        endpoint: katara.endpoint, requestCount: 2, toolNames: ["get_maze_structure"],
+      }, 4, "error"),
       entry("Agent level won.", {
         outcome: "won", traversalSpeed: "1.0000",
         agent: {seatId: 1, playerName: "Katara", model: "moonshotai/Kimi-K3:together", enabled: true},

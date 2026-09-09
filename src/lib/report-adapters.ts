@@ -115,9 +115,19 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
   )
 }
 
-/** diagnosticRows reports operational signals that are deliberately excluded from the violation
- * profile. Endpoint failures in particular can be caused by infrastructure outside the model's
- * reasoning, so the rubric notes require them to be preserved as evidence but never scored. */
+/** diagnosticRows reports operational signals, some of which the violation profile deliberately excludes.
+ *
+ * Named by what was counted and at which layer, because three of them would otherwise all be "responses"
+ * and two would both be "failures". A request that never came back is not the same event as an answer that
+ * came back empty, and a reader comparing two runs has to be able to tell which moved:
+ *
+ *   Failed requests, Harness faults - nothing reached the model, or nothing came back. Never scored: a
+ *   provider outage is not the model's reasoning, and a fault in Tapoo's own tooling is even less so.
+ *
+ *   Empty answers, Malformed predictions, Token cap hits - the model answered, and the answer is the
+ *   problem. Each of these has a rubric question behind it.
+ *
+ *   Times disabled - the round stopped. It bounds what every figure beside it covers. */
 export function diagnosticRows(
   report: Report,
 ): Array<{signal: string; count: number; scoredBy: string | null}> {
@@ -125,10 +135,12 @@ export function diagnosticRows(
   // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code
   // from a word was to look at the characters. The distinction is knowledge this table already has.
   return [
-    {signal: "Endpoint failures", count: report.diagnostics.endpointFailures, scoredBy: null},
-    {signal: "Empty responses", count: report.diagnostics.emptyResponses, scoredBy: "V2.Q2"},
-    {signal: "Unparseable responses", count: report.diagnostics.unparseableResponses, scoredBy: "V2.Q1"},
-    {signal: "Token cap exhaustions", count: report.diagnostics.tokenExhaustions, scoredBy: "V5.Q3"}
+    {signal: "Failed requests", count: report.diagnostics.endpointFailures, scoredBy: null},
+    {signal: "Harness faults", count: report.diagnostics.harnessFailures, scoredBy: null},
+    {signal: "Empty answers", count: report.diagnostics.emptyResponses, scoredBy: "V2.Q2"},
+    {signal: "Malformed predictions", count: report.diagnostics.unparseableResponses, scoredBy: "V2.Q1"},
+    {signal: "Token cap hits", count: report.diagnostics.tokenExhaustions, scoredBy: "V5.Q3"},
+    {signal: "Times disabled", count: report.diagnostics.agentDisablings, scoredBy: null}
   ];
 }
 
@@ -144,7 +156,7 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
       // Object.fromEntries on a heterogeneous array is `any`; the annotation is what keeps that from
       // becoming the declared row type.
       Object.fromEntries<unknown>([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count] as const)]),
-      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scoredBy ?? "no"] as const)]),
+      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scoredBy ?? "-"] as const)]),
     ],
   }
 }
@@ -305,6 +317,39 @@ export function agentRows(agents: AgentSummary[]): AgentRow[] {
 /** The mark a file-wide check carries, and the note that explains it. */
 export const LOG_SCOPE_MARK = "*";
 
+/** The order the validation table reads in, whatever order the checks were built in.
+ *
+ * A narrative, not a grouping. The file first - could these entries be read at all, and could the model's
+ * answers be read out of them - then the maze the round was played on, then what the agent was shown about
+ * it, then who was playing and under what. A reader going down the column is following the pipeline that
+ * produced the verdicts above the table.
+ *
+ * Declared here rather than left to construction order, because the checks are assembled in three separate
+ * places - the envelope parse, the round parse, and the composition in roundReportFor - so the order a
+ * reader sees would otherwise be an accident of where each one was appended, and a new check would land
+ * wherever its author happened to push it.
+ *
+ * A name missing from this list sorts to the end rather than vanishing: an unlisted check is a check to
+ * place, and a reader still sees it in the meantime. */
+const CHECK_ORDER = [
+  "Log entry fields",
+  "Model responses",
+  "Encoded maze",
+  "Traversal payloads",
+  "Prompts and tool descriptions",
+  "Trimmed checksummed repeats",
+  "Tool descriptions",
+  "Agent personas",
+  "User warnings",
+  "Seat roster",
+  "Agent settings",
+];
+
+const rank = (name: string): number => {
+  const at = CHECK_ORDER.indexOf(name);
+  return at === -1 ? CHECK_ORDER.length : at;
+};
+
 /** validationRows turns the checks an analyzer ran into rows a reader can scan.
  *
  * The outcome leads the value, not the name, so a column of results reads down: passed, passed,
@@ -319,8 +364,10 @@ export const LOG_SCOPE_MARK = "*";
  * an asterisk and one line of footnote says the same thing without asking anything of them. */
 export function validationRows(checks: ValidationCheck[]): Array<{field: string; value: string}> {
   const said = {passed: "passed", failed: "FAILED", unchecked: "not checked"};
-  return checks.map((check) => ({
-    field: `${check.name}${check.scope === "log" ? LOG_SCOPE_MARK : ""}`,
-    value: `${said[check.outcome]} - ${check.detail}`,
-  }));
+  return [...checks]
+    .sort((first, second) => rank(first.name) - rank(second.name))
+    .map((check) => ({
+      field: `${check.name}${check.scope === "log" ? LOG_SCOPE_MARK : ""}`,
+      value: `${said[check.outcome]} - ${check.detail}`,
+    }));
 }

@@ -352,6 +352,8 @@ export type Context = {
   unparseableResponses: number;
   endpointFailures: number;
   tokenExhaustions: number;
+  agentDisablings: number;
+  harnessFailures: number;
 };
 
 /** One turn's outcome, as get_last_prediction_outcome reported it to the turn after it.
@@ -529,6 +531,20 @@ export type Report = {
     emptyResponses: number;
     unparseableResponses: number;
     tokenExhaustions: number;
+    /** How many times the round was cut short by the agent being disabled after a network error.
+     *
+     * Its own count rather than folded into endpointFailures: a failed request is one turn answered
+     * badly, and being disabled is the agent leaving the round. A round that reports twelve endpoint
+     * failures and no disabling ran to its end; one that reports a disabling stopped playing, and every
+     * per-turn figure below it covers a shorter round than the log's turn count implies. */
+    agentDisablings: number;
+    /** Turns lost to the harness rather than to the model or the network: a provider the app could not
+     * dispatch to, and a tool of Tapoo's own that threw.
+     *
+     * Counted apart from endpointFailures because the answer to them is different. An endpoint failure is
+     * somebody else's outage and the run is still valid evidence about the model; these two are the
+     * measuring instrument breaking, and a round carrying them was not the experiment it reports. */
+    harnessFailures: number;
   };
   levels: Level[];
 };

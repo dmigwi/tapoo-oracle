@@ -90,8 +90,8 @@ const codeChip = (html: ReportUi["html"]) => (value: unknown): unknown =>
 function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement {
   const data = diagnosticTableData(report);
   // One column per signal, each holding a count in one row and its scoring question in the other. The
-  // signal's own scoredBy says which cell is the identifier - an unscored signal has none, so its "no"
-  // is never mistaken for one.
+  // signal's own scoredBy says which cell is the identifier - an unscored signal has none, so the "-" in
+  // its place is never chipped as though it were a code to look up.
   const chip = codeChip(html);
   const format = Object.fromEntries(
     diagnosticRows(report)
@@ -497,7 +497,7 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
       </section>
       <section class="events-section">
         <h2>Operational Diagnostics</h2>
-        <p class="section-note">Endpoint failures are excluded from the violation profile: they can be caused by infrastructure outside the model's reasoning behavior.</p>
+        <p class="section-note">Failed requests and harness faults are excluded from the violation profile: a provider outage and a fault in Tapoo's own tooling are not the model's reasoning. The columns with a rubric code beneath them are the ones a question scores.</p>
         ${diagnosticsTable(ui, report)}
       </section>
       <section class="events-section">

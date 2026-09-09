@@ -46,6 +46,11 @@ export const LOG_EVENTS = {
   tokenCapExhausted: "Agent exhausted the token cap without returning a prediction.",
   providerHttpFailure: "Provider HTTP response failed.",
   requestFailed: "Request failed before a valid response.",
+  agentDisabled: "Agent disabled after network error.",
+  emptyProviderResponse: "Provider response did not include a message.",
+  malformedPrediction: "Malformed agent prediction response.",
+  unsupportedProvider: "Unsupported agent API provider.",
+  toolServiceFailure: "Tool request could not be serviced.",
 } as const;
 
 // --- Log levels as classification ---
@@ -53,10 +58,9 @@ export const LOG_EVENTS = {
 /** levelClassOf reads an entry's level as the statement of accountability Tapoo means it to be - see
  * `LogLevel` for what each one says.
  *
- * This is worth reading because the payload sentence is not a complete vocabulary. A real 2,004-entry
- * log carries "Malformed agent prediction response." and "Recovered after a connection-error retry.",
- * neither of which appears in LOG_EVENTS - so both fall through every branch in buildContext and are
- * counted nowhere. The level classifies them anyway. */
+ * This is worth reading because the payload sentence is not a complete vocabulary. "Recovered after a
+ * connection-error retry." is written by a real log and named nowhere in LOG_EVENTS, so it falls through
+ * every branch in buildContext and is counted nowhere. The level classifies it anyway. */
 export function levelClassOf(level: LogLevel): LogClass {
   if (level === "warn") return "penalised";
   if (level === "error") return "external";
@@ -78,6 +82,11 @@ export const EVENT_CLASSES: Record<string, LogClass> = {
   [LOG_EVENTS.tokenCapExhausted]: "penalised",
   [LOG_EVENTS.providerHttpFailure]: "external",
   [LOG_EVENTS.requestFailed]: "external",
+  [LOG_EVENTS.agentDisabled]: "external",
+  [LOG_EVENTS.emptyProviderResponse]: "external",
+  [LOG_EVENTS.malformedPrediction]: "penalised",
+  [LOG_EVENTS.unsupportedProvider]: "external",
+  [LOG_EVENTS.toolServiceFailure]: "external",
 };
 
 /** KNOWN_EVENTS is the set of payload sentences the rubric can score. An entry outside it is readable

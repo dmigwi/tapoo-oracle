@@ -466,13 +466,13 @@ describe("payload validation", () => {
       "Log entry fields*",
       "Model responses*",
       "Encoded maze",
+      "Traversal payloads",
       "Prompts and tool descriptions",
       "Trimmed checksummed repeats",
       "Tool descriptions",
       "Agent personas",
       "User warnings",
-      "Traversal payloads",
-      "Seat identity",
+      "Seat roster",
       "Agent settings",
     ])
     expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)
@@ -676,14 +676,14 @@ describe("detail", () => {
       .toEqual(["gemma4"])
   })
 
-  // Which cells are identifiers comes from the data, not from what the text looks like. An unscored
-  // signal prints "no" and must stay plain: a rule that read the characters would be right about this
-  // one by luck and wrong the day the id scheme changes.
+  // Which cells are identifiers comes from the data, not from what the text looks like. An unscored signal
+  // prints "-" and must stay plain: a rule that read the characters would be right about this one by luck
+  // and wrong the day the id scheme changes.
   it("chips only the cells the data says are identifiers", () => {
     const chips = queryAll<HTMLElement>(detail(), ".rubric-code").map((code) => code.textContent)
     expect(chips.length).toBeGreaterThan(0)
     expect(chips).toContain("V2.Q2")
-    expect(chips).not.toContain("no")
+    expect(chips).not.toContain("-")
 
     // The count cells share a column with the scoring cells and are never identifiers.
     expect(chips.every((text) => /^[CV]\d+\.Q\d+$/.test(text ?? ""))).toBe(true)

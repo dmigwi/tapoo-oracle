@@ -314,6 +314,42 @@ describe("answerRubric", () => {
       expect(report.violations.every((entry) => entry.met === false)).toBe(true)
     })
 
+    // Counted apart from the failures that caused it. A failed request is one turn answered badly and can
+    // be retried; being disabled is the agent leaving the round, and that bounds what every figure beside
+    // it covers - the verdicts describe a round that stopped before the log's last turn.
+    it("counts each time the agent was disabled, apart from the failures behind it", () => {
+      const report = answerRubric([
+        ...turn(0, {content: '{"moves":["MoveUp"]}'}),
+        entry(LOG_EVENTS.requestFailed, {reason: "network"}, {log: "error"}),
+        entry(LOG_EVENTS.agentDisabled, {reason: "network"}, {log: "error"}),
+        entry(LOG_EVENTS.requestFailed, {reason: "network"}, {log: "error"}),
+        entry(LOG_EVENTS.agentDisabled, {reason: "network"}, {log: "error"}),
+      ])
+
+      expect(report.diagnostics.agentDisablings).toBe(2)
+      expect(report.diagnostics.endpointFailures).toBe(2)
+      // Never a violation: the network is not the model's reasoning.
+      expect(report.violations.every((entry) => entry.met === false)).toBe(true)
+    })
+
+    // The two faults nothing measured before: a provider the app never dispatched to, and a tool handler of
+    // Tapoo's that threw. Both stop the round and neither is the model's, so they are counted where a reader
+    // can see the round was not the experiment it reports - and kept out of endpointFailures, which is
+    // somebody else's outage and leaves the run valid evidence.
+    it("counts the harness's own failures apart from the endpoint's", () => {
+      const report = answerRubric([
+        ...turn(0, {content: '{"moves":["MoveUp"]}'}),
+        entry(LOG_EVENTS.unsupportedProvider, {api: "bedrock"}, {log: "error"}),
+        entry(LOG_EVENTS.toolServiceFailure, {toolNames: ["get_maze_structure"]}, {log: "error"}),
+        entry(LOG_EVENTS.providerHttpFailure, {status: 503}, {log: "error"}),
+      ])
+
+      expect(report.diagnostics.harnessFailures).toBe(2)
+      expect(report.diagnostics.endpointFailures).toBe(1)
+      // Never a violation: neither is something the model did.
+      expect(report.violations.every((entry) => entry.met === false)).toBe(true)
+    })
+
     it("counts a token cap exhaustion as both a diagnostic and resource waste", () => {
       const report = answerRubric([
         ...turn(0, {content: '{"moves":["MoveUp"]}'}),

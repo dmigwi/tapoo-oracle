@@ -1212,7 +1212,7 @@ function driftOf(agent: AgentSummary): string[] {
   });
 }
 
-/** seatIdentityCheck reports whether each seat kept one player and each player one seat.
+/** seatRosterCheck reports whether the round's seats and players line up one to one.
  *
  * Tapoo seats one player per seat, so the two name the same thing and a log that disagrees with itself
  * cannot be attributed. Both directions are silent failures without this, and they fail differently:
@@ -1229,8 +1229,8 @@ function driftOf(agent: AgentSummary): string[] {
  *
  * Turns that state only one of the two say nothing here - a legacy log numbers no turn, and this check has
  * no opinion on it. */
-export function seatIdentityCheck(turns: readonly Turn[]): ValidationCheck {
-  const name = "Seat identity";
+export function seatRosterCheck(turns: readonly Turn[]): ValidationCheck {
+  const name = "Seat roster";
   const scope = "round" as const;
   const playersBySeat = new Map<number, Set<string>>();
   const seatsByPlayer = new Map<string, Set<number>>();

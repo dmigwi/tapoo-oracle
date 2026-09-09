@@ -2,6 +2,7 @@ import {describe, expect, it} from "vitest"
 
 import {LOG_EVENTS, levelClassOf} from "./log-events"
 import {entriesForTurn, indexLog, levelDisagreements, unknownEvents} from "./log-index"
+import {EVENT_CLASSES} from "./log-events"
 import {at, must} from "./test-support"
 import type {LogEntry, LogLevel} from "./types"
 
@@ -122,19 +123,59 @@ describe("classification", () => {
   })
 
   it("names events the rubric has no question for", () => {
-    // Both of these are real: they appear in a 2,004-entry glm-5.1 log and in no LOG_EVENTS entry, so
-    // without it they fall through every branch in buildContext and are counted nowhere.
+    // Real, and named in no LOG_EVENTS entry: it appears in a 2,004-entry glm-5.1 log, so without this it
+    // falls through every branch in buildContext and is counted nowhere.
     const index = indexLog([
       entry(LOG_EVENTS.request),
-      entry("Malformed agent prediction response.", {log: "warn"}),
-      entry("Malformed agent prediction response.", {log: "warn"}),
       entry("Recovered after a connection-error retry.", {log: "warn"}),
+      entry("Recovered after a connection-error retry.", {log: "warn"}),
+      entry("Something Tapoo added later.", {log: "warn"}),
     ])
 
     expect(unknownEvents(index)).toEqual([
-      {payload: "Malformed agent prediction response.", count: 2},
-      {payload: "Recovered after a connection-error retry.", count: 1},
+      {payload: "Recovered after a connection-error retry.", count: 2},
+      {payload: "Something Tapoo added later.", count: 1},
     ])
+  })
+
+  // Every sentence the agent-api request loop writes, checked against the vocabulary in one place. This is
+  // the list that decides whether an event is recognised at all, and a sentence missing from it is counted
+  // nowhere and cross-checked against nothing - so it is asserted as a set rather than one at a time.
+  it("recognises every sentence the request loop writes", () => {
+    const written = [
+      "Agent level started.",
+      "Agent request.",
+      "Agent response.",
+      "Unsupported agent API provider.",
+      "Provider HTTP response failed.",
+      "Provider response did not include a message.",
+      "Agent exhausted the token cap without returning a prediction.",
+      "Malformed agent prediction response.",
+      "Agent kept re-requesting already-called tools after being told so.",
+      "Agent requested an unknown or hallucinated tool.",
+      "Tool request could not be serviced.",
+      "Request failed before a valid response.",
+      // Written by the control layer rather than the request loop, when a failure takes the agent out.
+      "Agent disabled after network error.",
+    ]
+
+    const index = indexLog(written.map((payload) => entry(payload, {log: "info"})))
+    expect(unknownEvents(index)).toEqual([])
+
+    // And each carries a class, so a level that contradicts it is a finding rather than silence.
+    expect(written.filter((payload) => EVENT_CLASSES[payload] === undefined)).toEqual([])
+  })
+
+  // The sentence this check exists to find, once it is found. An unmodelled event is readable and real and
+  // counted nowhere, so naming it in LOG_EVENTS is what moves it out of this list and into a figure -
+  // "Times disabled" in the diagnostics.
+  it("no longer reports a disabling as an event it cannot name", () => {
+    const index = indexLog([entry(LOG_EVENTS.agentDisabled, {log: "error"})])
+
+    expect(unknownEvents(index)).toEqual([])
+    // Classed as the network's doing, like the failures behind it, so it never reaches the profile.
+    expect(index.summary.external).toBe(1)
+    expect(levelDisagreements([entry(LOG_EVENTS.agentDisabled, {log: "error"})])).toEqual([])
   })
 
   it("counts an unknown event by its level even though it cannot name it", () => {

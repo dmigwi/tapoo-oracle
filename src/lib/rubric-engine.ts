@@ -175,6 +175,8 @@ export function buildContext(
     emptyResponses: 0,
     unparseableResponses: 0,
     endpointFailures: 0,
+    agentDisablings: 0,
+    harnessFailures: 0,
     tokenExhaustions: 0,
   }
 
@@ -413,6 +415,17 @@ export function buildContext(
       // Scoped to the agent's own endpoint. Failures inside Tapoo's tool handlers also disable the
       // agent but are Tapoo's fault, so they are deliberately not counted here.
       context.endpointFailures += 1
+    } else if (
+      entry.payload === LOG_EVENTS.unsupportedProvider ||
+      entry.payload === LOG_EVENTS.toolServiceFailure
+    ) {
+      // Not the model's and not the network's: a provider the app never dispatched to, and a tool handler
+      // of Tapoo's that threw. This is the count the endpointFailures comment above defers.
+      context.harnessFailures += 1
+    } else if (entry.payload === LOG_EVENTS.agentDisabled) {
+      // Counted apart from the failure that caused it. A request can fail and be retried; this is the
+      // point the agent stopped playing, so it bounds what the rest of the round can be read to mean.
+      context.agentDisablings += 1
     } else if (entry.payload === LOG_EVENTS.levelWon || entry.payload === LOG_EVENTS.levelLost) {
       const outcome = details as Outcome
       context.outcomes.push(outcome)
