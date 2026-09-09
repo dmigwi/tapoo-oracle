@@ -6,7 +6,7 @@
 // Pure - no document, no Observable globals. The control that renders these lives in
 // log-tabs-control.ts; keeping the reducers here is what lets them be tested in node.
 
-import { agentSettingsCheck, parseGameRound } from "./log-contract"
+import { agentSettingsCheck, parseGameRound, seatIdentityCheck } from "./log-contract"
 import { loadTapooLogFromUrl } from "./share-link"
 import { answerRubric } from "./report"
 import { groupEntriesByRound, roundLabel } from "./rounds"
@@ -85,7 +85,17 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
     // Composed here because the check needs both halves: parseGameRound reads the round's payloads and
     // knows nothing of seats, while the summaries come from the answered report. Neither should have to
     // reach for the other to say whether a seat's setup held for the whole round.
-    round: {...round, checks: [...round.checks, agentSettingsCheck(report.agents)]},
+    round: {
+      ...round,
+      checks: [
+        ...round.checks,
+        // Over the round's turns, which is where a seat and a player are stated together. A slice is one
+        // round, so its levels are that round's - flattened rather than indexed, because a round that
+        // decoded no maze still has turns to check.
+        seatIdentityCheck(report.levels.flatMap((level) => level.turns)),
+        agentSettingsCheck(report.agents),
+      ],
+    },
   };
   answered.set(slice, resolved);
   return resolved;

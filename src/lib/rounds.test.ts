@@ -1,7 +1,7 @@
 import {describe, expect, it} from "vitest"
 
 import {LOG_EVENTS} from "./log-events"
-import {buildLevels, gameIdentityKey} from "./rounds"
+import {buildLevels, gameIdentityKey, resolveActiveAgentNames} from "./rounds"
 import {at} from "./test-support"
 import type {LogEntry, LogLevel} from "./types"
 
@@ -23,6 +23,77 @@ const REAL_MAZE = {
 
 const prediction = (moves: string[], turn: number, round: {game?: number; level?: number} = {}) =>
   entry(LOG_EVENTS.response, {payload: {message: {content: JSON.stringify({moves})}}}, {turn, ...round})
+
+// Every per-seat figure is joined by the name this returns, and a turn it cannot attribute is a turn whose
+// charge, cells and setup belong to nobody - reported as a round with fewer agents than it had, with
+// nothing on the page saying so. Tested directly for that reason: the failure leaves no trace to assert on
+// further downstream.
+// Every per-seat figure is joined by the name this returns, and a turn it cannot attribute is a turn whose
+// charge, cells and setup belong to nobody - reported as a round with fewer agents than it had, with
+// nothing on the page saying so. Tested directly for that reason: the failure leaves no trace to assert on
+// further downstream.
+describe("resolveActiveAgentNames", () => {
+  const request = (turn: number, details: Record<string, unknown>) =>
+    entry(LOG_EVENTS.request, details, {turn})
+  const names = (entries: LogEntry[]) => [...resolveActiveAgentNames(entries)]
+
+  // Two sources, and this is the order. A name stated about the turn itself outranks the label, so the
+  // label here is wrong and ignored.
+  it("takes the name the request states over the label", () => {
+    expect(names([request(0, {playerName: "Katara", player: "Bumi the Navigator - 1.0000x"})]))
+      .toEqual([[0, "Katara"]])
+  })
+
+  // The label alone is enough, whatever else the log does or does not say. Nothing is harvested from the
+  // round-end records or the tool results to make this work.
+  it("reads the player out of the label, with no other entry in the log", () => {
+    expect(names([request(0, {player: "Katara the Trailblazer - Default"})])).toEqual([[0, "Katara"]])
+    expect(names([request(0, {player: "Momo the Backtracker - 0.4360x"})])).toEqual([[0, "Momo"]])
+    expect(names([request(0, {player: "Aang the Navigator - 1.0000x"})])).toEqual([[0, "Aang"]])
+  })
+
+  // The case a split on " the " gets wrong: a name may contain the phrase and still fit in eight characters,
+  // and this reads it whole rather than cutting at the first occurrence.
+  it("reads a name that itself contains the phrase the label separates on", () => {
+    expect(names([request(0, {player: "A the B the Navigator - 0.5000x"})])).toEqual([[0, "A the B"]])
+  })
+
+  // A name is 3 to 8 characters, so a longer or shorter run in that position is not one. Checking it is
+  // what makes this a parse: without the bound, "Self-taught the Navigator - 1.0x" reports a player.
+  it("rejects a label whose name is outside the length a name can be", () => {
+    expect(names([request(0, {player: "Self-taught the Navigator - 1.0000x"})])).toEqual([])
+    expect(names([request(0, {player: "Ka the Navigator - 1.0000x"})])).toEqual([])
+  })
+
+  // The personas are stated, so a fourth stops resolving rather than resolving to something wrong. It shows
+  // as a seat missing from the round, which is the failure to watch for if Tapoo adds one.
+  it("rejects a label naming a persona this does not know", () => {
+    expect(names([request(0, {player: "Katara the Wayfinder - 1.0000x"})])).toEqual([])
+  })
+
+  // The shape is the whole of it: a bare name is not a label, and neither is a label missing its speed.
+  it("rejects anything that is not the label's shape", () => {
+    expect(names([request(0, {player: "Katara"})])).toEqual([])
+    expect(names([request(0, {player: "Katara the Navigator"})])).toEqual([])
+    expect(names([request(0, {player: ""})])).toEqual([])
+  })
+
+  // One turn, one seat. A retry of a turn is that seat asking again, so the first request answers for it and
+  // a later one cannot move the turn to somebody else.
+  it("keeps the first request's answer for a turn that was retried", () => {
+    expect(names([request(0, {playerName: "Katara"}), request(0, {playerName: "Bumi"})]))
+      .toEqual([[0, "Katara"]])
+  })
+
+  // Only requests attribute a turn. A round-end record names whoever finished rather than whoever played
+  // the turn it sits on, and reading it here would give a two-seat round one player.
+  it("reads only requests", () => {
+    expect(names([
+      entry(LOG_EVENTS.response, {payload: {message: {content: "{}"}}}, {turn: 0}),
+      entry(LOG_EVENTS.levelWon, {outcome: "won", agent: {playerName: "Katara"}}, {turn: 1}),
+    ])).toEqual([])
+  })
+})
 
 describe("which round an entry belongs to", () => {
   // The bug this exists for: `entry.game ?? 0` was read per entry, so an entry that did not name its

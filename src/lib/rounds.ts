@@ -15,77 +15,56 @@ import { asArray, asRecord } from "./utils"
 export { gameIdentityKey } from "./log-index"
 import type { CellKey, Context, EncodedMaze, GameIdentity, Level, LogEntry, Replay, Turn } from "./types"
 
-// resolveActingAgents maps each turn number to the raw playerName that acted on it.
-//
-// A request that names its own player is taken at its word - details.playerName. That is the shape Tapoo
-// is moving to, and it needs no recovery at all.
-//
-// Older logs record the acting seat only as a decorated label - "Katara the Trailblazer - Default" - not
-// a bare name, so the name is recovered by matching against the names the log states outright: every
-// filteredTraversalHistory entry and every round-end agent record. Matching rather than splitting on
-// " the " matters because a player may name themselves anything, including something containing that
-// phrase; an unmatched label is left unattributed rather than guessed at.
-//
-// This is the only thing that attributes a turn, and every per-seat figure is joined by the name it
-// returns - so a request whose stated name went unread would be a turn belonging to nobody, and a seat
-// that acted would go unreported unless the round-end record happened to name it.
-function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
-  const known = new Set<string>()
-  for (const entry of entries) {
-    const details = asRecord(entry.details)
-    const agentName = asRecord(details.agent).playerName
-    if (typeof agentName === "string" && agentName) {
-      known.add(agentName)
-    }
+/** The decorated label a request carries, and the player's name inside it.
+ *
+ * Tapoo writes "<player> the <Persona> - <speed>": "Katara the Trailblazer - Default",
+ * "Momo the Backtracker - 0.4360x". Three personas, and a name of 3 to 8 characters.
+ *
+ * The name is whatever precedes " the <Persona> - ", which is a different rule from splitting on " the ":
+ * a name may itself contain that phrase and still fit in eight characters, and a split hands back "A"
+ * where the player is "A the B".
+ *
+ * Both bounds and the persona set are stated rather than assumed, and together they leave one reading of
+ * any label. A name of 11 characters in that position is not a player, so a string of this shape reports
+ * nobody rather than inventing one; the quantifier's greediness does no work here, because within three to
+ * eight characters no label admits two parses.
+ *
+ * The cost of naming the personas is that a fourth stops resolving until it is added - visible as a seat
+ * missing from the round, which is the failure to watch for if Tapoo adds one. */
+const PLAYER_LABEL = /^(.{3,8}) the (?:Backtracker|Navigator|Trailblazer) - .+$/
 
-    for (const message of asArray(details.messages).map(asRecord)) {
-      if (message.role !== "tool") {
-        continue
-      }
-      try {
-        const payload = asRecord(JSON.parse(typeof message.content === "string" ? message.content : ""))
-        for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
-          if (typeof record.playerName === "string" && record.playerName) {
-            known.add(record.playerName)
-          }
-        }
-      } catch {
-        // Not a JSON tool result; nothing to learn from it here.
-      }
-    }
-  }
-
-  // Longest first, so a name that is a prefix of another cannot claim the other's turns.
-  const names = [...known].sort((first, second) => second.length - first.length)
+/** resolveActiveAgentNames maps each turn number to the name of the agent that was active on it.
+ *
+ * Active is the whole of what a turn records about a seat: only an active agent may predict, so a request
+ * is a turn taken by exactly one of them, and the name on it is that agent's.
+ *
+ * Exported for its own tests rather than for a caller: nothing outside this file needs it, and everything
+ * per-seat is joined by the name it returns - a turn it leaves unattributed is a turn whose charge, cells
+ * and setup belong to nobody, and a seat that acted goes unreported. A failure here is silent by
+ * construction, so it is checked directly.
+ *
+ * Two sources, and the request carries both. `details.playerName` is the name stated outright, which needs
+ * no recovery at all; `details.player` is the decorated label, which PLAYER_LABEL reads. Nothing else in
+ * the log is consulted - a round-end record names only whoever finished, and reading it here would
+ * attribute every turn of a two-seat round to one of them.
+ *
+ * This is the only thing that attributes a turn. */
+export function resolveActiveAgentNames(entries: LogEntry[]): Map<number, string> {
   const byTurn = new Map<number, string>()
+
   for (const entry of entries) {
-    if (entry.payload !== LOG_EVENTS.request || typeof entry.turn !== "number") {
-      continue
-    }
+    if (entry.payload !== LOG_EVENTS.request || typeof entry.turn !== "number") continue
+    // One turn, one seat. A retry of a turn is that seat asking again, so the first request answers for it.
+    if (byTurn.has(entry.turn)) continue
 
     const details = asRecord(entry.details)
-    // Stated outright by the request itself, and not matched against the known names: a name the log
-    // states is the answer, and requiring it to appear elsewhere first would drop the one seat that
-    // acted but never reached a traversal history or a round-end record.
-    //
-    // details.agent.playerName is deliberately not accepted here. That record lives on the round-end
-    // entry, naming whoever finished the round - so on a two-seat round it would attribute every turn to
-    // one of them, including the turns the other played.
-    const stated = details.playerName
-    if (typeof stated === "string" && stated !== "") {
-      if (!byTurn.has(entry.turn)) byTurn.set(entry.turn, stated)
+    if (typeof details.playerName === "string" && details.playerName !== "") {
+      byTurn.set(entry.turn, details.playerName)
       continue
     }
 
-    const label = details.player
-    if (typeof label !== "string") {
-      continue
-    }
-
-    const name = names.find((candidate) => label === candidate || label.startsWith(`${candidate} `))
-    if (name && !byTurn.has(entry.turn)) {
-      byTurn.set(entry.turn, name)
-    }
+    const name = typeof details.player === "string" ? PLAYER_LABEL.exec(details.player)?.[1] : undefined
+    if (name) byTurn.set(entry.turn, name)
   }
 
   return byTurn
@@ -193,10 +172,10 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
     const context = answered !== undefined && groups.length === 1
       ? answered
       : buildContext(groupEntries, { label: gameIdentityKey(identity) })
-    const started = asRecord(
+    const initLevelLog = asRecord(
       groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
     )
-    const actingAgents = resolveActingAgents(groupEntries)
+    const activeAgentNames = resolveActiveAgentNames(groupEntries)
 
     // Keyed by the turn it covers, so this is a plain lookup. The offset behind that - Tapoo reports a
     // prediction's outcome on the request that follows it - belongs to the store holding these records,
@@ -215,9 +194,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
       // Only trusted when it describes this turn's prediction. If the two disagree the cursor has
       // landed on someone else's record, and a wrong path drawn confidently is worse than a derived
       // one - so it falls through to the derivation instead.
-      const trusted =
-        record !== null &&
-        reported !== null &&
+      const trusted = record !== null && reported !== null &&
         reported.length === submission.moves.length &&
         reported.every((move, index) => move === submission.moves[index])
 
@@ -247,7 +224,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
       const turn: Turn = {
         turn: submission.turn,
         seatId: context.setupByTurn.get(submission.turn)?.seatId ?? null,
-        playerName: actingAgents.get(submission.turn) ?? null,
+        playerName: activeAgentNames.get(submission.turn) ?? null,
         before,
         moves: submission.moves,
         applied,
@@ -284,7 +261,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
       turns.push({
         turn,
         seatId: context.setupByTurn.get(turn)?.seatId ?? null,
-        playerName: actingAgents.get(turn) ?? null,
+        playerName: activeAgentNames.get(turn) ?? null,
         before: null,
         moves: [],
         applied: 0,
@@ -365,18 +342,18 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
       }
     }
 
-    const startPosition = (started.startPosition ?? null)
+    const startPosition = (initLevelLog.startPosition ?? null)
     const level: Level = {
       identity,
-      encodedMaze: (started.maze ?? null) as EncodedMaze | null,
+      encodedMaze: (initLevelLog.maze ?? null) as EncodedMaze | null,
       startPosition,
       startCell: cellFromGridPoint(startPosition),
       // Read through the contract's reader rather than assumed to be {row, col}: the same field
       // arrives compacted as [row, col] in a downloaded log, and reading it directly is what left the
       // destination undrawn and the shortest route reported as "no route found".
-      destinationCell: cellKeyFromLogged(started.destinationCell),
+      destinationCell: cellKeyFromLogged(initLevelLog.destinationCell),
       historyWindowRadius:
-        typeof started.historyWindowRadius === "number" ? started.historyWindowRadius : null,
+        typeof initLevelLog.historyWindowRadius === "number" ? initLevelLog.historyWindowRadius : null,
       endCell,
       observedExits: context.exits,
       visitStatusAfterTurn: context.visitStatusAfterTurn,

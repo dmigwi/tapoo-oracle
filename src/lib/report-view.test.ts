@@ -472,6 +472,7 @@ describe("payload validation", () => {
       "Agent personas",
       "User warnings",
       "Traversal payloads",
+      "Seat identity",
       "Agent settings",
     ])
     expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)

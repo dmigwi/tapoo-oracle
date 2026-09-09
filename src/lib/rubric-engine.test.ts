@@ -587,7 +587,7 @@ describe("buildLevels", () => {
     expect(firstLevel(report).startCell).toBe("0,0")
   })
 
-  it("attributes a turn to the acting agent named in the request", () => {
+  it("attributes a turn to the active agent named in the request", () => {
     const report = answerRubric([
       entry(LOG_EVENTS.request, {
         player: "Katara the Trailblazer - Default",

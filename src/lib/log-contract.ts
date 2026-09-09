@@ -990,8 +990,18 @@ export function agentsFromRound(
 ): AgentSummary[] {
   const seats: AgentSummary[] = []
 
-  // Two side tables keyed by the record itself rather than by a name, so nothing here has to agree with
-  // anything else about what identifies a seat - seatFor below is the single answer to that.
+  // Two side tables keyed by the record itself, never by anything read off it. seatInfoAt below is the one
+  // answer to which seat a turn belongs to, and a derived key would be a second - free to disagree with it,
+  // and wrong in three ways:
+  //
+  //   By name, two seats that state their numbers and no player both answer to "".
+  //   By seat number, every seat on a log that numbers no turn answers to null.
+  //   By the two joined, a seat whose number arrives on a later turn changes key mid-pass, and everything
+  //   filed under the old one is orphaned - half a walk, half its echoes.
+  //
+  // A Map keyed by an object matches on the reference and never reads what is inside, so the arrays these
+  // records carry cost nothing to key on, and filling them in while the record is a key is safe. Which is
+  // just as well: the fold does exactly that.
   //
   // The echoes are held apart from what was declared. An echo drops the ":provider" suffix that says
   // where the model was served from - "gemma4" for a declared "gemma4:cloud", and on Hugging Face
@@ -1023,12 +1033,12 @@ export function agentsFromRound(
    *
    * Tapoo gives each seat one player and one id, so either identifies a seat on its own. The stated seat
    * is preferred because it is stated: it arrives on the request as a number, where the name arrives only
-   * after resolveActingAgents has recovered it from a decorated label, which can fail - and a turn whose
+   * after resolveActiveAgentNames has recovered it from a decorated label, which can fail - and a turn whose
    * recovery failed still says outright which seat played it.
    *
    * Falls back to the name because a log that states no seat is still the common case, and to null: a
    * turn with neither cannot be attributed, and guessing which seat it was is worse than saying nothing. */
-  const seatFor = (seatId: number | null, name: string): AgentSummary | null => {
+  const seatInfoAt = (seatId: number | null, name: string): AgentSummary | null => {
     if (seatId !== null) {
       const stated = seats.find((seat) => seat.seatId === seatId)
       // A record can be made before its name is known - a turn that states its seat and no name - so the
@@ -1073,7 +1083,7 @@ export function agentsFromRound(
     // The seat off the turn, not off the setup map beside it. Both carry it - buildLevels fills one from
     // the other - but the replay reads the turn, and one authority is what keeps a trail's colour and
     // the row above it naming the same seat.
-    const seat = seatFor(turn.seatId, turn.playerName ?? "")
+    const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
     if (!seat) continue
 
     if (setup) {
@@ -1105,17 +1115,35 @@ export function agentsFromRound(
   const owner = asTrimmedText(record.playerName)
   const ownerSeatId = typeof record.seatId === "number" ? record.seatId : null
 
-  // A seat the outcome names but no turn produced still played. That happens when a log's requests carry
-  // nothing to attribute turns by, and dropping the seat there would report a round as having no agents
-  // at all when the log plainly names one.
-  const finisher =
-    (ownerSeatId === null ? undefined : seats.find((seat) => seat.seatId === ownerSeatId)) ??
-    (owner === "" ? undefined : seats.find((seat) => seat.name === owner)) ??
-    (owner === "" && ownerSeatId === null
-      ? seats.length === 1
-        ? seats[0]
-        : undefined
-      : emptySummary(owner, ownerSeatId))
+  /** Which seat the outcome is about, or undefined where the round cannot say.
+   *
+   * Four cases in order, each a different question about the same record. Ordered, not combined: the
+   * later ones are only right once the earlier ones have found nothing, and the last has a side effect. */
+  const resolveFinisher = (): AgentSummary | undefined => {
+    // The seat it states. That is the log's own answer, and it holds even for a seat whose name no turn
+    // resolved.
+    if (ownerSeatId !== null) {
+      const stated = seats.find((seat) => seat.seatId === ownerSeatId)
+      if (stated) return stated
+    }
+
+    // The name it states, which is all a log that numbers no turn has to offer.
+    if (owner !== "") {
+      const named = seats.find((seat) => seat.name === owner)
+      if (named) return named
+    }
+
+    // It names nobody, so there is nothing to match on. One seat played means one seat owns the outcome;
+    // with several, attributing it would be guessing, and the guess would credit whoever acted first.
+    if (owner === "" && ownerSeatId === null) return seats.length === 1 ? seats[0] : undefined
+
+    // It names a seat no turn produced - which happens when a log's requests carry nothing to attribute
+    // turns by. That seat played and the outcome is the log saying so, so it joins the roster here:
+    // dropping it reports a round as having no agents at all while the log plainly names one.
+    return emptySummary(owner, ownerSeatId)
+  }
+
+  const finisher = resolveFinisher()
 
   if (finisher) {
     const speed = Number(outcome?.traversalSpeed)
@@ -1182,6 +1210,69 @@ function driftOf(agent: AgentSummary): string[] {
     const counted = `${formatCount(held.length)} ${field.label}`;
     return field.values ? `${counted} (${held.join(", ")})` : counted;
   });
+}
+
+/** seatIdentityCheck reports whether each seat kept one player and each player one seat.
+ *
+ * Tapoo seats one player per seat, so the two name the same thing and a log that disagrees with itself
+ * cannot be attributed. Both directions are silent failures without this, and they fail differently:
+ *
+ *   One seat, two players. The second turn is credited to the first player - the seat matches, so the
+ *   record is found and its name kept - and the other player's turn disappears into it. One row on the
+ *   page, its cells and charge holding two agents' work.
+ *
+ *   One player, two seats. Two records with the same name, so the page shows the player twice, and
+ *   anything that reads a seat by name reaches whichever comes first.
+ *
+ * Read off the turns rather than the summaries, because a summary is what the disagreement destroys: the
+ * first case leaves one record with nothing about it out of place.
+ *
+ * Turns that state only one of the two say nothing here - a legacy log numbers no turn, and this check has
+ * no opinion on it. */
+export function seatIdentityCheck(turns: readonly Turn[]): ValidationCheck {
+  const name = "Seat identity";
+  const scope = "round" as const;
+  const playersBySeat = new Map<number, Set<string>>();
+  const seatsByPlayer = new Map<string, Set<number>>();
+
+  for (const turn of turns) {
+    const player = asTrimmedText(turn.playerName);
+    if (turn.seatId === null || player === "") continue;
+    (playersBySeat.get(turn.seatId) ?? playersBySeat.set(turn.seatId, new Set()).get(turn.seatId)!).add(player);
+    (seatsByPlayer.get(player) ?? seatsByPlayer.set(player, new Set()).get(player)!).add(turn.seatId);
+  }
+
+  if (playersBySeat.size === 0) {
+    return {name, scope, outcome: "unchecked", detail: "no turn stated both a seat and a player"};
+  }
+
+  const findings = [
+    ...[...playersBySeat].filter(([, players]) => players.size > 1).map(
+      ([seatId, players]) => `seat ${seatId} played as ${formatCount(players.size)} players (${[...players].join(", ")})`,
+    ),
+    ...[...seatsByPlayer].filter(([, seatIds]) => seatIds.size > 1).map(
+      ([player, seatIds]) => `${player} played from ${formatCount(seatIds.size)} seats (${[...seatIds].join(", ")})`,
+    ),
+  ];
+
+  if (findings.length > 0) {
+    return {
+      name,
+      scope,
+      outcome: "failed",
+      detail: `${findings.join("; ")} - a seat is one player and a player is one seat, so these turns cannot be told apart`,
+    };
+  }
+
+  return {
+    name,
+    scope,
+    outcome: "passed",
+    detail:
+      playersBySeat.size === 1
+        ? "one seat, one player, throughout"
+        : `${formatCount(playersBySeat.size)} seats, one player each, throughout`,
+  };
 }
 
 /** agentSettingsCheck reports whether each seat answered under one setup for the whole round.

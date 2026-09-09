@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, seatIdentityCheck, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
 import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
@@ -764,11 +764,12 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     ])
   })
 
-  // The join is by name, and today a name is recovered from the decorated label by matching it against
-  // the names the log states elsewhere - a traversal history, a round-end record. A seat that appears in
-  // neither is unattributable from its label alone, and an unattributed turn is a turn belonging to no
-  // seat: its charge, its cells and its whole setup go unreported. A stated playerName settles it
-  // outright, which is what reading it buys even though the label is never going away.
+  // The join is by name, and the label is where a legacy log puts it: "Aang the Backtracker - 0.9591x".
+  // The name is read out of the label itself, so a seat named nowhere else in the log - not in a traversal
+  // history, not in a round-end record - is still attributed, with its charge, its cells and its setup.
+  //
+  // Both shapes reach the same answer here, which is the point: a stated playerName needs no recovery, and
+  // a label parses to the same name.
   it("attributes a turn whose label names a player the log mentions nowhere else", () => {
     const stranger = (shape: Shape): LogEntry[] => [
       entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
@@ -794,11 +795,11 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     expect(must(buildLevels(stranger("upstream"))[0], "a round").agents.map((agent) => [agent.name, agent.apis]))
       .toEqual([["Aang", ["ollama"]]])
 
-    // What the same log yields with nothing stated: the label alone cannot name the seat, so the turn is
-    // attributed to nobody and the round reports no agent at all.
+    // And with nothing stated, from the label alone.
     expect(must(buildLevels(stranger("legacy"))[0], "a round").turns.map((turn) => turn.playerName))
-      .toEqual([null])
-    expect(must(buildLevels(stranger("legacy"))[0], "a round").agents).toEqual([])
+      .toEqual(["Aang"])
+    expect(must(buildLevels(stranger("legacy"))[0], "a round").agents.map((agent) => agent.name))
+      .toEqual(["Aang"])
   })
 
   // The declared name and the echo are one model named twice. A round that ran one model per seat must
@@ -833,6 +834,86 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     expect(agentSeatLabel(must(seats[0], "a seat"), 0)).toBe("Agent at Seat 7")
   })
 
+  // The per-seat figures are gathered against the record itself, not against a name or a number, and this
+  // is the round that shows why: two seats that stated their numbers and no player. Keyed by name they
+  // both answer to "" and their cells merge - seat 1 reporting 3 for a turn that entered one. Keyed by the
+  // number, a legacy round is the mirror of it: every seatId is null until the outcome fills one in, so
+  // every seat shares that key instead.
+  it("counts each seat's cells against the seat, not against its name or number", () => {
+    const played = (turn: number, seatId: number, cells: string[]) => ({
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const stating = (seatId: number): TurnSetup => ({
+      seatId, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, stating(1)], [1, stating(2)]]),
+      // Different corners of the maze, so a merged set is visible in the count rather than hidden by an
+      // overlap: one cell entered against two.
+      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6", "5,7"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells])).toEqual([
+      [1, "", 1],
+      [2, "", 2],
+    ])
+  })
+
+  // The same argument for the echoes. Two nameless seats whose providers echoed different models: keyed by
+  // name both lists merge, so each seat reports two models it never ran - and agentSettingsCheck reads a
+  // seat holding two models as a setting that changed mid-round, turning a clean pair into a finding.
+  it("keeps each seat's echoed model against the seat, not against its name", () => {
+    const echoing = (echoedModel: string, seatId: number): TurnSetup => ({
+      seatId, playerName: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+    })
+    const played = (turn: number, seatId: number, cells: string[]) => ({
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, echoing("gemma4", 1)], [1, echoing("glm-5.1", 2)]]),
+      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([[1, ["gemma4"]], [2, ["glm-5.1"]]])
+    expect(agentSettingsCheck(seats).outcome).toBe("passed")
+  })
+
+  // The outcome is matched to a seat by the number it states, before the name it states. Both are on the
+  // record and they can point at different things: a seat that stated its number and left its name to a
+  // label nothing resolved is nameless in the roster, while the outcome names a player for it.
+  //
+  // Matched by name only, that lookup misses and the outcome's seat is added as a second record - one
+  // round, one seat that played, two rows, the speed on the row with no turns behind it.
+  it("matches the outcome to a seat by the number it states, not only the name", () => {
+    const entries = [
+      entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+      }}),
+      // States its seat and nothing a name can be recovered from.
+      entry({turn: 1, payload: LOG_EVENTS.request, details: {seatId: 3, model: "gemma4:cloud", api: "ollama"}}),
+      entry({turn: 1, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+      entry({turn: 2, payload: LOG_EVENTS.levelWon, details: {
+        outcome: "won", traversalSpeed: "1.0000",
+        agent: {seatId: 3, playerName: "Momo", model: "gemma4:cloud"},
+        playerPosition: {x: 1, y: 3}, playerUniqueCellsVisited: 1, decayUnitsCharged: 1,
+      }}),
+    ]
+
+    const seats = must(buildLevels(entries)[0], "a round").agents
+
+    // One seat, and it is the one that played: the outcome filled in the name it knew.
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.traversalSpeed])).toEqual([[3, "", 1]])
+  })
+
   // A round where only some turns state a seat is one seat, not two halves of one. Mixed logs are what a
   // rollout looks like from the outside: the change lands mid-experiment, or a replayed round is older.
   it("adopts a seat met earlier by name alone", () => {
@@ -853,6 +934,29 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     const seats = must(buildLevels(entries)[0], "a round").agents
     expect(seats.map((agent) => [agent.seatId, agent.name, agent.models]))
       .toEqual([[1, "Katara", ["gemma4:cloud"]]])
+  })
+
+  // Adopting changes the record's identity mid-fold: its seat number goes from null to 1. So a side table
+  // keyed on anything derived from the record - the name, the number, or the two joined - orphans whatever
+  // was filed before the change, and the seat is credited with half its walk and half its echoes.
+  it("keeps a seat's whole walk when a later turn numbers it", () => {
+    const echoing = (echoedModel: string): TurnSetup => ({
+      seatId: null, playerName: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+    })
+    const played = (turn: number, seatId: number | null, cells: string[]) => ({
+      turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, echoing("gemma4")], [1, echoing("glm-5.1")]]),
+      // Turn 0 names the player and states no seat; turn 1 states seat 1 for the same player.
+      [played(0, null, ["0,0", "1,0"]), played(1, 1, ["1,0", "2,0", "3,0"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells, agent.models]))
+      .toEqual([[1, "Katara", 3, ["gemma4", "glm-5.1"]]])
   })
 
   // The other half of the promise: the stated fields are additions, and a log carrying none of them reads
@@ -914,8 +1018,57 @@ describe("a log whose seat changed model mid-round", () => {
       // No warning was issued, which is the good case and reads as one.
       ["User warnings", "passed"],
       ["Traversal payloads", "unchecked"],
+      ["Seat identity", "passed"],
       ["Agent settings", "failed"],
     ])
+  })
+})
+
+// A seat is one player and a player is one seat. Both directions fail silently without a check, and they
+// fail differently - which is why the check reads the turns rather than the records they produce.
+describe("seatIdentityCheck", () => {
+  const played = (turn: number, seatId: number | null, playerName: string | null) => ({
+    turn, seatId, playerName, before: "0,0", moves: ["MoveDown"], applied: 1,
+    cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null,
+  })
+
+  it("passes a round where each seat kept one player", () => {
+    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 2, "Bumi"), played(2, 1, "Katara")])
+
+    expect(check.outcome).toBe("passed")
+    expect(check.detail).toBe("2 seats, one player each, throughout")
+    expect(seatIdentityCheck([played(0, 1, "Katara")]).detail).toBe("one seat, one player, throughout")
+  })
+
+  // The destructive direction. The second turn matches the seat, so the record is found and its name kept,
+  // and Bumi's turn is credited to Katara - one row on the page holding two agents' cells and charge, with
+  // nothing about it out of place. Nothing downstream can find this, which is why it is caught here.
+  it("reports one seat played under two players", () => {
+    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 1, "Bumi")])
+
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toBe(
+      "seat 1 played as 2 players (Katara, Bumi) - a seat is one player and a player is one seat, so " +
+      "these turns cannot be told apart",
+    )
+  })
+
+  // The visible direction: two records with one name, so the page shows the player twice and anything
+  // reading a seat by name reaches whichever comes first.
+  it("reports one player playing from two seats", () => {
+    const check = seatIdentityCheck([played(0, 1, "Katara"), played(1, 2, "Katara")])
+
+    expect(check.outcome).toBe("failed")
+    expect(check.detail).toMatch(/^Katara played from 2 seats \(1, 2\)/)
+  })
+
+  // A turn stating one of the two says nothing: a log that numbers no turn is the ordinary case, and this
+  // check has no opinion on it.
+  it("says nothing where no turn stated both a seat and a player", () => {
+    const check = seatIdentityCheck([played(0, null, "Katara"), played(1, 2, null)])
+
+    expect(check.outcome).toBe("unchecked")
+    expect(check.detail).toBe("no turn stated both a seat and a player")
   })
 })
 
