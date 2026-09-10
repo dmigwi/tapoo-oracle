@@ -8,11 +8,11 @@
 import { LOG_EVENTS, agentsFromRound, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
 import { buildContext } from "./rubric-engine"
-import { gameIdentityKey } from "./log-index"
+import { gameIdentityKey } from "./geometry"
 import { asArray, asRecord } from "./utils"
 
 // Re-exported: a caller naming a round reaches for this file, and that is still where it looks.
-export { gameIdentityKey } from "./log-index"
+export { gameIdentityKey } from "./geometry"
 import type { CellKey, Context, EncodedMaze, GameIdentity, Level, LogEntry, Replay, Turn } from "./types"
 
 /** The decorated label a request carries, and the player's name inside it.

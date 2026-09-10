@@ -116,53 +116,17 @@ export type LogEntry = {
  * Everything that identifies a round in this codebase is this record. */
 export type GameIdentity = {game: number | null; level: number | null};
 
-/** The three fields that name a turn uniquely: its round, and its number within that round. Turn
- * numbers restart every round, so a turn number alone is ambiguous across a log holding more than
- * one. */
-export type TurnIdentity = GameIdentity & {turn: number};
-
-/** Where one round-scoped turn begins and ends in the entries array, as a half-open range. */
-export type TurnSpan = TurnIdentity & {start: number; end: number};
-
-/** How the turn spans were arrived at.
+/** A validated export: its envelope and its readable entries. Reaching this shape means the JSON parsed
+ * and at least one entry matched the entry contract.
  *
- * "field" means every entry carried a turn number. "unavailable" means at least one did not, and such
- * a log has its boundaries inferred from predictions instead, which buildContext still does for itself. The index says so rather than guessing, so a caller never reads
- * spans that were invented. */
-export type TurnSource = "field" | "unavailable";
-
-/** What a log contains, counted once on the way in. Descriptive only - nothing here is a verdict. */
-export type LogSummary = {
-  entries: number;
-  turns: number;
-  levels: Record<LogLevel, number>;
-  /** Count per payload sentence, in the order first seen. */
-  events: Map<string, number>;
-  penalised: number;
-  external: number;
-  firstEpochMs: number | null;
-  lastEpochMs: number | null;
-};
-
-/** What the initial scan of a downloaded log produces, beside the entries themselves. */
-export type LogIndex = {
-  summary: LogSummary;
-  turnSource: TurnSource;
-  /** Ordered by first appearance. Empty when turnSource is "unavailable". */
-  turns: TurnSpan[];
-  byTurn: Map<string, TurnSpan>;
-};
-
-/** A validated export: its envelope, its readable entries, and the index built over them. Reaching
- * this shape means the JSON parsed and at least one entry matched the entry contract. */
+ * No index. Turn spans are a per-round fact, and every reader that wants them - buildContext, once per
+ * round - builds them over that round's entries. A file-wide copy carried here was read by nothing. */
 export type TapooLog = {
   name: string;
   version: string | null;
   mode: string | null;
   downloadedAt: string | null;
   entries: LogEntry[];
-  /** Built by the same pass that validates the entries - see indexLog. */
-  index: LogIndex;
   sourceUrl?: string;
 };
 

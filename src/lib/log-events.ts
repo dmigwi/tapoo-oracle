@@ -1,10 +1,10 @@
 // The Tapoo log vocabulary: the identity of an export, the sentences it writes, and what each one
 // means about who is answerable for it.
 //
-// Its own module because two files need it and neither can own it. log-contract validates entries
-// against it; log-index summarises and classifies with it. Leaving it in log-contract meant log-index
-// importing that file while log-contract imported log-index back - a cycle whose module-evaluation
-// order decides whether a top-level `const` exists yet.
+// Its own module because several files need it and none can own it: log-contract validates entries
+// against it, rubric-engine counts by it, and report-adapters reads its classes. Holding it in
+// log-contract made those files import the contract to name an event, closing cycles whose
+// module-evaluation order decides whether a top-level `const` exists yet.
 
 import type {LogClass, LogLevel} from "./types";
 

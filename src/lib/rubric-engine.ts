@@ -29,10 +29,9 @@ import {
   statusesFromLogged,
   turnReports,
 } from "./log-contract"
-import {indexLog} from "./log-index"
+import {turnsAreStated} from "./geometry"
 import {asArray, asRecord} from "./utils"
 import type {
-  LogIndex,
   Replay,
   VisitStatus,
   CellKey,
@@ -126,7 +125,7 @@ function noteSetup(context: Context, turn: number, seen: Partial<TurnSetup>): vo
  * entries rather than text so the same derivation serves a fetched log and a pasted one. */
 export function buildContext(
   entries: LogEntry[],
-  { label = "log", index = indexLog(entries) }: { label?: string; index?: LogIndex } = {},
+  { label = "log" }: { label?: string } = {},
 ): Context {
   // Which turn an entry belongs to is the index's answer, not a cursor's.
   //
@@ -143,7 +142,7 @@ export function buildContext(
   //   None - no entry carries a turn at all. Boundaries come from predictions instead, exactly one
   //   closing each turn. Without this every entry collapses onto turn 0 and the per-turn
   //   questions pass trivially.
-  const indexedTurns = index.turnSource === "field"
+  const indexedTurns = turnsAreStated(entries)
   const hasTurnField = indexedTurns || entries.some((entry) => "turn" in entry)
 
   const context: Context = {

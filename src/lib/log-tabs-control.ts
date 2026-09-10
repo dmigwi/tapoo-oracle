@@ -34,7 +34,7 @@ type LogTabActions = {
 
 /** The three things every async workspace action needs: the current state, a way to replace it, and
  * the fetcher tests substitute. */
-type WorkspaceIo = {
+type WorkspaceSync = {
   getState: () => LogTabsState
   setState: (next: LogTabsState) => void
   fetchText?: (url: string) => Promise<string>
@@ -128,7 +128,7 @@ function rememberActiveReport(nextState: LogTabsState): void {
 }
 
 // Loads the URL currently typed into the add-report form and ignores stale async completions.
-async function loadDraftLogTab({getState, setState, fetchText}: WorkspaceIo): Promise<void> {
+async function loadDraftLogTab({getState, setState, fetchText}: WorkspaceSync): Promise<void> {
   const requestedUrl = getState().draftUrl;
   setState({...getState(), draftStatus: "loading", draftError: undefined});
   const loadedState = await loadNewLogTabFromUrl(getState(), fetchText);
@@ -147,7 +147,7 @@ async function loadDraftLogTab({getState, setState, fetchText}: WorkspaceIo): Pr
 //
 // Stale completions are dropped the way the draft loader drops them: if the tab is gone by the time
 // the fetch returns, its result belongs to nothing and writing it back would resurrect the tab.
-async function retryLogTab(tabId: string, {getState, setState, fetchText}: WorkspaceIo): Promise<void> {
+async function retryLogTab(tabId: string, {getState, setState, fetchText}: WorkspaceSync): Promise<void> {
   const before = getState().tabs.find((tab) => tab.id === tabId);
   if (!before) return;
 
@@ -163,7 +163,7 @@ async function retryLogTab(tabId: string, {getState, setState, fetchText}: Works
 // Routed through the same loadNewLogTabFromUrl the form uses, so the fetch, the log-contract
 // validation, the warnings and every error path are the ones already covered - a second loader for
 // shared links would be a second place for them to diverge.
-async function restoreSharedReport({getState, setState, fetchText}: WorkspaceIo): Promise<void> {
+async function restoreSharedReport({getState, setState, fetchText}: WorkspaceSync): Promise<void> {
   const location = globalThis.location;
   // Path first - that is the form people are handed. The fragment is only the hop 404.md uses to
   // get the token into an app the host could not serve at that path directly.

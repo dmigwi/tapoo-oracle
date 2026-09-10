@@ -243,8 +243,7 @@ export function twoSeatDriftLog(): Record<string, unknown> {
       ...turnOf(3, {...katara, model: "moonshotai/Kimi-K3:together"}, {row: 2, col: 0}, "MoveRight", ["MoveRight"], replayOf(["MoveDown"], [1, 0], 1)),
       ...turnOf(4, bumi, {row: 2, col: 1}, "MoveRight", ["MoveRight"], replayOf(["MoveRight"], [2, 0], 1)),
       // Two failures that are nobody's reasoning, so the diagnostics table shows a figure rather than a
-      // column of zeroes. Logged at "error", which is the class both carry: a level that said otherwise
-      // would be a finding of its own - see levelDisagreements.
+      // column of zeroes. Logged at "error", which is the class EVENT_CLASSES gives both.
       //
       // A request that never came back, retried on the next turn.
       entry("Request failed before a valid response.", {

@@ -36,7 +36,6 @@ import type {
 } from "./types";
 
 import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, formatCount, isRecord} from "./utils";
-import {indexLog} from "./log-index";
 import {cellFromGridPoint, mazeFromEncoded} from "./maze";
 // Imported as well as re-exported below: a re-export puts a name on this module's surface without
 // putting it in scope, and traversalPayloadWarnings needs to call them.
@@ -1419,7 +1418,8 @@ function mazeCheck(maze: MazeResult | null): ValidationCheck {
  * Tapoo newer than this app. An unknown version analyzes, with a warning attached.
  *
  * Its successful output is the normalized shape every downstream query uses: name, version, mode,
- * downloadedAt, readable entries, and the index built over them. What it does *not* do is read a round -
+ * downloadedAt and readable entries. What it does *not* do is index the turns or read a round: a turn span
+ * belongs to the round it is in, and buildContext derives one per round from that round's own entries -
  * see parseGameRound. */
 export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
   const trimmed = asTrimmedText(text);
@@ -1491,10 +1491,6 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     return {ok: false, error: "Tapoo log export contains no readable entries."};
   }
 
-  // The same pass that validated the entries describes them: what the log contains, and where each
-  // turn starts and ends. Every later reader indexes into this instead of walking the array again.
-  const index = indexLog(entries);
-
   // One walk over the responses, read by both the warning and the check below. They say the same two
   // numbers to different audiences - the warning that a verdict may be wrong, the check what was
   // verified - so a disagreement between them would be a contradiction on the same page.
@@ -1519,8 +1515,7 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     responseCheck(responses),
   ];
 
-  // Only the export's own caveats. A round's are parseGameRound's; unknownEvents and
-  // levelDisagreements are deliberately not warnings at all - each says why.
+  // Only the export's own caveats; a round's are parseGameRound's.
 
   const log: TapooLog = {
     name: envelope.name,
@@ -1528,7 +1523,6 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     mode: typeof envelope.mode === "string" ? envelope.mode : null,
     downloadedAt: typeof envelope.downloadedAt === "string" ? envelope.downloadedAt : null,
     entries,
-    index,
   };
 
   return {ok: true, source: sourceUrl ? {...log, sourceUrl} : log, warnings, checks};

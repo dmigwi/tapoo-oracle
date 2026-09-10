@@ -1,13 +1,14 @@
-// Maze geometry and traversal speed: the pure arithmetic of Tapoo's grid.
+// Maze geometry, traversal speed, and the two structural facts a log states about itself: the pure
+// derivations Tapoo's shapes admit, with nothing that reads a log's meaning.
 //
 // Its own module so maze.ts can use it without importing the log contract. The contract needs to
 // validate an encoded maze - which means decoding one - and maze.ts needed getCellKey and stepFrom from
 // the contract, so leaving these there made the two files import each other.
 //
-// Nothing here reads a log or answers a question. It converts between the shapes a cell arrives in and
-// the key the rest of the app uses, and it steps one cell to the next.
+// Nothing here answers a rubric question or produces a verdict. It converts between the shapes a cell
+// arrives in and the key the rest of the app uses, steps one cell to the next, and names a round.
 
-import type {Cell, CellKey, LoggedCell, Move, VisitStatus} from "./types";
+import type {Cell, CellKey, GameIdentity, LogEntry, LoggedCell, Move, VisitStatus} from "./types";
 
 // --- Maze geometry ---
 
@@ -203,3 +204,23 @@ export function classifyTraversalSpeed(speed: unknown): string {
 
   return value > 1.0 ? TRAVERSAL_SPEED_CLASSES.trailblazer : TRAVERSAL_SPEED_CLASSES.navigator;
 }
+
+// --- What a log states about its own structure ---
+
+/** True when every entry carries a turn number.
+ *
+ * A log carrying none leaves buildContext to infer its boundaries from predictions, which needs to know
+ * what a parsed prediction is. Rather than reproduce that here and risk two disagreeing answers, this
+ * reports only whether the log stated its turns. */
+export const turnsAreStated = (entries: LogEntry[]): boolean =>
+  entries.length > 0 && entries.every((entry) => typeof entry.turn === "number");
+
+/** gameIdentityKey serialises a round identity to the `"game/level"` string a Map or an `===` needs.
+ *
+ * Derived, never stored: an identity carrying its own key would be two representations of the same two
+ * numbers, free to disagree - and they did, a Level once reporting key "7/3" beside `game: null`.
+ *
+ * `?` for a field the log never stamped, not `0`. A log that names no round at all is a real case - it
+ * yields one round holding everything - and keying that "0/0" made it indistinguishable from a genuine
+ * game 0 level 0, which is the one thing a key must never be. */
+export const gameIdentityKey = ({game, level}: GameIdentity): string => `${game ?? "?"}/${level ?? "?"}`;
