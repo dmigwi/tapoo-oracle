@@ -2,11 +2,12 @@ import {describe, expect, it} from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
-import {buildLevels, gameIdentityKey, resolveActiveAgentNames} from "./rounds"
+import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
+import {agentsFromRound, buildPlayedRounds, gameIdentityKey, resolveActiveAgentNames} from "./rounds"
 import {buildContext} from "./rubric-engine"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
-import type {Level, LogEntry, LogLevel} from "./types"
+import type {AgentSummary, PlayedRound, LogEntry, LogLevel, RawTurnSetup} from "./types"
 
 const entry = (
   payload: string,
@@ -117,14 +118,14 @@ describe("which round an entry belongs to", () => {
   ]
 
   it("keeps a round whole when only its boundaries name it", () => {
-    const levels = buildLevels(roundMarkersOnly)
+    const levels = buildPlayedRounds(roundMarkersOnly)
 
     expect(levels).toHaveLength(1)
     expect(gameIdentityKey(at(levels, 0).identity)).toBe("6/54")
   })
 
   it("gives that round both its maze and its turns, not one each", () => {
-    const level = at(buildLevels(roundMarkersOnly), 0)
+    const level = at(buildPlayedRounds(roundMarkersOnly), 0)
 
     // The pairing is the whole point: a round with a maze and no turns cannot be replayed, and a round
     // with turns and no maze has nothing to draw them on.
@@ -133,11 +134,11 @@ describe("which round an entry belongs to", () => {
   })
 
   it("invents no round that the log never recorded", () => {
-    expect(buildLevels(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
+    expect(buildPlayedRounds(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
   })
 
   it("separates two rounds that each name themselves", () => {
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 0, game: 6, level: 54}),
       prediction(["MoveDown"], 0),
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 1, game: 6, level: 55}),
@@ -150,7 +151,7 @@ describe("which round an entry belongs to", () => {
 
   it("attaches a preamble to the round that opens after it", () => {
     // Entries before the first round marker cannot belong to an earlier round, because there is none.
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       prediction(["MoveDown"], 0),
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 1, game: 6, level: 54}),
       prediction(["MoveUp"], 1),
@@ -161,7 +162,7 @@ describe("which round an entry belongs to", () => {
   })
 
   it("treats a log that names no round at all as one round", () => {
-    const levels = buildLevels([prediction(["MoveDown"], 0), prediction(["MoveUp"], 1)])
+    const levels = buildPlayedRounds([prediction(["MoveDown"], 0), prediction(["MoveUp"], 1)])
 
     expect(levels).toHaveLength(1)
     expect(at(levels, 0).turns).toHaveLength(2)
@@ -189,7 +190,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("takes the path from the record rather than inferring it", () => {
     // Two turns submit the identical batch and end differently. Keyed by moves, the second overwrites
     // the first; keyed by reporting turn, each keeps its own.
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown", "MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown", "MoveDown"],
         lastAppliedMoveIndex: 1, chargedMovesCount: 2}),
@@ -206,7 +207,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("attributes the record to the turn before the one that read it", () => {
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 3}),
@@ -216,7 +217,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("names the refused move from the record's applied index", () => {
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown", "MoveUp"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown", "MoveUp"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 2}),
@@ -228,7 +229,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("falls back to the derivation when the record describes a different prediction", () => {
     // A wrong path drawn confidently is worse than a derived one, so a record whose moves do not match
     // this turn's is not trusted at all.
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 9, col: 9}, lastSubmittedMoves: ["MoveLeft", "MoveLeft"],
         lastAppliedMoveIndex: 1, chargedMovesCount: 7}),
@@ -240,7 +241,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("does not borrow a later matching record when the next turn did not report", () => {
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       prediction(["MoveDown"], 1, {game: 6, level: 54}),
       outcomeTool(2, {lastReplayStartCell: {row: 5, col: 5}, lastSubmittedMoves: ["MoveDown"],
@@ -257,7 +258,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
     // No turn follows the last one to report it, so the total settles it - and the subtraction covers
     // every reading, not only those that reached a turn, or a turn that made no prediction would hand
     // its cost to the closing turn.
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       // Turn 0 reads the placeholder before it predicts, the way every real turn does - which is what
       // makes the reading count match the round's own turnCount.
       outcomeTool(0, {lastMoveStatus: null, lastSubmittedMoves: [], chargedMovesCount: 0}),
@@ -278,7 +279,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("leaves the closing charge unknown when a turn never reported", () => {
     // turnCount says three turns; only one reading exists, so the remainder would absorb the missing
     // turns' cost and attribute all of it to the last one.
-    const levels = buildLevels(round(
+    const levels = buildPlayedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 1}),
@@ -304,7 +305,7 @@ describe("a turn that produced no prediction", () => {
       tools: [],
     }, {turn, game: 6, level: 54})
 
-  const roundWithEmptyTurn = () => buildLevels([
+  const roundWithEmptyTurn = () => buildPlayedRounds([
     entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE, startPosition: {x: 1, y: 1}}, {turn: 0, game: 6, level: 54}),
     outcomeTool(0, {lastMoveStatus: null, lastSubmittedMoves: [], chargedMovesCount: 0}),
     prediction(["MoveDown"], 0, {game: 6, level: 54}),
@@ -353,7 +354,7 @@ describe("a round's identity on a log that labels only its boundaries", () => {
       {epochMs: 3, log: "info", payload: LOG_EVENTS.request, details: {}, turn: 1},
     ] as unknown as LogEntry[]
 
-    const level = must(buildLevels(entries)[0], "a level")
+    const level = must(buildPlayedRounds(entries)[0], "a level")
 
     expect(level.identity).toEqual({game: 7, level: 3})
     expect(gameIdentityKey(level.identity)).toBe("7/3")
@@ -362,10 +363,10 @@ describe("a round's identity on a log that labels only its boundaries", () => {
   })
 })
 
-describe("buildLevels reusing the caller's context", () => {
-  // A Level carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
+describe("buildPlayedRounds reusing the caller's context", () => {
+  // A PlayedRound carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
   // compares function identity and fails on two runs that agree completely. Projected to data instead.
-  const shape = (levels: Level[]) =>
+  const shape = (levels: PlayedRound[]) =>
     levels.map((level) => ({
       ...level,
       observedExits: [...level.observedExits].map(([cell, moves]) => [cell, [...moves].sort()]),
@@ -378,14 +379,14 @@ describe("buildLevels reusing the caller's context", () => {
     const entries = fixtureData.entries as LogEntry[]
     const context = buildContext(entries, {label: "fixture"})
 
-    expect(shape(buildLevels(entries, context))).toEqual(shape(buildLevels(entries)))
+    expect(shape(buildPlayedRounds(entries, context))).toEqual(shape(buildPlayedRounds(entries)))
   })
 
   // The reuse is refused when the entries hold more than one round: the caller's context spans all of
   // them, and a level built from it would carry another maze's positions and exits.
   it("ignores a context that spans more than one round", () => {
     // Each round submits its own move, so a context spanning both would give round 1 round 2's turn -
-    // exactly the leak buildLevels exists to prevent. With one submission each, a spanning context
+    // exactly the leak buildPlayedRounds exists to prevent. With one submission each, a spanning context
     // hands every level two turns instead of one.
     // Written out rather than through `entry` above, which pins level and game to 1.
     let clock = 0
@@ -398,14 +399,14 @@ describe("buildLevels reusing the caller's context", () => {
     const twoRounds = [...round(1, 1, "MoveUp"), ...round(1, 2, "MoveDown")]
     const spanning = buildContext(twoRounds, {label: "two"})
 
-    const perRound = shape(buildLevels(twoRounds))
+    const perRound = shape(buildPlayedRounds(twoRounds))
     expect(perRound).toHaveLength(2)
     expect(perRound.map((level) => level.turns.length)).toEqual([1, 1])
-    expect(shape(buildLevels(twoRounds, spanning))).toEqual(perRound)
+    expect(shape(buildPlayedRounds(twoRounds, spanning))).toEqual(perRound)
   })
 })
 
-describe("buildLevels", () => {
+describe("buildPlayedRounds", () => {
   const round = (game: number, level: number, content: string) => [
     entry(LOG_EVENTS.levelStarted, {startPosition: {x: 1, y: 1}}, {turn: 0}),
     ...turn(0, {tools: ["get_maze_structure"], content}),
@@ -413,9 +414,9 @@ describe("buildLevels", () => {
 
   it("keeps a retry of the same level as its own round", () => {
     // A retry regenerates the maze, so grouping by level alone would merge two different mazes and draw
-    // a path crossing walls that exist in neither. Asked of buildLevels rather than of a report: a
+    // a path crossing walls that exist in neither. Asked of buildPlayedRounds rather than of a report: a
     // report answers one round, so it has nowhere to put the second.
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       ...round(1, 1, '{"moves":["MoveDown"]}'),
       ...round(2, 1, '{"moves":["MoveUp"]}'),
     ])
@@ -471,5 +472,449 @@ describe("buildLevels", () => {
     expect(first.applied).toBe(1)
     expect(first.rejectedMove).toBe("MoveUp")
     expect(first.cells).toEqual(["0,0", "1,0"])
+  })
+})
+
+// --- One record per seat that played ---
+
+// The object-form entry builder these blocks were written against: every field defaulted, so a case
+// states only what it is about. Distinct from `entry` above, which takes its payload positionally.
+const logEntry = (over: Record<string, unknown> = {}) => ({
+  epochMs: 1788000000000,
+  time: "2026-08-30 21:00:00",
+  turn: 1,
+  level: 1,
+  game: 2,
+  log: "info" as const,
+  payload: LOG_EVENTS.request,
+  details: {},
+  ...over,
+}) as LogEntry
+
+// One record per seat, from one pass over the round. Everything here is what a single-agent log could
+// not distinguish: a round-wide set says which providers appeared in a file, never which seat used one.
+describe("agentsFromRound", () => {
+  const seat = (
+    name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
+  ) => ({
+    turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+    cells, rejectedMove: null, decayCharged: decay,
+  })
+  const setup = (over: Partial<RawTurnSetup> = {}): RawTurnSetup =>
+    ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null, ...over})
+
+  // The path every log takes once the upstream fix lands: the turn states its own seat and model, and
+  // nothing has to be recovered from a decorated label.
+  it("reads a turn that states its own seat and model", () => {
+    const [only] = agentsFromRound(
+      new Map([[0, setup({model: "deepseek-v4-pro:cloud", api: "ollama"})]]),
+      [seat("Momo", 0, ["0,0", "1,0"], null, 2)],
+      null,
+    )
+
+    expect(only?.seatId).toBe(2)
+    expect(only?.models).toEqual(["deepseek-v4-pro:cloud"])
+    expect(only?.apis).toEqual(["ollama"])
+  })
+
+  // Two names for one model: the request declares "moonshotai/Kimi-K3:baseten", the response echoes
+  // "moonshotai/Kimi-K3" with the inference provider trimmed off. Reporting both would read as a seat
+  // that ran two models - the very thing agentSettingsCheck flags - so the fuller declared name wins.
+  it("prefers the declared model over the provider's trimmed echo", () => {
+    const [only] = agentsFromRound(
+      new Map([[0, setup({
+        model: "moonshotai/Kimi-K3:baseten",
+        echoedModel: "moonshotai/Kimi-K3",
+      })]]),
+      [seat("Momo", 0, ["0,0", "1,0"])],
+      null,
+    )
+
+    expect(only?.models).toEqual(["moonshotai/Kimi-K3:baseten"])
+  })
+
+  // An echo is still the model's name, just short of where it was served from, and a seat reported with
+  // no model at all says less. Older logs take this path: nothing declared a model before the upstream
+  // fix attached one to every request.
+  it("falls back to the echo where no turn declared a model", () => {
+    const [only] = agentsFromRound(
+      new Map([[0, setup({echoedModel: "moonshotai/Kimi-K3"})]]),
+      [seat("Momo", 0, ["0,0", "1,0"])],
+      null,
+    )
+
+    expect(only?.models).toEqual(["moonshotai/Kimi-K3"])
+  })
+
+  // The case the flattened fields could not express at all.
+  it("keeps each seat's setup to itself", () => {
+    const seats = agentsFromRound(
+      new Map([
+        [0, setup({model: "gemma4", api: "ollama", reasoning: "max"})],
+        [1, setup({model: "glm-5.1", api: "openai", reasoning: "high"})],
+      ]),
+      [seat("Katara", 0, ["0,0", "1,0"]), seat("Bumi", 1, ["1,0", "2,0"])],
+      null,
+    )
+
+    expect(seats.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
+    expect(seats.map((agent) => agent.models)).toEqual([["gemma4"], ["glm-5.1"]])
+    expect(seats.map((agent) => agent.apis)).toEqual([["ollama"], ["openai"]])
+    expect(seats.map((agent) => agent.reasoningEfforts)).toEqual([["max"], ["high"]])
+  })
+
+  // A stated seat is the log's answer; acting order is only a stand-in for logs that state none.
+  it("orders by the seat the log stated, not by who moved first", () => {
+    const seats = agentsFromRound(
+      new Map(),
+      [seat("Katara", 0, ["0,0", "1,0"], null, 2), seat("Bumi", 1, ["1,0", "2,0"], null, 1)],
+      null,
+    )
+
+    expect(seats.map((agent) => `${agent.name}/${String(agent.seatId)}`)).toEqual(["Bumi/1", "Katara/2"])
+    expect(seats.map((agent, index) => agentSeatLabel(agent, index))).toEqual([
+      "Bumi \u00b7 Agent at Seat 1",
+      "Katara \u00b7 Agent at Seat 2",
+    ])
+  })
+
+  // A log whose requests carry no player label attributes no turn, but the outcome still names who
+  // finished. Dropping that seat would report a round as having no agents when the log names one.
+  it("keeps a seat the outcome names but no turn produced", () => {
+    const seats = agentsFromRound(new Map(), [], {outcome: "won", agent: {playerName: "Kora"}})
+
+    expect(seats.map((agent) => agent.name)).toEqual(["Kora"])
+  })
+})
+
+describe("agentsFromRound, on a log that states its own seats", () => {
+  const MAZE = {
+    index_chars: ["|", "---", "-", "   ", " ", "\n"],
+    structure_checksum: "0x74af82cb14470b9d",
+    structure:
+      "01012121012105030343430343050301230303210503034303034305030301030303050343030303030501210303010305034343434343050121212121210",
+    dimensions: {numCols: 6, numRows: 4, area: 24},
+  }
+
+  type Shape = "upstream" | "legacy"
+  type Seat = {seatId: number; name: string; model: string; api: string; reasoning: string}
+  const KATARA: Seat = {seatId: 1, name: "Katara", model: "gemma4:cloud", api: "ollama", reasoning: "max"}
+  const BUMI: Seat = {seatId: 2, name: "Bumi", model: "moonshotai/Kimi-K3:baseten", api: "huggingface", reasoning: "high"}
+  const endpointOf = (seat: Seat) => `http://localhost:11434/${seat.name.toLowerCase()}`
+
+  // What the turn before this one did, read off the request that follows it - the offset turnReports
+  // owns. Included so the performance half of each record is a real number rather than null: it is
+  // joined to a seat by the same name the setup half is, and a test where both are null would pass with
+  // the join broken.
+  const replayOfPreviousTurn = {
+    lastMoveStatus: "applied",
+    lastSubmittedMoves: ["MoveDown"],
+    lastAppliedMoveIndex: 0,
+    lastReplayStartCell: [0, 0],
+    chargedMovesCount: 3,
+  }
+
+  /** One request's details, in whichever shape the log was written in.
+   *
+   * "upstream" states the seat and the full model outright on the request; "legacy" is every log written
+   * so far - a decorated label, no seat, no model, the model recoverable only from the response echo. */
+  const requestDetails = (seat: Seat, shape: Shape, replay: boolean) => {
+    const common = {
+      tools: [{name: "get_maze_structure"}],
+      messages: [
+        {role: "tool", content: JSON.stringify({
+          currentCell: [0, 0],
+          filteredTraversalHistory: [{seatId: null, playerName: seat.name, cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+        })},
+        ...(replay ? [{role: "tool", content: JSON.stringify(replayOfPreviousTurn)}] : []),
+      ],
+      api: seat.api,
+      endpoint: endpointOf(seat),
+      reasoning: seat.reasoning,
+    }
+
+    // The decorated label is on every request and stays there - the upstream fields are additions to it,
+    // not replacements, so both shapes below carry it.
+    const labelled = {...common, player: `${seat.name} the Trailblazer - 0.9591x`}
+
+    return shape === "upstream"
+      ? {...labelled, seatId: seat.seatId, playerName: seat.name, model: seat.model}
+      : labelled
+  }
+
+  // A two-seat round: Katara on turn 1, Bumi on turn 2, Katara making the final dash.
+  const round = (shape: Shape): LogEntry[] => [
+    logEntry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+      startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+    }}),
+    logEntry({turn: 1, payload: LOG_EVENTS.request, details: requestDetails(KATARA, shape, false)}),
+    // The echo, always the trimmed name: the provider drops the ":provider" suffix a declared name has.
+    logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+      payload: {model: must(KATARA.model.split(":")[0], "a trimmed name"), message: {content: '{"moves":["MoveDown"]}'}},
+    }}),
+    logEntry({turn: 2, payload: LOG_EVENTS.request, details: requestDetails(BUMI, shape, true)}),
+    logEntry({turn: 2, payload: LOG_EVENTS.response, details: {
+      payload: {model: must(BUMI.model.split(":")[0], "a trimmed name"), message: {content: '{"moves":["MoveDown"]}'}},
+    }}),
+    logEntry({turn: 3, payload: LOG_EVENTS.levelWon, details: {
+      outcome: "won", traversalSpeed: "1.0000",
+      agent: {playerName: "Katara", seatId: 1, model: "gemma4:cloud", enabled: true},
+      playerPosition: {x: 1, y: 3}, playerUniqueCellsVisited: 2, decayUnitsCharged: 3,
+    }}),
+  ]
+
+  const agentsOf = (shape: Shape): AgentSummary[] =>
+    must(buildPlayedRounds(round(shape))[0], "a round").agents
+
+  it("reads the seat, the full model and the connection off every request", () => {
+    expect(agentsOf("upstream")).toEqual([
+      {
+        name: "Katara", seatId: 1, models: ["gemma4:cloud"], apis: ["ollama"],
+        endpoints: ["http://localhost:11434/katara"], reasoningEfforts: ["max"],
+        // Its own turn's charge and cell, not the round's total: the figures the replay panels read.
+        uniqueCells: 1, decayCharged: 3, traversalSpeed: 1,
+      },
+      {
+        name: "Bumi", seatId: 2, models: ["moonshotai/Kimi-K3:baseten"], apis: ["huggingface"],
+        endpoints: ["http://localhost:11434/bumi"], reasoningEfforts: ["high"],
+        // No replay record covers turn 2, so nothing settled what it charged. Null, not zero.
+        uniqueCells: 1, decayCharged: null, traversalSpeed: null,
+      },
+    ])
+  })
+
+  // The round-end `agent` record is the one place a log states a seat today - and in every log to hand
+  // it is the ONLY place, sitting on "Agent level won." where it names whoever made the final dash. It is
+  // not a per-turn fact, so it must never stand in for one: on a two-seat round, reading it as a fallback
+  // on a request would report the finisher's seat and model on the turns the other seat played.
+  //
+  // Bumi played turn 2 and Katara finished, so Bumi is where that mistake would show.
+  it("never lets the finisher's record describe another seat's turn", () => {
+    // The finishing record, moved onto every request as well, which is the shape that would trip it.
+    const finisher = {seatId: 1, playerName: "Katara", model: "gemma4:cloud", enabled: true}
+    const entries = round("legacy").map((logEntry) =>
+      logEntry.payload === LOG_EVENTS.request
+        ? {...logEntry, details: {...logEntry.details as Record<string, unknown>, agent: finisher}}
+        : logEntry
+    )
+
+    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    expect(seats.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
+    // Bumi keeps their own turn, unlabelled by the seat and model that belong to Katara alone.
+    expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([
+      [1, ["gemma4:cloud"]],
+      [null, ["moonshotai/Kimi-K3"]],
+    ])
+  })
+
+  // The join is by name, and the label is where a legacy log puts it: "Aang the Backtracker - 0.9591x".
+  // The name is read out of the label itself, so a seat named nowhere else in the log - not in a traversal
+  // history, not in a round-end record - is still attributed, with its charge, its cells and its setup.
+  //
+  // Both shapes reach the same answer here, which is the point: a stated playerName needs no recovery, and
+  // a label parses to the same name.
+  it("attributes a turn whose label names a player the log mentions nowhere else", () => {
+    const stranger = (shape: Shape): LogEntry[] => [
+      logEntry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+      }}),
+      logEntry({turn: 1, payload: LOG_EVENTS.request, details: {
+        ...(shape === "upstream" ? {seatId: 4, playerName: "Aang", model: "gemma4:cloud"} : {}),
+        player: "Aang the Backtracker - 0.9591x",
+        api: "ollama",
+        // Katara's history, not Aang's: the name "Aang" appears in this log only inside the label.
+        messages: [{role: "tool", content: JSON.stringify({
+          currentCell: [0, 0],
+          filteredTraversalHistory: [{seatId: null, playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+        })}],
+      }}),
+      logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+    ]
+
+    expect(must(buildPlayedRounds(stranger("upstream"))[0], "a round").turns.map((turn) => turn.playerName))
+      .toEqual(["Aang"])
+    expect(must(buildPlayedRounds(stranger("upstream"))[0], "a round").agents.map((agent) => [agent.name, agent.apis]))
+      .toEqual([["Aang", ["ollama"]]])
+
+    // And with nothing stated, from the label alone.
+    expect(must(buildPlayedRounds(stranger("legacy"))[0], "a round").turns.map((turn) => turn.playerName))
+      .toEqual(["Aang"])
+    expect(must(buildPlayedRounds(stranger("legacy"))[0], "a round").agents.map((agent) => agent.name))
+      .toEqual(["Aang"])
+  })
+
+  // The declared name and the echo are one model named twice. A round that ran one model per seat must
+  // report no drift, or the check that exists to catch a changed setting cries on every clean log.
+  it("reports no drift when the provider echoes the trimmed name back", () => {
+    const check = agentSettingsCheck(agentsOf("upstream"))
+    expect(check.outcome).toBe("passed")
+    expect(check.detail).toBe("2 seats, each on one model, endpoint and reasoning effort throughout")
+  })
+
+  // A stated seat is identity enough on its own. Before the seat was what identified a record, a turn
+  // whose name did not resolve was dropped whole - its model, its endpoint and its charge with it - even
+  // though the request said plainly which seat played it.
+  it("reports a seat that stated its number and no name", () => {
+    const entries = [
+      logEntry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+      }}),
+      // No player, no playerName: the seat and the model are all this request states.
+      logEntry({turn: 1, payload: LOG_EVENTS.request, details: {
+        seatId: 7, model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
+      }}),
+      logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+    ]
+
+    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.models, agent.apis]))
+      .toEqual([[7, "", ["gemma4:cloud"], ["ollama"]]])
+    // Named by the one thing known about it, with no dangling separator where a name would go.
+    expect(agentSeatLabel(must(seats[0], "a seat"), 0)).toBe("Agent at Seat 7")
+  })
+
+  // The per-seat figures are gathered against the record itself, not against a name or a number, and this
+  // is the round that shows why: two seats that stated their numbers and no player. Keyed by name they
+  // both answer to "" and their cells merge - seat 1 reporting 3 for a turn that entered one. Keyed by the
+  // number, a legacy round is the mirror of it: every seatId is null until the outcome fills one in, so
+  // every seat shares that key instead.
+  it("counts each seat's cells against the seat, not against its name or number", () => {
+    const played = (turn: number, seatId: number, cells: string[]) => ({
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const stating = (seatId: number): RawTurnSetup => ({
+      seatId, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, stating(1)], [1, stating(2)]]),
+      // Different corners of the maze, so a merged set is visible in the count rather than hidden by an
+      // overlap: one cell entered against two.
+      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6", "5,7"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells])).toEqual([
+      [1, "", 1],
+      [2, "", 2],
+    ])
+  })
+
+  // The same argument for the echoes. Two nameless seats whose providers echoed different models: keyed by
+  // name both lists merge, so each seat reports two models it never ran - and agentSettingsCheck reads a
+  // seat holding two models as a setting that changed mid-round, turning a clean pair into a finding.
+  it("keeps each seat's echoed model against the seat, not against its name", () => {
+    const echoing = (echoedModel: string, seatId: number): RawTurnSetup => ({
+      seatId, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+    })
+    const played = (turn: number, seatId: number, cells: string[]) => ({
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, echoing("gemma4", 1)], [1, echoing("glm-5.1", 2)]]),
+      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([[1, ["gemma4"]], [2, ["glm-5.1"]]])
+    expect(agentSettingsCheck(seats).outcome).toBe("passed")
+  })
+
+  // The outcome is matched to a seat by the number it states, before the name it states. Both are on the
+  // record and they can point at different things: a seat that stated its number and left its name to a
+  // label nothing resolved is nameless in the roster, while the outcome names a player for it.
+  //
+  // Matched by name only, that lookup misses and the outcome's seat is added as a second record - one
+  // round, one seat that played, two rows, the speed on the row with no turns behind it.
+  it("matches the outcome to a seat by the number it states, not only the name", () => {
+    const entries = [
+      logEntry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+      }}),
+      // States its seat and nothing a name can be recovered from.
+      logEntry({turn: 1, payload: LOG_EVENTS.request, details: {seatId: 3, model: "gemma4:cloud", api: "ollama"}}),
+      logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+      logEntry({turn: 2, payload: LOG_EVENTS.levelWon, details: {
+        outcome: "won", traversalSpeed: "1.0000",
+        agent: {seatId: 3, playerName: "Momo", model: "gemma4:cloud"},
+        playerPosition: {x: 1, y: 3}, playerUniqueCellsVisited: 1, decayUnitsCharged: 1,
+      }}),
+    ]
+
+    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+
+    // One seat, and it is the one that played: the outcome filled in the name it knew.
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.traversalSpeed])).toEqual([[3, "", 1]])
+  })
+
+  // A round where only some turns state a seat is one seat, not two halves of one. Mixed logs are what a
+  // rollout looks like from the outside: the change lands mid-experiment, or a replayed round is older.
+  it("adopts a seat met earlier by name alone", () => {
+    const entries = [
+      logEntry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
+        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
+      }}),
+      logEntry({turn: 1, payload: LOG_EVENTS.request, details: requestDetails(KATARA, "legacy", false)}),
+      logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+      logEntry({turn: 2, payload: LOG_EVENTS.request, details: requestDetails(KATARA, "upstream", false)}),
+      logEntry({turn: 2, payload: LOG_EVENTS.response, details: {
+        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+    ]
+
+    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.models]))
+      .toEqual([[1, "Katara", ["gemma4:cloud"]]])
+  })
+
+  // Adopting changes the record's identity mid-fold: its seat number goes from null to 1. So a side table
+  // keyed on anything derived from the record - the name, the number, or the two joined - orphans whatever
+  // was filed before the change, and the seat is credited with half its walk and half its echoes.
+  it("keeps a seat's whole walk when a later turn numbers it", () => {
+    const echoing = (echoedModel: string): RawTurnSetup => ({
+      seatId: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+    })
+    const played = (turn: number, seatId: number | null, cells: string[]) => ({
+      turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      cells, rejectedMove: null, decayCharged: null,
+    })
+
+    const seats = agentsFromRound(
+      new Map([[0, echoing("gemma4")], [1, echoing("glm-5.1")]]),
+      // Turn 0 names the player and states no seat; turn 1 states seat 1 for the same player.
+      [played(0, null, ["0,0", "1,0"]), played(1, 1, ["1,0", "2,0", "3,0"])],
+      null,
+    )
+
+    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells, agent.models]))
+      .toEqual([[1, "Katara", 3, ["gemma4", "glm-5.1"]]])
+  })
+
+  // The other half of the promise: the stated fields are additions, and a log carrying none of them reads
+  // the same. Everything the two shapes can agree on, they agree on - the names, the order, and every
+  // performance figure - and the only differences are the two things a log without them cannot carry.
+  it("reads a log that states neither of them, unchanged", () => {
+    const legacy = agentsOf("legacy")
+
+    expect(legacy.map((agent) => [agent.name, agent.uniqueCells, agent.decayCharged, agent.traversalSpeed]))
+      .toEqual(agentsOf("upstream").map((agent) => [agent.name, agent.uniqueCells, agent.decayCharged, agent.traversalSpeed]))
+    expect(legacy.map((agent) => agent.apis)).toEqual([["ollama"], ["huggingface"]])
+
+    // The seat is the round-end record's alone, so only the seat it names has one.
+    expect(legacy.map((agent) => agent.seatId)).toEqual([1, null])
+    // And the model is the echo, short of the suffix saying where it was served from.
+    expect(legacy.map((agent) => agent.models)).toEqual([["gemma4:cloud"], ["moonshotai/Kimi-K3"]])
   })
 })

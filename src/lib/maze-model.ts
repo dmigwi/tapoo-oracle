@@ -9,7 +9,7 @@
 
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, Level, LevelModel, SummaryRow, Turn, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, SummaryRow, TurnSummary, VisitStatus } from "./types"
 
 // --- Entry point: what maze-view calls ---
 
@@ -22,33 +22,33 @@ import type { AgentSummary, CellKey, Frame, Level, LevelModel, SummaryRow, Turn,
  * The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
  * picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
  * instead of a partial grid, and the view renders the error. */
-export function mazeReplayModel(level: Level | null | undefined): LevelModel | null {
-  if (!level) return null;
+export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayModel | null {
+  if (!round) return null;
 
   // The destination arrives already resolved to a cell key: one reader in the contract handles both
   // logged shapes, for every field carrying a cell. Converting here instead means handling {row, col}
   // and turning a compacted [row, col] into "undefined,undefined" - no destination drawn, and
   // "no route found" reported as evidence.
-  const destination = level.destinationCell;
-  const built = mazeFromEncoded(level.encodedMaze, {
-    startCell: level.startCell,
+  const destination = round.destinationCell;
+  const built = mazeFromEncoded(round.encodedMaze, {
+    startCell: round.startCell,
     destinationCell: destination
   });
 
   return {
-    identity: level.identity,
+    identity: round.identity,
     maze: built.ok ? built.maze : null,
     error: built.ok ? null : built.error,
     stats: built.ok ? built.stats : null,
-    startCell: level.startCell,
+    startCell: round.startCell,
     destinationCell: destination,
-    endCell: level.endCell,
-    observedExits: level.observedExits,
-    visitStatusAfterTurn: level.visitStatusAfterTurn,
-    historyWindowRadius: level.historyWindowRadius,
-    turns: level.turns,
-    outcome: level.outcome,
-    agents: level.agents
+    endCell: round.endCell,
+    observedExits: round.observedExits,
+    visitStatusAfterTurn: round.visitStatusAfterTurn,
+    historyWindowRadius: round.historyWindowRadius,
+    turns: round.turns,
+    outcome: round.outcome,
+    agents: round.agents
   };
 }
 
@@ -80,7 +80,7 @@ export function agentIndexOf(
  *
  * Pure, and the only thing the scrubber calls: keeping the frame a value rather than mutating the view
  * means every position it can show is reachable in a test without a browser. */
-export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
+export function mazeFrameAt(levelModel: ReplayModel, turnIndex: number): Frame {
   const played = levelModel.turns.slice(0, clamp(turnIndex, 0, levelModel.turns.length));
 
   // The status each cell last carried as of this frame.
@@ -203,7 +203,7 @@ export type DecayTally = {
  * row in the level summary counts the whole round, and the legend under the scrubber counts only what
  * has been played. One function, so the two can never disagree about how a charge is classified - only
  * about which turns they are asking about. */
-export function decayTally(turns: readonly Turn[]): DecayTally {
+export function decayTally(turns: readonly TurnSummary[]): DecayTally {
   const counts = new Map<number, number>();
   let unreported = 0;
 
@@ -226,7 +226,7 @@ export function decayTally(turns: readonly Turn[]): DecayTally {
 
 /** mazeStructureRows describes the static shape of the maze — its topology and the two structural
  * proofs that confirm it is a valid perfect maze. These facts do not change as the round is played. */
-export function mazeStructureRows(levelModel: LevelModel | null | undefined): SummaryRow[] {
+export function mazeStructureRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
   const stats = levelModel.stats;
@@ -246,7 +246,7 @@ export function mazeStructureRows(levelModel: LevelModel | null | undefined): Su
 /** mazeLevelRows describes the round-level facts that belong to the level as a whole rather than to
  * any one agent: how it ended, how many turns it ran and what each was charged, the length of the
  * success route, and how far the agent could see its own history. */
-export function mazeLevelRows(levelModel: LevelModel | null | undefined): SummaryRow[] {
+export function mazeLevelRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
   const stats = levelModel.stats;

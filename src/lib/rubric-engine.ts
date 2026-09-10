@@ -42,7 +42,7 @@ import type {
   Outcome,
   Submission,
   RubricGroup,
-  TurnSetup,
+  RawTurnSetup,
 } from "./types"
 
 // --- Reading a log entry ---
@@ -106,13 +106,12 @@ const textOrNull = (value: unknown): string | null =>
  * the model it was configured with, the provider and the effort; the response carries the provider's
  * echo of that model - and a turn is one seat's, so neither should erase the other. Only fields with
  * something to say are written. */
-function noteSetup(context: Context, turn: number, seen: Partial<TurnSetup>): void {
-  const known = context.setupByTurn.get(turn) ?? {
-    seatId: null, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+function noteSetup(context: Context, turn: number, seen: Partial<RawTurnSetup>): void {
+  const known = context.rawSetupByTurn.get(turn) ?? {
+    seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
   }
-  context.setupByTurn.set(turn, {
+  context.rawSetupByTurn.set(turn, {
     seatId: seen.seatId ?? known.seatId,
-    playerName: seen.playerName ?? known.playerName,
     model: seen.model ?? known.model,
     echoedModel: seen.echoedModel ?? known.echoedModel,
     api: seen.api ?? known.api,
@@ -151,7 +150,7 @@ export function buildContext(
     player: null,
     apis: new Set(),
     reasoningEfforts: new Set(),
-    setupByTurn: new Map(),
+    rawSetupByTurn: new Map(),
     replayByTurn: turnReports<Replay>(),
     output: {
       responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
@@ -221,7 +220,6 @@ export function buildContext(
       // round-end record has its own reader, in agentsFromRound, which attributes it to that one seat.
       noteSetup(context, currentTurn, {
         seatId: numberOrNull(details.seatId),
-        playerName: textOrNull(details.playerName),
         model: textOrNull(details.model),
         api: textOrNull(details.api),
         endpoint: textOrNull(details.endpoint),
@@ -607,20 +605,21 @@ function resourceEfficiency(context: Context): Record<string, boolean> {
   // outcome without them, and reading those as a zero pair would answer no for a round whose per-turn
   // readings prove otherwise. Absent totals fall through to the last reading rather than to a verdict.
   const outcome = context.outcomes.at(-1)
-  const settled = [outcome?.playerUniqueCellsVisited, outcome?.decayUnitsCharged]
-  const reading = settled.every((value) => Number.isFinite(value))
-    ? settled
-    : context.speedReadings.at(-1)
+  const visited = outcome?.playerUniqueCellsVisited
+  const charged = outcome?.decayUnitsCharged
 
+  // Narrowed to a pair here rather than checked again below: a check after the fallback would be a
+  // branch nothing can reach, since a settled outcome states both numbers and a speed reading is
+  // already a pair.
+  const settled: readonly [number, number] | null =
+    Number.isFinite(visited) && Number.isFinite(charged) ? [visited as number, charged as number] : null
+
+  const reading = settled ?? context.speedReadings.at(-1)
   if (!reading) {
     return { Q1: false }
   }
 
   const [cells, decay] = reading
-  if (cells === undefined || decay === undefined) {
-    return { Q1: false }
-  }
-
   return { Q1: decay > 0 && cells / decay >= 1.0000 }
 }
 

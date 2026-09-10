@@ -218,7 +218,7 @@ export const turnsAreStated = (entries: LogEntry[]): boolean =>
 /** gameIdentityKey serialises a round identity to the `"game/level"` string a Map or an `===` needs.
  *
  * Derived, never stored: an identity carrying its own key would be two representations of the same two
- * numbers, free to disagree - and they did, a Level once reporting key "7/3" beside `game: null`.
+ * numbers, free to disagree - and they did, a level record once reporting key "7/3" beside `game: null`.
  *
  * `?` for a field the log never stamped, not `0`. A log that names no round at all is a real case - it
  * yields one round holding everything - and keying that "0/0" made it indistinguishable from a genuine

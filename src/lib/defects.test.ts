@@ -3,7 +3,7 @@ import {describe, expect, it} from "vitest"
 import {cellFromKey, cellFromLogged, cellKeyFromLogged, getCellKey, openMovesFromLogged} from "./log-contract"
 import {mazeReplayModel} from "./maze-model"
 import {createInitialLogTabs, deleteLogTab, extractTabLabelFromUrl} from "./log-tabs-view"
-import {buildLevels} from "./rounds"
+import {buildPlayedRounds} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
 import {at, must} from "./test-support"
@@ -45,7 +45,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   // destinationCell, did not - so the key became "undefined,undefined": no destination drawn, and the
   // shortest route reported to the reader as "no route found" on a maze that has one.
   it("resolves a destination logged in the compacted form", () => {
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: [0, 5]}),
     ])
 
@@ -53,7 +53,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   })
 
   it("resolves the same destination logged uncompacted, unchanged", () => {
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}}),
     ])
 
@@ -61,7 +61,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   })
 
   it("reports a route rather than 'no route found' for a compacted destination", () => {
-    const levels = buildLevels([
+    const levels = buildPlayedRounds([
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: [0, 5]}),
     ])
     const model = must(mazeReplayModel(at(levels, 0)), "a model for the round")

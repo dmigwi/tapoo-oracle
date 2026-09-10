@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
-import {VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
+import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
 import type {LogEntry} from "./types"
 import {at, must, rubricEntry as entry, rubricTurn as turn, toolMessage} from "./test-support";
 
@@ -54,7 +54,7 @@ describe("parsePrediction", () => {
   })
 })
 
-// The context buildReport builds is handed to buildLevels instead of a second identical one being
+// The context buildReport builds is handed to buildPlayedRounds instead of a second identical one being
 // built over the same entries. That is only sound if the two produce the same levels, so this pins it
 // against the real fixture rather than trusting the argument.
 // A round's identity is the running cursor's, not its first entry's - Tapoo stamps game and level only
@@ -299,5 +299,343 @@ describe("an Anthropic-shaped provider response", () => {
 
     expect(context.output.promptTokens).toBe(3100)
     expect(context.output.completionTokens).toBe(24)
+  })
+})
+
+// The paths a clean log never takes. Each is reachable from a real export - a provider that answered
+// with something other than JSON, a turn that read the maze twice, a round that ended - and each was
+// unexercised until now, which is how a defensive branch stops defending.
+describe("what buildContext does with a tool result it cannot read", () => {
+  const withToolContent = (content: unknown): LogEntry[] => [
+    entry(LOG_EVENTS.request, {tools: [], messages: [{role: "tool", content}]}, {turn: 0}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 0}),
+  ]
+
+  // Not JSON at all. Parsing throws, and a throw here leaves the whole report unrendered rather than
+  // one turn unread, so the entry is skipped and the rest of the log still answers.
+  it("skips a tool result that is not JSON, and reads the rest of the log", () => {
+    const context = buildContext(withToolContent("<html>502 Bad Gateway</html>"))
+
+    expect(context.exits.size).toBe(0)
+    expect(context.positions).toEqual([])
+    // The turn's prediction is still read: the unreadable result cost the tool reading, nothing else.
+    expect(context.submissions).toHaveLength(1)
+  })
+
+  // Valid JSON, but not an object: "null" and "3" parse without throwing and have no keys to read.
+  // Reaching for `payload.currentCell` on either is what a truthiness check alone would allow.
+  it("skips a tool result that parses to something with no fields", () => {
+    for (const content of ["null", "3", '"a string"']) {
+      const context = buildContext(withToolContent(content))
+
+      expect(context.positions).toEqual([])
+      expect(context.declaredTools.size).toBe(0)
+    }
+  })
+})
+
+// Two tool results in one turn, both reporting statuses. The store merges rather than overwrites, so
+// the turn ends holding both readings - overwriting would drop whichever arrived first, and a cell's
+// status would depend on which tool message the model happened to read last.
+describe("two readings of the maze in one turn", () => {
+  const historyOf = (cell: [number, number], move: string, status: string) => toolMessage({
+    filteredTraversalHistory: [{
+      cell: {row: cell[0], col: cell[1]},
+      openMoves: {[move]: {row: cell[0] + 1, col: cell[1], visitStatus: status}},
+    }],
+  })
+
+  it("merges both readings into the turn, keeping the cells each one named", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {
+        tools: [],
+        messages: [historyOf([0, 0], "MoveDown", "explored"), historyOf([1, 0], "MoveDown", "oscillating")],
+      }, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
+    ])
+
+    // Recorded under the turn the reading covers, which is the one before the request that carried it.
+    const [turnCovered, statuses] = at(context.visitStatusAfterTurn.ascending(), 0)
+    expect(turnCovered).toBe(-1)
+    expect([...statuses]).toEqual([["1,0", "explored"], ["2,0", "oscillating"]])
+  })
+})
+
+// V3 asks whether the model repeated a tool call after being told not to, and this event is the only
+// proof of it: a warned-mode request shows the harness warned, never that the model ignored it.
+describe("a duplicate tool call after a warning", () => {
+  it("counts the event, and V3.Q1 confirms the violation", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      entry(LOG_EVENTS.duplicateToolWarningIgnored, {}, {log: "warn", turn: 0}),
+    ])
+
+    expect(context.duplicatesAfterWarning).toBe(1)
+    const v3 = must(VIOLATIONS.find((group) => group.id === "V3"), "the warning-disregard group")
+    expect(v3.evaluate(context)).toEqual({Q1: true})
+  })
+
+  it("leaves it unconfirmed when no such event was logged", () => {
+    const context = buildContext([entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0})])
+
+    expect(context.duplicatesAfterWarning).toBe(0)
+    expect(must(VIOLATIONS.find((group) => group.id === "V3"), "the group").evaluate(context))
+      .toEqual({Q1: false})
+  })
+})
+
+// The last turn of a round reports its replay on the outcome entry rather than on a following request,
+// there being no following request. Without reading it there, the final turn's move is never replayed.
+describe("the replay an outcome carries", () => {
+  it("takes the outcome's own last action as a replay", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
+      entry(LOG_EVENTS.levelWon, {
+        outcome: "won",
+        traversalSpeed: "1.0000",
+        agent: {playerName: "Katara"},
+        lastActionResult: {lastMoveStatus: "applied", lastSubmittedMoves: ["MoveDown"], lastAppliedMoveIndex: 0},
+      }, {turn: 1}),
+    ])
+
+    expect(context.replays.map((replay) => replay.lastMoveStatus)).toEqual(["applied"])
+    expect(context.player).toBe("Katara")
+  })
+
+  it("takes nothing from an outcome whose last action reports no move status", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.levelLost, {outcome: "lost", lastActionResult: {lastSubmittedMoves: []}}, {turn: 1}),
+    ])
+
+    expect(context.replays).toEqual([])
+  })
+})
+
+// The other half of each two-shape reader, and the cells a log names but cannot place. None of these
+// throw when they go unhandled - they quietly drop a tool, a cell or a reading - so each is asserted
+// rather than assumed.
+describe("the shapes a log can state a fact in", () => {
+  // Tools arrive flat in a log and nested under `function` on the wire. An unreadable declaration
+  // leaves declaredTools empty, which makes every legitimate call look hallucinated.
+  it("declares a tool named under `function` as readily as a flat one", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [{function: {name: "get_maze_structure"}}], messages: []}, {turn: 0}),
+    ])
+
+    expect([...context.declaredTools]).toEqual(["get_maze_structure"])
+  })
+
+  it("declares nothing from a tool entry that names itself in neither place", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [{description: "no name here"}], messages: []}, {turn: 0}),
+    ])
+
+    expect(context.declaredTools.size).toBe(0)
+  })
+
+  // A tool message whose content is not a string at all - a provider that sent an object where the
+  // protocol says text. `JSON.parse` is handed "" rather than a non-string, so it throws and the
+  // message is skipped instead of reaching the readers below it.
+  it("skips a tool message whose content is not text", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {
+        tools: [], messages: [{role: "tool", content: {currentCell: {row: 0, col: 0}}}],
+      }, {turn: 0}),
+    ])
+
+    expect(context.positions).toEqual([])
+  })
+
+  // A history record and a position reading whose cell cannot be read. Both are skipped: an exit list
+  // filed under a cell nobody can name would answer no question, and a position that is not a cell
+  // would put a step in the walk that the maze has no square for.
+  it("skips a history record and a position whose cell it cannot read", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {
+        tools: [],
+        messages: [
+          toolMessage({filteredTraversalHistory: [{cell: null, openMoves: {MoveDown: {visitStatus: "explored"}}}]}),
+          toolMessage({currentCell: "not a cell"}),
+        ],
+      }, {turn: 0}),
+    ])
+
+    expect(context.exits.size).toBe(0)
+    expect(context.positions).toEqual([])
+    // The call was still counted for the turn - noteTool records that the maze was read, whatever the
+    // reading turned out to hold - so an unreadable cell does not make the call look hallucinated.
+    expect([...must(context.turnTools.get(0), "the turn's tools")]).toEqual(["get_maze_structure"])
+  })
+
+  // A prediction-rules reading that states the rules and neither figure. Read as zeroes rather than
+  // skipped: the reading happened, and a missing counter is Tapoo not having moved it yet.
+  it("reads a prediction-rules payload that states no figures as zeroes", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {
+        tools: [], messages: [toolMessage({suggestedMovesPerTurn: 3})],
+      }, {turn: 0}),
+    ])
+
+    expect(context.speedReadings).toEqual([[0, 0]])
+  })
+})
+
+// Two questions whose YES arm no test had ever reached: both are answered by walking the round's
+// submissions in order, and both need a *pair* of turns arranged just so - which no fixture had.
+describe("C8.Q1, adaptive recovery", () => {
+  const answer = (entries: LogEntry[]) =>
+    must(CAPABILITIES.find((group) => group.id === "C8"), "the C8 group").evaluate(buildContext(entries)).Q1
+
+  // The turn after a refused prediction lands its first two moves. One applied move would prove
+  // nothing - the open exits of the current cell are handed to the model on every tool call, so
+  // repeating one back is transcription; the second is the first move that needs reasoning.
+  it("confirms recovery when the turn after a failure lands two consecutive moves", () => {
+    expect(answer([
+      ...turn(0, {content: '{"moves":["MoveUp","MoveUp"]}'}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveUp", "MoveUp"], lastAppliedMoveIndex: -1,
+        lastReplayStartCell: [0, 0],
+      })]}, {turn: 1}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown","MoveRight"]}'}}}, {turn: 1}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+        lastMoveStatus: "applied", lastSubmittedMoves: ["MoveDown", "MoveRight"], lastAppliedMoveIndex: 1,
+        lastReplayStartCell: [0, 0],
+      })]}, {turn: 2}),
+    ])).toBe(true)
+  })
+
+  // The same failure, and a recovery that lands only its first move: transcription, not reasoning.
+  it("does not confirm it when the following turn lands only one move", () => {
+    expect(answer([
+      ...turn(0, {content: '{"moves":["MoveUp","MoveUp"]}'}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveUp", "MoveUp"], lastAppliedMoveIndex: -1,
+        lastReplayStartCell: [0, 0],
+      })]}, {turn: 1}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown","MoveRight"]}'}}}, {turn: 1}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveDown", "MoveRight"], lastAppliedMoveIndex: 0,
+        lastReplayStartCell: [0, 0],
+      })]}, {turn: 2}),
+    ])).toBe(false)
+  })
+})
+
+describe("V6.Q1, failed-state repetition", () => {
+  const answer = (entries: LogEntry[]) =>
+    must(VIOLATIONS.find((group) => group.id === "V6"), "the V6 group").evaluate(buildContext(entries)).Q1
+
+  // The cell reading is what gives a submission its `before`, and a prediction with no cell behind it
+  // is skipped by this question: the same moves from two different cells are two different predictions.
+  const at00 = () => toolMessage({currentCell: {row: 0, col: 0}})
+  const outcomeOf = (moves: string[], applied: number) => toolMessage({
+    lastMoveStatus: applied > 0 ? "applied" : "invalid-move",
+    lastSubmittedMoves: moves,
+    lastAppliedMoveIndex: applied - 1,
+    lastReplayStartCell: [0, 0],
+  })
+
+  const twice = (moves: string[], applied: number): LogEntry[] => [
+    entry(LOG_EVENTS.request, {tools: [], messages: [at00()]}, {turn: 0}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: JSON.stringify({moves})}}}, {turn: 0}),
+    entry(LOG_EVENTS.request, {tools: [], messages: [at00(), outcomeOf(moves, applied)]}, {turn: 1}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: JSON.stringify({moves})}}}, {turn: 1}),
+    entry(LOG_EVENTS.request, {tools: [], messages: [at00(), outcomeOf(moves, applied)]}, {turn: 2}),
+  ]
+
+  // The same moves, from the same cell, after that exact list applied nothing.
+  it("confirms the repeat of a prediction already proven invalid from that cell", () => {
+    expect(answer(twice(["MoveUp"], 0))).toBe(true)
+  })
+
+  // The same list, tried twice, but it applied - so nothing was ever proven invalid, and there is no
+  // failed state to repeat.
+  it("does not confirm a repeat of a prediction that worked", () => {
+    expect(answer(twice(["MoveDown"], 1))).toBe(false)
+  })
+})
+
+// How many moves landed, when the log never says outright. annotateApplied prefers the replay result
+// and falls back to triangulating between the cell readings either side of the prediction.
+describe("resolving how many moves applied", () => {
+  const submissionsOf = (entries: LogEntry[]) =>
+    buildContext(entries).submissions.map((record) => [record.before, record.applied])
+
+  // A prediction naming something the maze has no move for. The walk stops there rather than stepping
+  // an unknown name: `moves` is a model's own JSON, so it can hold any string at all.
+  it("gives up the walk at a move the maze cannot apply", () => {
+    expect(submissionsOf([
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
+      entry(LOG_EVENTS.response, {
+        payload: {message: {content: '{"moves":["Teleport","MoveDown"]}'}},
+      }, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 1, col: 0}})]}, {turn: 1}),
+    ])).toEqual([["0,0", null]])
+  })
+
+  // The agent moved, and the prefix that lands on the cell it was next seen at is what applied.
+  it("counts the prefix that lands on the cell the agent was next seen at", () => {
+    expect(submissionsOf([
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
+      entry(LOG_EVENTS.response, {
+        payload: {message: {content: '{"moves":["MoveDown","MoveRight"]}'}},
+      }, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 1, col: 0}})]}, {turn: 1}),
+    ])).toEqual([["0,0", 1]])
+  })
+
+  // A replay that reports the moves but not how far they got. Read as none applied rather than as a
+  // missing reading: the result was stated, and what it states is that nothing landed.
+  it("reads a replay with no applied index as nothing applied", () => {
+    expect(submissionsOf([
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveUp"], lastReplayStartCell: [0, 0],
+      })]}, {turn: 1}),
+    ])).toEqual([["0,0", 0]])
+  })
+})
+
+// C7.Q1 asks for a batch through structure already proven branchless: the cell the agent stands on and
+// the one the first move leads into are both confirmed two-exit corridors. That is the shape where
+// batching costs nothing extra, and single-stepping wastes a free decay unit.
+describe("C7.Q1, a batch through confirmed corridor", () => {
+  const answer = (entries: LogEntry[]) =>
+    must(CAPABILITIES.find((group) => group.id === "C7"), "the C7 group").evaluate(buildContext(entries)).Q1
+
+  // Two exits each, which is what makes a cell a corridor: nothing to choose between, so the next step
+  // is forced and the agent can commit to it without another reading.
+  const corridor = (cell: [number, number], moves: string[]) => ({
+    cell: {row: cell[0], col: cell[1]},
+    openMoves: Object.fromEntries(moves.map((move) => [move, {visitStatus: "unexplored"}])),
+  })
+
+  const batchOf = (history: Array<ReturnType<typeof corridor>>, moves: string[]): LogEntry[] => [
+    entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+      currentCell: {row: 0, col: 0}, filteredTraversalHistory: history,
+    })]}, {turn: 0}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: JSON.stringify({moves})}}}, {turn: 0}),
+    entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
+      lastMoveStatus: "applied", lastSubmittedMoves: moves, lastAppliedMoveIndex: moves.length - 1,
+      lastReplayStartCell: [0, 0],
+    })]}, {turn: 1}),
+  ]
+
+  it("confirms it when both the cell and the one ahead are known corridors", () => {
+    expect(answer(batchOf(
+      [corridor([0, 0], ["MoveDown", "MoveRight"]), corridor([1, 0], ["MoveUp", "MoveDown"])],
+      ["MoveDown", "MoveDown"],
+    ))).toBe(true)
+  })
+
+  // The cell ahead has three exits, so the second move was a choice rather than a forced step - the
+  // agent batched through a junction it had no reading for.
+  it("leaves it unconfirmed when the cell ahead is a junction", () => {
+    expect(answer(batchOf(
+      [corridor([0, 0], ["MoveDown", "MoveRight"]), corridor([1, 0], ["MoveUp", "MoveDown", "MoveRight"])],
+      ["MoveDown", "MoveDown"],
+    ))).toBe(false)
   })
 })

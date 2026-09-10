@@ -12,7 +12,7 @@
 import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, Level, LevelModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
 
 // --- Entry point: what report-view calls ---
 
@@ -22,7 +22,7 @@ import type { AgentSummary, CellKey, Frame, Level, LevelModel, Maze, Move, Summa
  * of its inputs. `null` renders the empty section, for a report that answered no round.
  *
  * Shapes its own data from there, so the page hands over a round rather than a pre-built model. */
-export function createMazeReplay(round: Level | null): HTMLElement {
+export function createMazeReplay(round: PlayedRound | null): HTMLElement {
   const replayModel = mazeReplayModel(round);
 
   const root = createHtmlElement("section", "maze-replay");
@@ -88,7 +88,7 @@ export function createMazeReplay(round: Level | null): HTMLElement {
 
   // The round on screen. A report answers one round, so this is set once - showLevel still owns it,
   // because it is what wires the frame, the scrubber and the panels to a model.
-  let active: LevelModel = replayModel;
+  let active: ReplayModel = replayModel;
 
   // The lens is a view concern, so its state lives here rather than on the Frame: paint() replaces the
   // overlay on every scrub, and these two have to survive that.
@@ -218,7 +218,7 @@ export function createMazeReplay(round: Level | null): HTMLElement {
     if (active.maze?.exits.has(next)) focusCell(next);
   });
 
-  const showLevel = (model: LevelModel): void => {
+  const showLevel = (model: ReplayModel): void => {
     active = model;
     figure.replaceChildren();
     summary.replaceChildren();
@@ -231,7 +231,7 @@ export function createMazeReplay(round: Level | null): HTMLElement {
       // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
       // silently dropping the grid would read as "this round had nothing worth showing".
       //
-      // And reported *only* here. parseGameRound decodes the same maze and hands back the failure
+      // And reported *only* here. parseRound decodes the same maze and hands back the failure
       // without raising a warning of its own, because a notice above the round tabs said the same thing
       // less well: the reader is looking at the space the traversal should occupy, which is where they
       // can see what is missing from it.
@@ -509,7 +509,7 @@ function scrim(cell: CellKey, radius: number): SVGElement {
 // uncoloured. Re-drawing costs a window's worth of nodes, 25 at radius 2, and cannot diverge from the
 // grid because it is the same implementation.
 function buildLens(
-  model: LevelModel,
+  model: ReplayModel,
   frame: Frame,
   cell: CellKey,
   radius: number,
@@ -561,7 +561,7 @@ function drawWalls(svg: SVGElement, maze: Maze): void {
 }
 
 // drawMarkers draws the fixed points of the round: where it began and where it had to end.
-function drawMarkers(svg: SVGElement, model: LevelModel): void {
+function drawMarkers(svg: SVGElement, model: ReplayModel): void {
   if (model.startCell) {
     const {x, y} = cellXY(model.startCell);
     // Deliberately smaller than the destination square rather than the same mark in another colour.
@@ -632,7 +632,7 @@ function buildBars(
   return bars;
 }
 
-function buildMovesBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
+function buildMovesBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {
   const submitted = model.turns.map((turn) => turn.moves.length);
   const most = Math.max(1, ...submitted);
   const bars = buildBars(strip, submitted, (value) => Math.sqrt(value / most) * 100);
@@ -663,7 +663,7 @@ function buildMovesBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
 // surfaces read as two unrelated tallies that happen to share numbers.
 const decayLabel = (charge: number): string => DECAY_REASONS[charge] ?? `${charge} decay`;
 
-function buildDecayBars(strip: HTMLElement, model: LevelModel): HTMLElement[] {
+function buildDecayBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {
   const charges = model.turns.map((turn) => turn.decayCharged);
 
   // A round where nothing reported a charge - an agent that never called get_last_prediction_outcome -
@@ -795,7 +795,7 @@ const visitLabel = (status: VisitStatus, gloss: string): string =>
 // unvisited is counted, not tallied: no cell in frame.visited can be unvisited - being there means it
 // was entered - so it is simply the maze's area less what has been walked. Listing it completes the
 // scale and makes the four counts sum to the maze, which is what turns the key into a tracker.
-function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame): void {
+function buildVisitLegend(legend: HTMLElement, model: ReplayModel, frame: Frame): void {
   legend.replaceChildren();
 
   const counts = new Map<VisitStatus, number>();
@@ -866,7 +866,7 @@ function buildVisitLegend(legend: HTMLElement, model: LevelModel, frame: Frame):
 
 // drawFrame paints everything that changes as the scrubber moves. Kept in its own group so a repaint
 // removes exactly the previous frame and never the walls beneath it.
-function drawFrame(overlay: SVGElement, frame: Frame, model: LevelModel, colorOf: (seat: number) => string): void {
+function drawFrame(overlay: SVGElement, frame: Frame, model: ReplayModel, colorOf: (seat: number) => string): void {
   overlay.replaceChildren();
 
   // Visited cells are tinted by how heavily Tapoo says they were worked, not by whether they were
@@ -937,7 +937,7 @@ function drawFrame(overlay: SVGElement, frame: Frame, model: LevelModel, colorOf
 //
 // The agent is named only in a round that has more than one. On a single-agent round it was the same
 // word on every frame, and the trail colour already identifies seats.
-function turnNarrative(frame: Frame, model: LevelModel): string {
+function turnNarrative(frame: Frame, model: ReplayModel): string {
   const turn = frame.turn;
   // A frame at turn 0 has no turn to narrate; the two conditions are the same fact, but only the
   // second one tells the checker so.
@@ -987,7 +987,7 @@ const MAZE_SUMMARY_LINKS: Record<string, HTMLElement> = {
 };
 
 // summaryPanel wraps a field/value table in a labelled container, giving each panel a clear heading
-// so the Maze and Level panels are visually distinct but structurally consistent.
+// so the Maze and PlayedRound panels are visually distinct but structurally consistent.
 function summaryPanel(heading: string, rows: SummaryRow[]): HTMLElement {
   const panel = createHtmlElement("div", "maze-summary-panel");
   panel.append(
@@ -1004,7 +1004,7 @@ function summaryPanel(heading: string, rows: SummaryRow[]): HTMLElement {
 // and 9 the tall dark bars were; sharing `is-decay-N` means the colour they learned from the legend is
 // the colour they read here. Each count carries its rule as a title and as visually-hidden text, so
 // the meaning survives both a hover and a screen reader that sees no colour at all.
-function turnRow(model: LevelModel): Node {
+function turnRow(model: ReplayModel): Node {
   const cell = createHtmlElement("span", "maze-turns-cell");
   cell.append(createHtmlElement("span", "maze-turns-total", formatCount(model.turns.length)));
 
@@ -1066,10 +1066,10 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
 // Within the card, metrics are presented as a single-row horizontal table — column headers on top,
 // values below — so the label and its value share a column rather than a row.
 //
-// The numbers arrive already gathered on LevelModel.agents, one record per seat - so a card reads one
+// The numbers arrive already gathered on ReplayModel.agents, one record per seat - so a card reads one
 // object, rather than several lists where only a shared index keeps a speed beside the seat that ran it.
 // Formatting stays here because "18 of 24 (75%)" needs the maze's cell count, which is this view's.
-function agentStatsRow(model: LevelModel): HTMLElement {
+function agentStatsRow(model: ReplayModel): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
   const cells = model.stats?.cells ?? 0;
 

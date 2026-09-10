@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSeatLabel, agentSettingsCheck, agentsFromRound, seatRosterCheck, classifyTraversalSpeed, parseGameRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSettingsCheck, seatRosterCheck, classifyTraversalSpeed, parseRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
-import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
-import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
+import type {AgentSummary, LogEntry, ValidationCheck} from "./types"
+import {groupEntriesByRound, roundLabel} from "./rounds"
 import {roundReportFor} from "./rubric-report"
 import {fnv1a64Checksum} from "./utils"
 import {sliceLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
@@ -285,7 +285,7 @@ describe("the traversal payload checksum", () => {
     const result = parseTapooLogText(JSON.stringify(log))
     if (!result.ok) throw new Error(`fixture did not parse: ${result.error}`)
     return groupEntriesByRound(result.source.entries)
-      .flatMap((round) => parseGameRound(round.entries).warnings)
+      .flatMap((round) => parseRound(round.entries).warnings)
       .map((warning) => warning.message)
       .filter((m) => m.includes("checksum"))
   }
@@ -332,7 +332,7 @@ describe("the traversal payload checksum", () => {
     }
     expect(stripped).toBe(16)
 
-    const round = parseGameRound(log.entries)
+    const round = parseRound(log.entries)
     const check = must(round.checks.find((one) => one.name === "Traversal payloads"), "the traversal check")
     expect(check.outcome).toBe("unchecked")
     expect(check.detail).toMatch(/^16 get_maze_structure results carried no checksum/)
@@ -456,9 +456,9 @@ describe("what reaches the reader as a warning", () => {
 })
 
 // Moved off the export parse: whether a round's maze decodes is a statement about that round, and
-// parseGameRound is what answers it - for the round a reader opened, not for all of them at load.
+// parseRound is what answers it - for the round a reader opened, not for all of them at load.
 // Moved off the export parse: what a round's maze decodes to is a statement about that round, and
-// parseGameRound is what answers it - for the round a reader opened, not for all of them at load.
+// parseRound is what answers it - for the round a reader opened, not for all of them at load.
 //
 // It answers by *returning* the maze rather than warning about it. The replay already reports a maze
 // that will not decode, in the space the traversal should have occupied and with what the reader loses
@@ -476,7 +476,7 @@ describe("the encoded maze payload", () => {
   const started = (details: unknown) => [entry({payload: LOG_EVENTS.levelStarted, details})]
 
   it("hands back a maze that decodes, with the stats its start and destination imply", () => {
-    const {maze, warnings} = parseGameRound(started({
+    const {maze, warnings} = parseRound(started({
       maze: REAL_MAZE,
       startPosition: {x: 1, y: 1},
       destinationCell: {row: 0, col: 5},
@@ -487,7 +487,7 @@ describe("the encoded maze payload", () => {
   })
 
   it("hands back nothing for a round that carried no maze, and says nothing either", () => {
-    const {maze, warnings} = parseGameRound(started({level: 1}))
+    const {maze, warnings} = parseRound(started({level: 1}))
 
     expect(maze).toBeNull()
     expect(warnings).toEqual([])
@@ -497,21 +497,21 @@ describe("the encoded maze payload", () => {
   // the replay reads it, rather than as a warning the reader meets twice.
   it("hands back the failure for a damaged maze", () => {
     const damaged = {...REAL_MAZE, structure: `1${REAL_MAZE.structure.slice(1)}`}
-    const {maze, warnings} = parseGameRound(started({maze: damaged}))
+    const {maze, warnings} = parseRound(started({maze: damaged}))
 
     expect(expectErr(must(maze, "a decode attempt")).error).toMatch(/checksum/)
     expect(warnings).toEqual([])
   })
 
   it("hands back the failure for a malformed one too", () => {
-    expect(expectErr(must(parseGameRound(started({maze: {dimensions: {}}})).maze, "a decode attempt")))
+    expect(expectErr(must(parseRound(started({maze: {dimensions: {}}})).maze, "a decode attempt")))
       .toHaveProperty("ok", false)
   })
 
-  // A group holds a replay of the same level, so more than one opening. buildLevels reads the first,
+  // A group holds a replay of the same level, so more than one opening. buildPlayedRounds reads the first,
   // so that is the one returned - the two must not disagree about which maze the round had.
   it("returns the first opening's maze when a round was replayed", () => {
-    const {maze} = parseGameRound([
+    const {maze} = parseRound([
       entry({payload: LOG_EVENTS.levelStarted, details: {maze: REAL_MAZE}, game: 6, level: 54}),
       entry({payload: LOG_EVENTS.levelStarted, details: {maze: {dimensions: {}}}, game: 6, level: 54}),
     ])
@@ -520,101 +520,6 @@ describe("the encoded maze payload", () => {
   })
 })
 
-// One record per seat, from one pass over the round. Everything here is what a single-agent log could
-// not distinguish: a round-wide set says which providers appeared in a file, never which seat used one.
-describe("agentsFromRound", () => {
-  const seat = (
-    name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
-  ) => ({
-    turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
-    cells, rejectedMove: null, decayCharged: decay,
-  })
-  const setup = (over: Partial<TurnSetup> = {}): TurnSetup =>
-    ({seatId: null, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null, ...over})
-
-  // The path every log takes once the upstream fix lands: the turn states its own seat and model, and
-  // nothing has to be recovered from a decorated label.
-  it("reads a turn that states its own seat and model", () => {
-    const [only] = agentsFromRound(
-      new Map([[0, setup({model: "deepseek-v4-pro:cloud", api: "ollama"})]]),
-      [seat("Momo", 0, ["0,0", "1,0"], null, 2)],
-      null,
-    )
-
-    expect(only?.seatId).toBe(2)
-    expect(only?.models).toEqual(["deepseek-v4-pro:cloud"])
-    expect(only?.apis).toEqual(["ollama"])
-  })
-
-  // Two names for one model: the request declares "moonshotai/Kimi-K3:baseten", the response echoes
-  // "moonshotai/Kimi-K3" with the inference provider trimmed off. Reporting both would read as a seat
-  // that ran two models - the very thing agentSettingsCheck flags - so the fuller declared name wins.
-  it("prefers the declared model over the provider's trimmed echo", () => {
-    const [only] = agentsFromRound(
-      new Map([[0, setup({
-        model: "moonshotai/Kimi-K3:baseten",
-        echoedModel: "moonshotai/Kimi-K3",
-      })]]),
-      [seat("Momo", 0, ["0,0", "1,0"])],
-      null,
-    )
-
-    expect(only?.models).toEqual(["moonshotai/Kimi-K3:baseten"])
-  })
-
-  // An echo is still the model's name, just short of where it was served from, and a seat reported with
-  // no model at all says less. Older logs take this path: nothing declared a model before the upstream
-  // fix attached one to every request.
-  it("falls back to the echo where no turn declared a model", () => {
-    const [only] = agentsFromRound(
-      new Map([[0, setup({echoedModel: "moonshotai/Kimi-K3"})]]),
-      [seat("Momo", 0, ["0,0", "1,0"])],
-      null,
-    )
-
-    expect(only?.models).toEqual(["moonshotai/Kimi-K3"])
-  })
-
-  // The case the flattened fields could not express at all.
-  it("keeps each seat's setup to itself", () => {
-    const seats = agentsFromRound(
-      new Map([
-        [0, setup({model: "gemma4", api: "ollama", reasoning: "max"})],
-        [1, setup({model: "glm-5.1", api: "openai", reasoning: "high"})],
-      ]),
-      [seat("Katara", 0, ["0,0", "1,0"]), seat("Bumi", 1, ["1,0", "2,0"])],
-      null,
-    )
-
-    expect(seats.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
-    expect(seats.map((agent) => agent.models)).toEqual([["gemma4"], ["glm-5.1"]])
-    expect(seats.map((agent) => agent.apis)).toEqual([["ollama"], ["openai"]])
-    expect(seats.map((agent) => agent.reasoningEfforts)).toEqual([["max"], ["high"]])
-  })
-
-  // A stated seat is the log's answer; acting order is only a stand-in for logs that state none.
-  it("orders by the seat the log stated, not by who moved first", () => {
-    const seats = agentsFromRound(
-      new Map(),
-      [seat("Katara", 0, ["0,0", "1,0"], null, 2), seat("Bumi", 1, ["1,0", "2,0"], null, 1)],
-      null,
-    )
-
-    expect(seats.map((agent) => `${agent.name}/${String(agent.seatId)}`)).toEqual(["Bumi/1", "Katara/2"])
-    expect(seats.map((agent, index) => agentSeatLabel(agent, index))).toEqual([
-      "Bumi \u00b7 Agent at Seat 1",
-      "Katara \u00b7 Agent at Seat 2",
-    ])
-  })
-
-  // A log whose requests carry no player label attributes no turn, but the outcome still names who
-  // finished. Dropping that seat would report a round as having no agents when the log names one.
-  it("keeps a seat the outcome names but no turn produced", () => {
-    const seats = agentsFromRound(new Map(), [], {outcome: "won", agent: {playerName: "Kora"}})
-
-    expect(seats.map((agent) => agent.name)).toEqual(["Kora"])
-  })
-})
 
 // A seat whose settings changed mid-round was not one experiment. Possible to check only because the
 // settings are read per turn - a roster declared once could not contradict itself.
@@ -672,7 +577,7 @@ describe("a log that names no round at all", () => {
   })
 })
 
-// Grouping by (game, level) alone would merge these, which is the failure buildLevels warns about one
+// Grouping by (game, level) alone would merge these, which is the failure buildPlayedRounds warns about one
 // level down: a repeat of a round is a fresh maze, and one group holding both draws a path across walls
 // that exist in neither. Whether such a log exists is unknown - no log in this repo returns to a round -
 // so this pins the choice rather than a shape that has been seen.
@@ -692,337 +597,6 @@ describe("a log that returns to a round it already played", () => {
   })
 })
 
-describe("agentsFromRound, on a log that states its own seats", () => {
-  const MAZE = {
-    index_chars: ["|", "---", "-", "   ", " ", "\n"],
-    structure_checksum: "0x74af82cb14470b9d",
-    structure:
-      "01012121012105030343430343050301230303210503034303034305030301030303050343030303030501210303010305034343434343050121212121210",
-    dimensions: {numCols: 6, numRows: 4, area: 24},
-  }
-
-  type Shape = "upstream" | "legacy"
-  type Seat = {seatId: number; name: string; model: string; api: string; reasoning: string}
-  const KATARA: Seat = {seatId: 1, name: "Katara", model: "gemma4:cloud", api: "ollama", reasoning: "max"}
-  const BUMI: Seat = {seatId: 2, name: "Bumi", model: "moonshotai/Kimi-K3:baseten", api: "huggingface", reasoning: "high"}
-  const endpointOf = (seat: Seat) => `http://localhost:11434/${seat.name.toLowerCase()}`
-
-  // What the turn before this one did, read off the request that follows it - the offset turnReports
-  // owns. Included so the performance half of each record is a real number rather than null: it is
-  // joined to a seat by the same name the setup half is, and a test where both are null would pass with
-  // the join broken.
-  const replayOfPreviousTurn = {
-    lastMoveStatus: "applied",
-    lastSubmittedMoves: ["MoveDown"],
-    lastAppliedMoveIndex: 0,
-    lastReplayStartCell: [0, 0],
-    chargedMovesCount: 3,
-  }
-
-  /** One request's details, in whichever shape the log was written in.
-   *
-   * "upstream" states the seat and the full model outright on the request; "legacy" is every log written
-   * so far - a decorated label, no seat, no model, the model recoverable only from the response echo. */
-  const requestDetails = (seat: Seat, shape: Shape, replay: boolean) => {
-    const common = {
-      tools: [{name: "get_maze_structure"}],
-      messages: [
-        {role: "tool", content: JSON.stringify({
-          currentCell: [0, 0],
-          filteredTraversalHistory: [{seatId: null, playerName: seat.name, cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
-        })},
-        ...(replay ? [{role: "tool", content: JSON.stringify(replayOfPreviousTurn)}] : []),
-      ],
-      api: seat.api,
-      endpoint: endpointOf(seat),
-      reasoning: seat.reasoning,
-    }
-
-    // The decorated label is on every request and stays there - the upstream fields are additions to it,
-    // not replacements, so both shapes below carry it.
-    const labelled = {...common, player: `${seat.name} the Trailblazer - 0.9591x`}
-
-    return shape === "upstream"
-      ? {...labelled, seatId: seat.seatId, playerName: seat.name, model: seat.model}
-      : labelled
-  }
-
-  // A two-seat round: Katara on turn 1, Bumi on turn 2, Katara making the final dash.
-  const round = (shape: Shape): LogEntry[] => [
-    entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
-      startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
-    }}),
-    entry({turn: 1, payload: LOG_EVENTS.request, details: requestDetails(KATARA, shape, false)}),
-    // The echo, always the trimmed name: the provider drops the ":provider" suffix a declared name has.
-    entry({turn: 1, payload: LOG_EVENTS.response, details: {
-      payload: {model: must(KATARA.model.split(":")[0], "a trimmed name"), message: {content: '{"moves":["MoveDown"]}'}},
-    }}),
-    entry({turn: 2, payload: LOG_EVENTS.request, details: requestDetails(BUMI, shape, true)}),
-    entry({turn: 2, payload: LOG_EVENTS.response, details: {
-      payload: {model: must(BUMI.model.split(":")[0], "a trimmed name"), message: {content: '{"moves":["MoveDown"]}'}},
-    }}),
-    entry({turn: 3, payload: LOG_EVENTS.levelWon, details: {
-      outcome: "won", traversalSpeed: "1.0000",
-      agent: {playerName: "Katara", seatId: 1, model: "gemma4:cloud", enabled: true},
-      playerPosition: {x: 1, y: 3}, playerUniqueCellsVisited: 2, decayUnitsCharged: 3,
-    }}),
-  ]
-
-  const agentsOf = (shape: Shape): AgentSummary[] =>
-    must(buildLevels(round(shape))[0], "a round").agents
-
-  it("reads the seat, the full model and the connection off every request", () => {
-    expect(agentsOf("upstream")).toEqual([
-      {
-        name: "Katara", seatId: 1, models: ["gemma4:cloud"], apis: ["ollama"],
-        endpoints: ["http://localhost:11434/katara"], reasoningEfforts: ["max"],
-        // Its own turn's charge and cell, not the round's total: the figures the replay panels read.
-        uniqueCells: 1, decayCharged: 3, traversalSpeed: 1,
-      },
-      {
-        name: "Bumi", seatId: 2, models: ["moonshotai/Kimi-K3:baseten"], apis: ["huggingface"],
-        endpoints: ["http://localhost:11434/bumi"], reasoningEfforts: ["high"],
-        // No replay record covers turn 2, so nothing settled what it charged. Null, not zero.
-        uniqueCells: 1, decayCharged: null, traversalSpeed: null,
-      },
-    ])
-  })
-
-  // The round-end `agent` record is the one place a log states a seat today - and in every log to hand
-  // it is the ONLY place, sitting on "Agent level won." where it names whoever made the final dash. It is
-  // not a per-turn fact, so it must never stand in for one: on a two-seat round, reading it as a fallback
-  // on a request would report the finisher's seat and model on the turns the other seat played.
-  //
-  // Bumi played turn 2 and Katara finished, so Bumi is where that mistake would show.
-  it("never lets the finisher's record describe another seat's turn", () => {
-    // The finishing record, moved onto every request as well, which is the shape that would trip it.
-    const finisher = {seatId: 1, playerName: "Katara", model: "gemma4:cloud", enabled: true}
-    const entries = round("legacy").map((logEntry) =>
-      logEntry.payload === LOG_EVENTS.request
-        ? {...logEntry, details: {...logEntry.details as Record<string, unknown>, agent: finisher}}
-        : logEntry
-    )
-
-    const seats = must(buildLevels(entries)[0], "a round").agents
-    expect(seats.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
-    // Bumi keeps their own turn, unlabelled by the seat and model that belong to Katara alone.
-    expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([
-      [1, ["gemma4:cloud"]],
-      [null, ["moonshotai/Kimi-K3"]],
-    ])
-  })
-
-  // The join is by name, and the label is where a legacy log puts it: "Aang the Backtracker - 0.9591x".
-  // The name is read out of the label itself, so a seat named nowhere else in the log - not in a traversal
-  // history, not in a round-end record - is still attributed, with its charge, its cells and its setup.
-  //
-  // Both shapes reach the same answer here, which is the point: a stated playerName needs no recovery, and
-  // a label parses to the same name.
-  it("attributes a turn whose label names a player the log mentions nowhere else", () => {
-    const stranger = (shape: Shape): LogEntry[] => [
-      entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
-        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
-      }}),
-      entry({turn: 1, payload: LOG_EVENTS.request, details: {
-        ...(shape === "upstream" ? {seatId: 4, playerName: "Aang", model: "gemma4:cloud"} : {}),
-        player: "Aang the Backtracker - 0.9591x",
-        api: "ollama",
-        // Katara's history, not Aang's: the name "Aang" appears in this log only inside the label.
-        messages: [{role: "tool", content: JSON.stringify({
-          currentCell: [0, 0],
-          filteredTraversalHistory: [{seatId: null, playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
-        })}],
-      }}),
-      entry({turn: 1, payload: LOG_EVENTS.response, details: {
-        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
-      }}),
-    ]
-
-    expect(must(buildLevels(stranger("upstream"))[0], "a round").turns.map((turn) => turn.playerName))
-      .toEqual(["Aang"])
-    expect(must(buildLevels(stranger("upstream"))[0], "a round").agents.map((agent) => [agent.name, agent.apis]))
-      .toEqual([["Aang", ["ollama"]]])
-
-    // And with nothing stated, from the label alone.
-    expect(must(buildLevels(stranger("legacy"))[0], "a round").turns.map((turn) => turn.playerName))
-      .toEqual(["Aang"])
-    expect(must(buildLevels(stranger("legacy"))[0], "a round").agents.map((agent) => agent.name))
-      .toEqual(["Aang"])
-  })
-
-  // The declared name and the echo are one model named twice. A round that ran one model per seat must
-  // report no drift, or the check that exists to catch a changed setting cries on every clean log.
-  it("reports no drift when the provider echoes the trimmed name back", () => {
-    const check = agentSettingsCheck(agentsOf("upstream"))
-    expect(check.outcome).toBe("passed")
-    expect(check.detail).toBe("2 seats, each on one model, endpoint and reasoning effort throughout")
-  })
-
-  // A stated seat is identity enough on its own. Before the seat was what identified a record, a turn
-  // whose name did not resolve was dropped whole - its model, its endpoint and its charge with it - even
-  // though the request said plainly which seat played it.
-  it("reports a seat that stated its number and no name", () => {
-    const entries = [
-      entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
-        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
-      }}),
-      // No player, no playerName: the seat and the model are all this request states.
-      entry({turn: 1, payload: LOG_EVENTS.request, details: {
-        seatId: 7, model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
-      }}),
-      entry({turn: 1, payload: LOG_EVENTS.response, details: {
-        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
-      }}),
-    ]
-
-    const seats = must(buildLevels(entries)[0], "a round").agents
-    expect(seats.map((agent) => [agent.seatId, agent.name, agent.models, agent.apis]))
-      .toEqual([[7, "", ["gemma4:cloud"], ["ollama"]]])
-    // Named by the one thing known about it, with no dangling separator where a name would go.
-    expect(agentSeatLabel(must(seats[0], "a seat"), 0)).toBe("Agent at Seat 7")
-  })
-
-  // The per-seat figures are gathered against the record itself, not against a name or a number, and this
-  // is the round that shows why: two seats that stated their numbers and no player. Keyed by name they
-  // both answer to "" and their cells merge - seat 1 reporting 3 for a turn that entered one. Keyed by the
-  // number, a legacy round is the mirror of it: every seatId is null until the outcome fills one in, so
-  // every seat shares that key instead.
-  it("counts each seat's cells against the seat, not against its name or number", () => {
-    const played = (turn: number, seatId: number, cells: string[]) => ({
-      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
-    })
-
-    const stating = (seatId: number): TurnSetup => ({
-      seatId, playerName: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
-    })
-
-    const seats = agentsFromRound(
-      new Map([[0, stating(1)], [1, stating(2)]]),
-      // Different corners of the maze, so a merged set is visible in the count rather than hidden by an
-      // overlap: one cell entered against two.
-      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6", "5,7"])],
-      null,
-    )
-
-    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells])).toEqual([
-      [1, "", 1],
-      [2, "", 2],
-    ])
-  })
-
-  // The same argument for the echoes. Two nameless seats whose providers echoed different models: keyed by
-  // name both lists merge, so each seat reports two models it never ran - and agentSettingsCheck reads a
-  // seat holding two models as a setting that changed mid-round, turning a clean pair into a finding.
-  it("keeps each seat's echoed model against the seat, not against its name", () => {
-    const echoing = (echoedModel: string, seatId: number): TurnSetup => ({
-      seatId, playerName: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
-    })
-    const played = (turn: number, seatId: number, cells: string[]) => ({
-      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
-    })
-
-    const seats = agentsFromRound(
-      new Map([[0, echoing("gemma4", 1)], [1, echoing("glm-5.1", 2)]]),
-      [played(0, 1, ["0,0", "1,0"]), played(1, 2, ["5,5", "5,6"])],
-      null,
-    )
-
-    expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([[1, ["gemma4"]], [2, ["glm-5.1"]]])
-    expect(agentSettingsCheck(seats).outcome).toBe("passed")
-  })
-
-  // The outcome is matched to a seat by the number it states, before the name it states. Both are on the
-  // record and they can point at different things: a seat that stated its number and left its name to a
-  // label nothing resolved is nameless in the roster, while the outcome names a player for it.
-  //
-  // Matched by name only, that lookup misses and the outcome's seat is added as a second record - one
-  // round, one seat that played, two rows, the speed on the row with no turns behind it.
-  it("matches the outcome to a seat by the number it states, not only the name", () => {
-    const entries = [
-      entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
-        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
-      }}),
-      // States its seat and nothing a name can be recovered from.
-      entry({turn: 1, payload: LOG_EVENTS.request, details: {seatId: 3, model: "gemma4:cloud", api: "ollama"}}),
-      entry({turn: 1, payload: LOG_EVENTS.response, details: {
-        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
-      }}),
-      entry({turn: 2, payload: LOG_EVENTS.levelWon, details: {
-        outcome: "won", traversalSpeed: "1.0000",
-        agent: {seatId: 3, playerName: "Momo", model: "gemma4:cloud"},
-        playerPosition: {x: 1, y: 3}, playerUniqueCellsVisited: 1, decayUnitsCharged: 1,
-      }}),
-    ]
-
-    const seats = must(buildLevels(entries)[0], "a round").agents
-
-    // One seat, and it is the one that played: the outcome filled in the name it knew.
-    expect(seats.map((agent) => [agent.seatId, agent.name, agent.traversalSpeed])).toEqual([[3, "", 1]])
-  })
-
-  // A round where only some turns state a seat is one seat, not two halves of one. Mixed logs are what a
-  // rollout looks like from the outside: the change lands mid-experiment, or a replayed round is older.
-  it("adopts a seat met earlier by name alone", () => {
-    const entries = [
-      entry({turn: 0, payload: LOG_EVENTS.levelStarted, details: {
-        startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, maze: MAZE,
-      }}),
-      entry({turn: 1, payload: LOG_EVENTS.request, details: requestDetails(KATARA, "legacy", false)}),
-      entry({turn: 1, payload: LOG_EVENTS.response, details: {
-        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
-      }}),
-      entry({turn: 2, payload: LOG_EVENTS.request, details: requestDetails(KATARA, "upstream", false)}),
-      entry({turn: 2, payload: LOG_EVENTS.response, details: {
-        payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}},
-      }}),
-    ]
-
-    const seats = must(buildLevels(entries)[0], "a round").agents
-    expect(seats.map((agent) => [agent.seatId, agent.name, agent.models]))
-      .toEqual([[1, "Katara", ["gemma4:cloud"]]])
-  })
-
-  // Adopting changes the record's identity mid-fold: its seat number goes from null to 1. So a side table
-  // keyed on anything derived from the record - the name, the number, or the two joined - orphans whatever
-  // was filed before the change, and the seat is credited with half its walk and half its echoes.
-  it("keeps a seat's whole walk when a later turn numbers it", () => {
-    const echoing = (echoedModel: string): TurnSetup => ({
-      seatId: null, playerName: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
-    })
-    const played = (turn: number, seatId: number | null, cells: string[]) => ({
-      turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
-    })
-
-    const seats = agentsFromRound(
-      new Map([[0, echoing("gemma4")], [1, echoing("glm-5.1")]]),
-      // Turn 0 names the player and states no seat; turn 1 states seat 1 for the same player.
-      [played(0, null, ["0,0", "1,0"]), played(1, 1, ["1,0", "2,0", "3,0"])],
-      null,
-    )
-
-    expect(seats.map((agent) => [agent.seatId, agent.name, agent.uniqueCells, agent.models]))
-      .toEqual([[1, "Katara", 3, ["gemma4", "glm-5.1"]]])
-  })
-
-  // The other half of the promise: the stated fields are additions, and a log carrying none of them reads
-  // the same. Everything the two shapes can agree on, they agree on - the names, the order, and every
-  // performance figure - and the only differences are the two things a log without them cannot carry.
-  it("reads a log that states neither of them, unchanged", () => {
-    const legacy = agentsOf("legacy")
-
-    expect(legacy.map((agent) => [agent.name, agent.uniqueCells, agent.decayCharged, agent.traversalSpeed]))
-      .toEqual(agentsOf("upstream").map((agent) => [agent.name, agent.uniqueCells, agent.decayCharged, agent.traversalSpeed]))
-    expect(legacy.map((agent) => agent.apis)).toEqual([["ollama"], ["huggingface"]])
-
-    // The seat is the round-end record's alone, so only the seat it names has one.
-    expect(legacy.map((agent) => agent.seatId)).toEqual([1, null])
-    // And the model is the echo, short of the suffix saying where it was served from.
-    expect(legacy.map((agent) => agent.models)).toEqual([["gemma4:cloud"], ["moonshotai/Kimi-K3"]])
-  })
-})
 
 // End to end over a whole log, because every other test of this reaches agentsFromRound directly. The
 // real capture has one seat that never changed anything, so it cannot show what a round that is not one
@@ -1198,7 +772,7 @@ describe("the validation summary", () => {
   const fixtureEntries = () => (fixtureData as unknown as {entries: LogEntry[]}).entries
 
   it("reports what a real round verified", () => {
-    const round = parseGameRound(fixtureEntries())
+    const round = parseRound(fixtureEntries())
 
     expect(round.checks.map((check) => [check.name, check.outcome])).toEqual([
       ["Encoded maze", "passed"],
@@ -1222,7 +796,7 @@ describe("the validation summary", () => {
     const messages = Array.from({length: 6}, (_, index) => (
       {role: "system", content: "You are Katara and your t...", content_checksum: sum(index % 2)}
     ))
-    const round = parseGameRound([entry({payload: LOG_EVENTS.request, details: {messages}})])
+    const round = parseRound([entry({payload: LOG_EVENTS.request, details: {messages}})])
 
     const named_ = (name: string) => must(round.checks.find((check) => check.name === name), name)
     expect(named_("Trimmed checksummed repeats").detail).toBe("the round carried no trimmed repeats")
@@ -1235,7 +809,7 @@ describe("the validation summary", () => {
   it("says nothing was checked where no repeat could be compared", () => {
     const stub = "Get current/destination c..."
     const request = (messages: unknown[]) => [entry({payload: LOG_EVENTS.request, details: {messages}})]
-    const round = parseGameRound(request([
+    const round = parseRound(request([
       {role: "user", content: stub, content_checksum: "0xdeadbeefdeadbeef"},
     ]))
 
@@ -1255,7 +829,7 @@ describe("the validation summary", () => {
   // compacting something it never logged, not a check that failed to run. Reported as "not checked" it
   // read as a fault in the report, so it sits beside the result instead of being it.
   it("counts the repeats it could compare, and states the rest as a property of the log", () => {
-    const round = parseGameRound(fixtureEntries())
+    const round = parseRound(fixtureEntries())
 
     expect(named(round.checks, "Prompts and tool descriptions").detail)
       .toBe("5 of 5 texts logged in full hashed to the checksum beside them")
@@ -1294,7 +868,7 @@ describe("the validation summary", () => {
   // business and must not be counted against it. Counting them read as 32 unverifiable payloads on a
   // log where every payload the check covers verified.
   it("counts only the payloads the reconstruction is about", () => {
-    expect(named(parseGameRound(fixtureEntries()).checks, "Traversal payloads").detail)
+    expect(named(parseRound(fixtureEntries()).checks, "Traversal payloads").detail)
       .not.toMatch(/not checkable/)
   })
 
@@ -1306,12 +880,12 @@ describe("the validation summary", () => {
       const details = entry.details as Record<string, unknown> | null
       if (details && "historyWindowRadius" in details) delete details.historyWindowRadius
     }
-    const check = named(parseGameRound(stripped.entries).checks, "Traversal payloads")
+    const check = named(parseRound(stripped.entries).checks, "Traversal payloads")
 
     expect(check.outcome).toBe("unchecked")
     expect(check.detail).toMatch(/never recorded the destination cell and history window/)
     // And still silent, because a missing input is not evidence of damage.
-    expect(parseGameRound(stripped.entries).warnings).toEqual([])
+    expect(parseRound(stripped.entries).warnings).toEqual([])
   })
 
   // A failure has to read as one, and must not replace the warning that already reports it.
@@ -1323,7 +897,7 @@ describe("the validation summary", () => {
         if (typeof message.content_checksum === "string") message.content_checksum = "0xdeadbeefdeadbeef"
       }
     }
-    const round = parseGameRound(tampered.entries)
+    const round = parseRound(tampered.entries)
 
     expect(named(round.checks, "Traversal payloads").outcome).toBe("failed")
     expect(named(round.checks, "Traversal payloads").detail).toMatch(/^16 of 16 get_maze_structure results did not match/)
@@ -1331,7 +905,7 @@ describe("the validation summary", () => {
   })
 
   it("reports a round that carried no maze as unchecked, not failed", () => {
-    const check = named(parseGameRound([entry({payload: LOG_EVENTS.levelStarted})]).checks, "Encoded maze")
+    const check = named(parseRound([entry({payload: LOG_EVENTS.levelStarted})]).checks, "Encoded maze")
 
     expect(check.outcome).toBe("unchecked")
     expect(check.detail).toMatch(/carried no encoded maze/)
@@ -1363,7 +937,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // The half that matters most: a false positive here would put an accuracy warning on every clean
   // report. The real export carries 128 prompt and description appearances and raises none.
   it("says nothing about a round whose prompts and descriptions are intact", () => {
-    expect(parseGameRound((fixtureData as unknown as {entries: LogEntry[]}).entries).warnings).toEqual([])
+    expect(parseRound((fixtureData as unknown as {entries: LogEntry[]}).entries).warnings).toEqual([])
   })
 
   // The invariant the repeat denominator rests on: a trimmed text always carries a checksum, so nothing
@@ -1399,7 +973,7 @@ describe("the prompts and tool descriptions a round carried", () => {
     const plain = "It is Momo's turn to predict the next moves."
     const extra = "Reminder: two to four moves per turn."
     const warning = "Warning: keep your reasoning brief this time."
-    const round = parseGameRound([
+    const round = parseRound([
       request([
         systemMessage(PROMPT),
         {role: "user", content: warning, content_checksum: sum(warning)},
@@ -1425,7 +999,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   it("sees a warning merged into the instruction, as a one-user-message API forces", () => {
     const merged =
       "It is Momo's turn to predict the next moves. Warning: keep your reasoning brief this time."
-    const round = parseGameRound([
+    const round = parseRound([
       request([systemMessage(PROMPT), {role: "user", content: merged, content_checksum: sum(merged)}]),
     ])
 
@@ -1440,7 +1014,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // rather than report a smaller total, so it counts and goes unvalidated.
   it("counts a trimmed warning it cannot validate rather than dropping it", () => {
     const warning = "Warning: keep your reasoning brief this time."
-    const round = parseGameRound([
+    const round = parseRound([
       request([{role: "user", content: `${warning.slice(0, 25)}...`, content_checksum: sum(warning)}]),
     ])
 
@@ -1454,7 +1028,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // warning whose bytes do not match has to be the one thing that fails it.
   it("fails when a warning does not hash to the checksum beside it", () => {
     const instruction = "It is Momo's turn to predict the next moves."
-    const round = parseGameRound([
+    const round = parseRound([
       request([
         systemMessage(PROMPT),
         {role: "user", content: instruction, content_checksum: sum(instruction)},
@@ -1480,7 +1054,7 @@ describe("the prompts and tool descriptions a round carried", () => {
     const warning =
       "Warning: Your previous response had a token-limit-exhaustion error and used 10000 tokens without " +
       "returning a prediction."
-    const round = parseGameRound([
+    const round = parseRound([
       request([systemMessage(PROMPT), {role: "user", content: instruction, content_checksum: sum(instruction)}]),
       request([
         systemMessage(`${PROMPT.slice(0, 25)}...`, sum(PROMPT)),
@@ -1506,7 +1080,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   })
 
   it("checks a prompt logged in full against its own checksum", () => {
-    const warnings = parseGameRound([request([systemMessage(PROMPT, "0xdeadbeefdeadbeef")])]).warnings
+    const warnings = parseRound([request([systemMessage(PROMPT, "0xdeadbeefdeadbeef")])]).warnings
 
     expect(warnings).toHaveLength(1)
     expect(at(warnings, 0).impact).toBe("inaccurate")
@@ -1514,7 +1088,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   })
 
   it("checks a tool description the same way", () => {
-    const warnings = parseGameRound([request([], [tool("get_maze_structure", DESC, "0xdeadbeefdeadbeef")])]).warnings
+    const warnings = parseRound([request([], [tool("get_maze_structure", DESC, "0xdeadbeefdeadbeef")])]).warnings
 
     expect(at(warnings, 0).message).toMatch(/does not match its own checksum/)
   })
@@ -1523,7 +1097,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // log. It is checked against the full text logged under the same checksum instead.
   it("accepts a trimmed repeat of a prompt it has already seen in full", () => {
     const trimmed = `${PROMPT.slice(0, 25)}...`
-    const warnings = parseGameRound([
+    const warnings = parseRound([
       request([systemMessage(PROMPT)]),
       request([systemMessage(trimmed, sum(PROMPT))]),
     ]).warnings
@@ -1532,7 +1106,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   })
 
   it("reports a trimmed repeat that is not the text it claims to be", () => {
-    const warnings = parseGameRound([
+    const warnings = parseRound([
       request([systemMessage(PROMPT)]),
       request([systemMessage("Something else entirely...", sum(PROMPT))]),
     ]).warnings
@@ -1544,7 +1118,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // damage: the real export carries 30 such stubs, because Tapoo logs a prompt in full once and only
   // stubs it after it changes. Saying nothing is the only honest answer.
   it("stays silent on a stub whose full text the round never carried", () => {
-    const warnings = parseGameRound([request([systemMessage("You are Katara and your...", "0xfeedfacefeedface")])]).warnings
+    const warnings = parseRound([request([systemMessage("You are Katara and your...", "0xfeedfacefeedface")])]).warnings
 
     expect(warnings).toEqual([])
   })
@@ -1552,7 +1126,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // The one thing a round must not do: describe the same tool two ways. Its turns were then answering
   // different instructions, and the tool-use verdicts compare them as if they were not.
   it("reports a tool described two different ways within one round", () => {
-    const warnings = parseGameRound([
+    const warnings = parseRound([
       request([], [tool("get_maze_structure", DESC)]),
       request([], [tool("get_maze_structure", `${DESC} And something new.`)]),
     ]).warnings
@@ -1566,7 +1140,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // changes, so a real 16-turn round carries three. Requiring one per round would warn on every log.
   it("accepts a system prompt that changes during the round", () => {
     const second = "You are Katara and your traversal speed is now Navigator."
-    const warnings = parseGameRound([
+    const warnings = parseRound([
       request([systemMessage(PROMPT)]),
       request([systemMessage(second)]),
     ]).warnings
@@ -1580,12 +1154,12 @@ describe("the prompts and tool descriptions a round carried", () => {
   it("accepts the four personas a round can carry", () => {
     const four = [0, 1, 2, 3].map((n) => request([systemMessage(`You are Katara, persona ${n}.`)]))
 
-    expect(parseGameRound(four).warnings).toEqual([])
+    expect(parseRound(four).warnings).toEqual([])
   })
 
   it("reports a fifth, and points at the persona set it disagrees with", () => {
     const five = [0, 1, 2, 3, 4].map((n) => request([systemMessage(`You are Katara, persona ${n}.`)]))
-    const warnings = parseGameRound(five).warnings
+    const warnings = parseRound(five).warnings
 
     expect(warnings).toHaveLength(1)
     expect(at(warnings, 0).impact).toBe("inaccurate")
@@ -1602,9 +1176,9 @@ describe("the prompts and tool descriptions a round carried", () => {
       request([{role: "user", content: `Turn ${n}.`, content_checksum: sum(`Turn ${n}.`)}]),
     )
 
-    expect(parseGameRound(many).warnings).toEqual([])
+    expect(parseRound(many).warnings).toEqual([])
     const personas = must(
-      parseGameRound(many).checks.find((check) => check.name === "Agent personas"), "the personas check",
+      parseRound(many).checks.find((check) => check.name === "Agent personas"), "the personas check",
     )
     expect(personas.outcome).toBe("unchecked")
     expect(personas.detail).toBe("the round carried no system prompt")
@@ -1613,7 +1187,7 @@ describe("the prompts and tool descriptions a round carried", () => {
   // A tool result is compacted rather than trimmed, so it neither hashes nor ends in an ellipsis.
   // traversalPayloadWarnings reconstructs those; treating them as prompts would warn on every log.
   it("leaves tool results to the reconstruction that can check them", () => {
-    const warnings = parseGameRound([
+    const warnings = parseRound([
       request([{role: "tool", content: '{"currentCell":[0,0]}', content_checksum: "0xdeadbeefdeadbeef"}]),
     ]).warnings
 

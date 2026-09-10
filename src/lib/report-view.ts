@@ -464,7 +464,7 @@ function profile(
           Log contents are analyzed in your browser and never uploaded; a shared link carries the log
           address to the host serving this page.
         </p>
-        ${createMazeReplay(round.report.level)}
+        ${createMazeReplay(round.report.playedRound)}
       </section>
       <section class="events-section oracle-summary">
         <h2>Behavior Profile</h2>

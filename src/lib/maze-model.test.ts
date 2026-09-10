@@ -4,8 +4,8 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 import {turnReports} from "./log-contract"
 
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
-import {agentsFromRound} from "./log-contract"
-import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn, SummaryRow} from "./types"
+import {agentsFromRound} from "./rounds"
+import type {CellKey, EncodedMaze, PlayedRound, Outcome, TurnSummary, VisitStatus, VisitStatusByTurn, SummaryRow} from "./types"
 import {sliceLogText, firstRound, must} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
@@ -17,10 +17,10 @@ const REAL_MAZE: EncodedMaze = {
 }
 
 // A three-turn round through the real maze: two clean turns, then one whose second move hits a wall.
-type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null;
+type RoundOverrides = {encodedMaze?: EncodedMaze | null; turns?: TurnSummary[]; outcome?: Outcome | null;
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
-const DEFAULT_TURNS: Turn[] = [
+const DEFAULT_TURNS: TurnSummary[] = [
   { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
   { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
   {
@@ -43,7 +43,7 @@ const DEFAULT_OUTCOME: Outcome = {
 }
 
 const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
-  historyWindowRadius = null}: LevelOverrides = {}): Level => {
+  historyWindowRadius = null}: RoundOverrides = {}): PlayedRound => {
   const played = turns ?? DEFAULT_TURNS
   const ended = outcome === undefined ? DEFAULT_OUTCOME : outcome
 
@@ -53,7 +53,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
     startCell: "0,0",
     startPosition: null,
     historyWindowRadius,
-    // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
+    // A resolved cell key: buildPlayedRounds reads the logged shape - which may be {row, col} or
     // [row, col] - through the contract, so a level model never carries the raw form.
     destinationCell: "0,5",
     endCell: "2,0",
@@ -62,20 +62,20 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
     positions: [],
     turns: played,
     outcome: ended,
-    // Derived the way buildLevels derives it, so these fixtures exercise the real parser rather than a
+    // Derived the way buildPlayedRounds derives it, so these fixtures exercise the real parser rather than a
     // hand-written stand-in. No setup map: these turns come from nothing that logged a request.
     agents: agentsFromRound(new Map(), played, ended),
   }
 }
 
 // A round of n turns whose only interesting property is what each was charged.
-const charged = (charges: Array<number | null>): Turn[] =>
+const charged = (charges: Array<number | null>): TurnSummary[] =>
   charges.map((decayCharged, turn) => ({
     turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1,
     cells: ["0,0", "1,0"], rejectedMove: null, decayCharged,
   }))
 
-const modelFor = (overrides: LevelOverrides = {}) =>
+const modelFor = (overrides: RoundOverrides = {}) =>
   must(mazeReplayModel(level(overrides)), "a model for the round")
 
 describe("mazeReplayModel", () => {
@@ -362,13 +362,13 @@ describe("agentsFromRound", () => {
   it("reconciles with the unique-cell count Tapoo reports for the round", () => {
     const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
     const round = firstRound(result)
-    const level = must(round.level, "the fixture's only round")
+    const played = must(round.playedRound, "the fixture's only round")
 
-    expect(level.outcome?.playerUniqueCellsVisited).toBe(17)
-    expect(must(level.agents[0], "the round's only seat").uniqueCells).toBe(17)
+    expect(played.outcome?.playerUniqueCellsVisited).toBe(17)
+    expect(must(played.agents[0], "the round's only seat").uniqueCells).toBe(17)
 
     // And the radius the round was actually configured with, read from the same export.
-    const model = must(mazeReplayModel(round.level), "a model for the round")
+    const model = must(mazeReplayModel(round.playedRound), "a model for the round")
     expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
   })
 

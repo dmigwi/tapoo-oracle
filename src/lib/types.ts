@@ -239,12 +239,13 @@ export type EncodedMaze = {
 /** A decoded maze with its grid and stats, or why decoding failed. */
 export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats}>;
 
-/** What reading one round's entries turns up: its maze, and the caveats about that round.
+/** What reading one round's payloads turns up: its maze, and the caveats about that round.
  *
- * Produced by parseGameRound. `maze` is the round's first level-started maze decoded against its own
+ * ParsedRound is to a round what ParsedLog is to a file - the same three questions, one scope down.
+ * Produced by parseRound. `maze` is the round's first level-started maze decoded against its own
  * start and destination - null when the round carried none - and `warnings` are the round's alone,
  * never the log's. */
-export type GameRound = {maze: MazeResult | null; warnings: LogWarning[]; checks: ValidationCheck[]};
+export type ParsedRound = {maze: MazeResult | null; warnings: LogWarning[]; checks: ValidationCheck[]};
 
 // --- Rubric engine ---
 
@@ -283,9 +284,10 @@ export type Context = {
   apis: Set<string>;
   /** Distinct reasoning-effort settings the requests carried, in first-seen order. */
   reasoningEfforts: Set<string>;
-  /** What each turn's request said about the seat playing it. The raw material agentsFromRound folds
-   * into one record per seat. */
-  setupByTurn: Map<number, TurnSetup>;
+  /** What each turn's request and response *stated* about the seat playing it - the raw material
+   * agentsFromRound folds into one record per seat. Nothing else reads it: the resolved account of a
+   * turn is TurnSummary. */
+  rawSetupByTurn: Map<number, RawTurnSetup>;
   /** The replay record each turn reported, keyed by the turn that *reported* it - which is the turn
    * after the one it describes. Kept apart from `replays` because that list is deduplicated by a
    * transition key, so two turns submitting the same move with the same outcome collapse into one
@@ -362,15 +364,24 @@ export type Outcome = {
   lastActionResult?: Replay;
 };
 
-/** One turn of play: who acted, what they submitted, and what the maze did with it.
+/** One turn of play, resolved: who acted, what they submitted, and what the maze did with it.
+ *
+ * The settled account of a turn, and the only one anything downstream reads - the replay draws it, the
+ * decay strip counts it, agentsFromRound attributes seats from it. RawTurnSetup is the unresolved
+ * material it is built from, and the two are not interchangeable: this one knows who played, because
+ * buildPlayedRounds recovers a name the request never stated, and knows what the maze did, because the
+ * walk that produced `cells` needs a decoded maze that buildContext does not have yet.
  *
  * `cells` starts at the cell the turn *began* on, so a turn that applied two moves holds three cells.
  * `applied` and `decayCharged` are null where the log did not say - not zero, which is a reading. */
-export type Turn = {
+export type TurnSummary = {
   turn: number;
   /** The seat that played this turn, where the request stated one - see agentsFromRound, which gathers
-   * seats by this in preference to the name. Null on every log written before Tapoo attached it. */
+   * seats by this in preference to the name. Copied from RawTurnSetup when the round is built, in that
+   * direction only, so the two cannot drift. Null on every log written before Tapoo attached it. */
   seatId: number | null;
+  /** Who played the turn: `details.playerName` where a request states one, else the name recovered from
+   * the decorated `"Katara the Trailblazer - 0.95x"` label. Resolved here and nowhere else. */
   playerName: string | null;
   before: CellKey | null;
   moves: unknown[];
@@ -382,11 +393,16 @@ export type Turn = {
   decayCharged: number | null;
 };
 
-/** One played round, as the replay needs it: its maze, its path, and how it ended.
+/** What one round of the maze game did: the maze's structure, the path walked through it, its turns,
+ * how it ended, and the seats that played it - everything the replay draws, scoped to one GameIdentity.
  *
- * Named for the level it played, but keyed by (game, level) - a retry is a different round with a
- * brand-new maze, and merging two would draw a path crossing walls that exist in neither. */
-export type Level = {
+ * The pair to ParsedRound, and named to be read against it: ParsedRound is what the round's payloads
+ * say, this is what the round actually did. That is the evidence's caveats; this is the evidence.
+ *
+ * Not Level, though a reader sees "Level 1". A round is keyed by (game, level) - a retry of a level is
+ * a different round with a brand-new maze, and merging two would draw a path crossing walls that exist
+ * in neither - so a type called Level would name a *field* of the identity it is keyed by. */
+export type PlayedRound = {
   /** Which round this is. A key is derived from it by gameIdentityKey where one is wanted, and never
    * stored beside it: two representations of one fact are free to disagree. */
   identity: GameIdentity;
@@ -403,7 +419,7 @@ export type Level = {
   observedExits: OpenCellExits;
   visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
-  turns: Turn[];
+  turns: TurnSummary[];
   outcome: Outcome | null;
   /** One record per seat that played, in stated-seat order. Gathered once by agentsFromRound, so the
    * report and the replay read the same thing rather than deriving it twice. */
@@ -413,15 +429,25 @@ export type Level = {
 /** Which half of the rubric a group belongs to. The two are never combined into one score. */
 export type GroupKind = "capability" | "violation";
 
-/** What one turn's request and response said about the seat that played it.
+/** What one turn's request and response *stated* about the seat that played it, before anything is
+ * resolved from it.
+ *
+ * Raw, and intermediate: this is the material buildContext gathers on its walk, and agentsFromRound is
+ * the only reader. It is never rendered and never leaves the Context - which is deliberate, since
+ * `endpoint` can carry credentials and every printed endpoint goes through withoutCredentials first.
+ *
+ * Not a second account of a turn. TurnSummary is the resolved one, and the only one anything downstream
+ * reads: it says who actually played the turn - a name recovered from the decorated label where the
+ * request stated none - and what they did with it. This says only what the log declared about the
+ * setup, so where the two could differ, TurnSummary is the answer. The one field flowing between them
+ * is `seatId`, copied into TurnSummary when the round is built, in that direction only.
  *
  * Recorded per turn rather than folded into round-wide sets, because a setting that changes mid-round
  * is a finding: turns before and after were not answering under the same setup. A set would average
  * that away, which is what the single model field this replaced did, taking whichever response came
  * last. */
-export type TurnSetup = {
+export type RawTurnSetup = {
   seatId: number | null;
-  playerName: string | null;
   /** The model this turn was configured to use, as Tapoo declared it - "gemma4:cloud". */
   model: string | null;
   /** What the provider echoed back - "gemma4" for a declared "gemma4:cloud". Kept apart from the
@@ -522,7 +548,7 @@ export type Report = {
    *
    * One, not a list: a report is built from one round's entries - roundReportFor answers the round a
    * reader opened - so a list could only ever hold that one. */
-  level: Level | null;
+  playedRound: PlayedRound | null;
 };
 
 /** One model response, normalized across the three provider wire shapes.
@@ -590,7 +616,7 @@ export type RoundSlice = {
 
 /** A slice once it has been answered: the verdicts, the decoded maze, and the caveats about THIS
  * round. Resolved on demand and memoized - see roundReportFor. */
-export type RoundReport = RoundSlice & {report: Report; round: GameRound};
+export type RoundReport = RoundSlice & {report: Report; round: ParsedRound};
 
 /** A parsed log once it has been cut into rounds - what a log tab holds, and what the report view reads.
  *
@@ -611,7 +637,7 @@ export type SlicedLogResult = Result<SlicedLog>;
 // --- Maze replay ---
 
 /** The view's own model of a round. */
-export type LevelModel = {
+export type ReplayModel = {
   identity: GameIdentity;
   maze: Maze | null;
   error: string | null;
@@ -625,7 +651,7 @@ export type LevelModel = {
    * radius in cells. It bounds what the agent knew when it chose each move, so it belongs beside the
    * round's other facts rather than with the maze's fixed shape. */
   historyWindowRadius: number | null;
-  turns: Turn[];
+  turns: TurnSummary[];
   outcome: Outcome | null;
   agents: AgentSummary[];
 };
@@ -635,20 +661,20 @@ export type LevelModel = {
  * Derived per position rather than accumulated, so scrubbing backwards shows the same picture as
  * scrubbing forwards to the same place. */
 export type Frame = {
-  played: Turn[];
+  played: TurnSummary[];
   turnIndex: number;
   totalTurns: number;
   /** Every cell entered so far, with the seat that last entered it and how Tapoo graded it as of this
    * frame. The status is the last one reported at or before this turn, so it changes as you scrub, and
    * null where the log never graded the cell - never a grade inferred here. */
   visited: Map<CellKey, {playerName: string | null; status: VisitStatus | null}>;
-  /** Where each seat stands as of this frame, keyed by its index into LevelModel.agents rather than by
+  /** Where each seat stands as of this frame, keyed by its index into ReplayModel.agents rather than by
    * its name - two seats that named no player are still two seats, and one key of "" would draw them as
    * one. */
   positions: Map<number, CellKey>;
   currentCell: CellKey | null;
   rejected: {cell: CellKey | null; move: string} | null;
-  turn: Turn | null;
+  turn: TurnSummary | null;
 };
 
 // --- Log tabs ---

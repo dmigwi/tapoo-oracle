@@ -20,13 +20,11 @@ import type {
   OpenCellExits,
   TurnReports,
   EncodedMaze,
-  GameRound,
+  ParsedRound,
   AgentSummary,
   LogWarning,
   MazeResult,
-  Outcome,
-  Turn,
-  TurnSetup,
+  TurnSummary,
   ValidationCheck,
   AssistantMessage,
   ResponseUsage,
@@ -410,7 +408,7 @@ function filteredTraversalHistoryRebuild(body: Record<string, unknown>, level: n
 // and decide for each payload whether it can be checked at all - the third outcome, and the one worth
 // reading: a payload nothing could verify is not a payload that passed.
 //
-// Given one round's entries, by parseGameRound, and still running a cursor rather than assuming a single
+// Given one round's entries, by parseRound, and still running a cursor rather than assuming a single
 // maze: a group keyed game/level holds a replay of that level too, and each opening resets the facts the
 // reconstruction needs.
 //
@@ -966,210 +964,6 @@ function trimmedRepeatCheck({matched, unmatched}: RepeatTally): ValidationCheck 
   };
 }
 
-// --- The agents that played a round ---
-
-/** agentsFromRound reads one round into one record per seat: what each was running, and what it did.
- *
- * A single pass, deliberately. The setup half and the performance half were once gathered in two places,
- * one of them a set of parallel arrays whose rows held together only by shared index, and neither could
- * answer "what was seat 2 running". One record per seat cannot come apart that way.
- *
- * A separate pass from parseGameRound, though they share this file. That one asks whether a round's
- * payloads arrived intact; this one asks who played and under what - different questions over the same
- * round, and a caller that wants one should not pay for the other.
- *
- * Takes the setup map rather than the whole Context: it reads one field, and a caller with turns and an
- * outcome should not have to build a rubric context to name the seats that played them.
- *
- * Seats are ordered by the seat the log stated, and by who acted first where it stated none. */
-export function agentsFromRound(
-  setupByTurn: ReadonlyMap<number, TurnSetup>,
-  turns: readonly Turn[],
-  outcome: Outcome | null,
-): AgentSummary[] {
-  const seats: AgentSummary[] = []
-
-  // Two side tables keyed by the record itself, never by anything read off it. seatInfoAt below is the one
-  // answer to which seat a turn belongs to, and a derived key would be a second - free to disagree with it,
-  // and wrong in three ways:
-  //
-  //   By name, two seats that state their numbers and no player both answer to "".
-  //   By seat number, every seat on a log that numbers no turn answers to null.
-  //   By the two joined, a seat whose number arrives on a later turn changes key mid-pass, and everything
-  //   filed under the old one is orphaned - half a walk, half its echoes.
-  //
-  // A Map keyed by an object matches on the reference and never reads what is inside, so the arrays these
-  // records carry cost nothing to key on, and filling them in while the record is a key is safe. Which is
-  // just as well: the fold does exactly that.
-  //
-  // The echoes are held apart from what was declared. An echo drops the ":provider" suffix that says
-  // where the model was served from - "gemma4" for a declared "gemma4:cloud", and on Hugging Face
-  // "moonshotai/Kimi-K3" for "moonshotai/Kimi-K3:baseten" - so the declared name is the fuller of the two
-  // and the one to report. This list is only consulted for a seat nothing declared a model for.
-  const echoes = new Map<AgentSummary, string[]>()
-  const entered = new Map<AgentSummary, Set<CellKey>>()
-
-  const emptySummary = (name: string, seatId: number | null): AgentSummary => {
-    const seat: AgentSummary = {
-      name,
-      seatId,
-      models: [],
-      apis: [],
-      endpoints: [],
-      reasoningEfforts: [],
-      uniqueCells: null,
-      decayCharged: null,
-      traversalSpeed: null,
-    }
-    seats.push(seat)
-    return seat
-  }
-  const add = (list: string[], value: string | null): void => {
-    if (value !== null && !list.includes(value)) list.push(value)
-  }
-
-  /** The seat a turn belongs to, by the stated seat where there is one and by name otherwise.
-   *
-   * Tapoo gives each seat one player and one id, so either identifies a seat on its own. The stated seat
-   * is preferred because it is stated: it arrives on the request as a number, where the name arrives only
-   * after resolveActiveAgentNames has recovered it from a decorated label, which can fail - and a turn whose
-   * recovery failed still says outright which seat played it.
-   *
-   * Falls back to the name because a log that states no seat is still the common case, and to null: a
-   * turn with neither cannot be attributed, and guessing which seat it was is worse than saying nothing. */
-  const seatInfoAt = (seatId: number | null, name: string): AgentSummary | null => {
-    if (seatId !== null) {
-      const stated = seats.find((seat) => seat.seatId === seatId)
-      // A record can be made before its name is known - a turn that states its seat and no name - so the
-      // first turn to state one fills it in.
-      if (stated) {
-        if (stated.name === "" && name !== "") stated.name = name
-        return stated
-      }
-
-      // The same seat, met earlier on a turn that named it without numbering it. Adopting the record
-      // rather than opening a second one keeps a mixed round - some turns stating a seat, some not - as
-      // one seat rather than two halves of one.
-      const unnumbered = name === ""
-        ? undefined
-        : seats.find((seat) => seat.seatId === null && seat.name === name)
-      if (unnumbered) {
-        unnumbered.seatId = seatId
-        return unnumbered
-      }
-
-      return emptySummary(name, seatId)
-    }
-
-    if (name === "") return null
-    return seats.find((seat) => seat.name === name) ?? emptySummary(name, null)
-  }
-
-  // Every turn is played by exactly one seat, so a turn's setup, its charge and its cells are that
-  // seat's. One pass for all three: they are joined by the same identity, and computing them apart is
-  // what let a row be assembled out of two lists that agreed only by index.
-  //
-  // Unique cells *entered*, which is cells.slice(1) and not the whole walk. Turn.cells opens with
-  // `before`, the cell the seat was already standing on, so the whole array is "where I was, then
-  // everywhere I went". Counting all of it credits a seat with a cell it never moved into, and for turn 0
-  // that cell is the start square - which Tapoo does not treat as the player's at all: its traversal
-  // history labels the start "Self" on every reading, and its outcome record counts 17 unique cells where
-  // the walk touches 18. For later turns the slice changes nothing, cells[0] already being in the set
-  // from the turn before, so this is precisely the start-square correction and it is what makes the count
-  // reconcile with playerUniqueCellsVisited.
-  for (const turn of turns) {
-    const setup = setupByTurn.get(turn.turn)
-    // The seat off the turn, not off the setup map beside it. Both carry it - buildLevels fills one from
-    // the other - but the replay reads the turn, and one authority is what keeps a trail's colour and
-    // the row above it naming the same seat.
-    const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
-    if (!seat) continue
-
-    if (setup) {
-      add(seat.models, setup.model)
-      if (setup.echoedModel !== null) {
-        const echoed = echoes.get(seat) ?? []
-        add(echoed, setup.echoedModel)
-        echoes.set(seat, echoed)
-      }
-      add(seat.apis, setup.api)
-      add(seat.endpoints, setup.endpoint)
-      add(seat.reasoningEfforts, setup.reasoning)
-    }
-
-    if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged
-
-    const seen = entered.get(seat) ?? new Set<CellKey>()
-    for (const cell of turn.cells.slice(1)) seen.add(cell)
-    entered.set(seat, seen)
-  }
-
-  for (const [seat, seen] of entered) seat.uniqueCells = seen.size
-
-  // The outcome names one seat - whoever made the final dash - and carries its speed and, in v2.5.1, the
-  // only seatId the log states anywhere. Matched by that seat first, since that is the identity, and by
-  // name only for the logs that state no seat on a turn. Older logs name nobody, and a round with a
-  // single seat still has exactly one owner, so that case is attributed rather than dropped.
-  const record = asRecord(outcome?.agent)
-  const owner = asTrimmedText(record.playerName)
-  const ownerSeatId = typeof record.seatId === "number" ? record.seatId : null
-
-  /** Which seat the outcome is about, or undefined where the round cannot say.
-   *
-   * Four cases in order, each a different question about the same record. Ordered, not combined: the
-   * later ones are only right once the earlier ones have found nothing, and the last has a side effect. */
-  const resolveFinisher = (): AgentSummary | undefined => {
-    // The seat it states. That is the log's own answer, and it holds even for a seat whose name no turn
-    // resolved.
-    if (ownerSeatId !== null) {
-      const stated = seats.find((seat) => seat.seatId === ownerSeatId)
-      if (stated) return stated
-    }
-
-    // The name it states, which is all a log that numbers no turn has to offer.
-    if (owner !== "") {
-      const named = seats.find((seat) => seat.name === owner)
-      if (named) return named
-    }
-
-    // It names nobody, so there is nothing to match on. One seat played means one seat owns the outcome;
-    // with several, attributing it would be guessing, and the guess would credit whoever acted first.
-    if (owner === "" && ownerSeatId === null) return seats.length === 1 ? seats[0] : undefined
-
-    // It names a seat no turn produced - which happens when a log's requests carry nothing to attribute
-    // turns by. That seat played and the outcome is the log saying so, so it joins the roster here:
-    // dropping it reports a round as having no agents at all while the log plainly names one.
-    return emptySummary(owner, ownerSeatId)
-  }
-
-  const finisher = resolveFinisher()
-
-  if (finisher) {
-    const speed = Number(outcome?.traversalSpeed)
-    if (Number.isFinite(speed)) finisher.traversalSpeed = speed
-    // Only where the turns did not already state one: a request that names its own seat is the better
-    // source, being per turn rather than per round.
-    if (ownerSeatId !== null) finisher.seatId ??= ownerSeatId
-    // The record declares a model the same way a request does, so it joins the declared list rather than
-    // standing in for it.
-    add(finisher.models, asTrimmedText(record.model) || null)
-  }
-
-  // The echo, only where nothing declared a model - better than reporting no model at all, and it names
-  // the same model, just without the provider. Never alongside a declared name: the two are one model
-  // named twice, and listing both would read as a seat that ran two models, which is exactly what
-  // agentSettingsCheck reports as a finding.
-  for (const seat of seats) {
-    if (seat.models.length === 0) seat.models.push(...(echoes.get(seat) ?? []))
-  }
-
-  // A stated seat is the log's answer and beats the order they happened to act in.
-  return seats.sort((first, second) =>
-    first.seatId !== null && second.seatId !== null ? first.seatId - second.seatId : 0,
-  )
-}
-
-
 /** agentSeatLabel names a seat the way both the report and the replay say it.
  *
  * One function because two places render it, and a seat called something different in each would read
@@ -1228,7 +1022,7 @@ function driftOf(agent: AgentSummary): string[] {
  *
  * Turns that state only one of the two say nothing here - a legacy log numbers no turn, and this check has
  * no opinion on it. */
-export function seatRosterCheck(turns: readonly Turn[]): ValidationCheck {
+export function seatRosterCheck(turns: readonly TurnSummary[]): ValidationCheck {
   const name = "Seat roster";
   const scope = "round" as const;
   const playersBySeat = new Map<number, Set<string>>();
@@ -1328,7 +1122,7 @@ export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationC
   };
 }
 
-/** parseGameRound reads one round's entries: its maze, and whether what the log carries about that
+/** parseRound reads one round's entries: its maze, and whether what the log carries about that
  * round arrived intact.
  *
  * The round half of the contract. parseTapooLogText answers for the file - is this a Tapoo export, are
@@ -1349,14 +1143,14 @@ export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationC
  *
  * The verdicts do stand either way: no rubric question reads this payload. The corridor questions
  * answer from the exits the log's own tool results confirmed. */
-export function parseGameRound(entries: LogEntry[]): GameRound {
+export function parseRound(entries: LogEntry[]): ParsedRound {
   let maze: MazeResult | null = null;
 
   // The first level-started maze, decoded with the round's own start and destination - the same two the
   // replay decodes with, so what comes back here is what the replay would build.
   //
   // Per entry, not once, because a group keyed game/level holds a replay of that level too and each
-  // opening carries its own maze. The first is the one buildLevels reads, so it is the one returned.
+  // opening carries its own maze. The first is the one buildPlayedRounds reads, so it is the one returned.
   for (const entry of entries) {
     if (entry.payload !== LOG_EVENTS.levelStarted) continue;
     if (maze !== null) break;
@@ -1420,7 +1214,7 @@ function mazeCheck(maze: MazeResult | null): ValidationCheck {
  * Its successful output is the normalized shape every downstream query uses: name, version, mode,
  * downloadedAt and readable entries. What it does *not* do is index the turns or read a round: a turn span
  * belongs to the round it is in, and buildContext derives one per round from that round's own entries -
- * see parseGameRound. */
+ * see parseRound. */
 export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: string} = {}): LogTextResult {
   const trimmed = asTrimmedText(text);
   if (!trimmed) {
@@ -1515,7 +1309,7 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     responseCheck(responses),
   ];
 
-  // Only the export's own caveats; a round's are parseGameRound's.
+  // Only the export's own caveats; a round's are parseRound's.
 
   const log: TapooLog = {
     name: envelope.name,

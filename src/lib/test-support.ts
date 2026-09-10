@@ -2,7 +2,7 @@ import {LOG_EVENTS, parseTapooLogText} from "./log-contract";
 import {fnv1a64Checksum} from "./utils";
 import {sliceLogIntoRounds} from "./rounds";
 import {roundReportFor} from "./rubric-report";
-import type {GroupResult, Level, LogEntry, LogLevel, SlicedLogResult, LogWarning, RegionView, Report} from "./types";
+import type {GroupResult, PlayedRound, LogEntry, LogLevel, SlicedLogResult, LogWarning, RegionView, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -270,9 +270,9 @@ export function rubricTurn(
 }
 
 /** The round a report answered, or a failure naming what was expected. */
-export function levelOf(report: Report): Level {
-  if (!report.level) throw new Error("expected the report to answer a round");
-  return report.level;
+export function levelOf(report: Report): PlayedRound {
+  if (!report.playedRound) throw new Error("expected the report to answer a round");
+  return report.playedRound;
 }
 
 /** One rubric group by id, from either half of the profile. */

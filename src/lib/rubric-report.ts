@@ -12,8 +12,8 @@
 // roundReportFor is the entry - it is what report-view asks for - and beneath it buildReport, then the
 // rubric pass buildReport calls: the file reads in the order the work happens.
 
-import { agentSettingsCheck, classifyTraversalSpeed, parseGameRound, seatRosterCheck } from "./log-contract"
-import { buildLevels } from "./rounds"
+import { agentSettingsCheck, classifyTraversalSpeed, parseRound, seatRosterCheck } from "./log-contract"
+import { buildPlayedRounds } from "./rounds"
 import { CAPABILITIES, VIOLATIONS, aggregate, buildContext } from "./rubric-engine"
 import type { Context, GroupKind, GroupResult, LogEntry, Report, RoundReport, RoundSlice, RubricGroup } from "./types"
 
@@ -42,11 +42,11 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
   if (cached) return cached;
 
   const report = buildReport(slice.entries, {label: slice.reportLabel});
-  const round = parseGameRound(slice.entries);
+  const round = parseRound(slice.entries);
   const resolved: RoundReport = {
     ...slice,
     report,
-    // Composed here because the check needs both halves: parseGameRound reads the round's payloads and
+    // Composed here because the check needs both halves: parseRound reads the round's payloads and
     // knows nothing of seats, while the summaries come from the answered report. Neither should have to
     // reach for the other to say whether a seat's setup held for the whole round.
     round: {
@@ -55,7 +55,7 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
         ...round.checks,
         // Over the round's turns, which is where a seat and a player are stated together. A round that
         // decoded no maze still has turns to check, so this reads the turns and not the maze.
-        seatRosterCheck(report.level?.turns ?? []),
+        seatRosterCheck(report.playedRound?.turns ?? []),
         agentSettingsCheck(report.agents),
       ],
     },
@@ -72,7 +72,7 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
  * Three steps, each owned elsewhere:
  *
  *   buildContext (rubric-engine) reads the entries into the facts every question is answered from;
- *   buildLevels (rounds)         derives the round's replay record from that same context;
+ *   buildPlayedRounds (rounds)  derives the round's maze and path from that same context;
  *   answerRubric (below)         answers the capability and violation groups against it.
  *
  * What this function itself does is compose those three and name the facts a reader reads beside the
@@ -81,16 +81,16 @@ export function buildReport(entries: LogEntry[], { label = "log" }: { label?: st
   const context = buildContext(entries, { label })
 
   // Built once and read twice: the report's agent summaries come from the same round the replay draws,
-  // so the two cannot disagree about who played. This is handed one round's entries, so buildLevels
-  // regroups them into the one round it already has.
-  const level = buildLevels(entries, context)[0] ?? null
+  // so the two cannot disagree about who played. This is handed one round's entries, so
+  // buildPlayedRounds regroups them into the one round it already has.
+  const playedRound = buildPlayedRounds(entries, context)[0] ?? null
 
   const {capabilities, violations} = answerRubric(context)
   const winningOutcome = context.outcomes.find((outcome) => outcome.outcome === "won")
 
   return {
     label,
-    agents: level?.agents ?? [],
+    agents: playedRound?.agents ?? [],
     output: {...context.output, finishReasons: [...context.output.finishReasons]},
     predictions: context.submissions.length,
     traversalSpeed: winningOutcome ? Number(winningOutcome.traversalSpeed) : null,
@@ -110,7 +110,7 @@ export function buildReport(entries: LogEntry[], { label = "log" }: { label?: st
       tokenExhaustions: context.tokenExhaustions,
     },
 
-    level,
+    playedRound,
   }
 }
 

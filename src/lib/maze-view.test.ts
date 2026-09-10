@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest"
 
 import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
-import {agentsFromRound} from "./log-contract"
-import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus} from "./types"
+import {agentsFromRound} from "./rounds"
+import type {CellKey, EncodedMaze, PlayedRound, Outcome, TurnSummary, VisitStatus} from "./types"
 import {at, query, queryAll} from "./test-support";
 
 const REAL_MAZE = {
@@ -18,9 +18,9 @@ const REAL_MAZE = {
   dimensions: { numCols: 6, numRows: 4, area: 24 },
 }
 
-type LevelOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
+type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
-const TURNS: Turn[] = [
+const TURNS: TurnSummary[] = [
   { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
   { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
   {
@@ -39,13 +39,13 @@ const OUTCOME: Outcome = {
   outcome: "won", traversalSpeed: "1.0000", playerUniqueCellsVisited: 17, decayUnitsCharged: 17,
 }
 
-const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}): Level => ({
+const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: RoundOverrides = {}): PlayedRound => ({
   identity: {game, level: lvl},
   encodedMaze,
   startCell: "0,0",
   startPosition: null,
   historyWindowRadius: null,
-  // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
+  // A resolved cell key: buildPlayedRounds reads the logged shape - which may be {row, col} or
   // [row, col] - through the contract, so a level model never carries the raw form.
   destinationCell: "0,5",
   endCell: "2,1",
@@ -54,12 +54,12 @@ const level = ({encodedMaze = REAL_MAZE, game = 2, lvl = 1}: LevelOverrides = {}
   positions: [],
   turns: TURNS,
   outcome: OUTCOME,
-  // Derived the way buildLevels derives it, so the panels below are rendering the real parser's output.
+  // Derived the way buildPlayedRounds derives it, so the panels below are rendering the real parser's output.
   agents: agentsFromRound(new Map(), TURNS, OUTCOME),
 })
 
 // The round on its own, which is what the page hands the replay.
-const build = (round: Level | null) => createMazeReplay(round)
+const build = (round: PlayedRound | null) => createMazeReplay(round)
 
 const range = (node: ParentNode) => query<HTMLInputElement>(node, "input[type=range]")
 const caption = (node: ParentNode) => query(node, ".maze-caption").textContent
