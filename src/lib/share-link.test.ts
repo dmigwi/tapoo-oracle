@@ -34,6 +34,20 @@ describe("fetchOnlineJsonText", () => {
       .rejects.toThrow("exceeds the 5 byte")
   })
 
+  // The deadline is the fetch's own, so a request that never answers is abandoned rather than left
+  // spinning. Asserted through an injected timeout, not the default: a test that waited out the real
+  // one would take two minutes to prove a millisecond's worth of behaviour.
+  it("gives up on a host that stops answering", async () => {
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation timed out.", "TimeoutError"))
+      })
+    })))
+
+    await expect(fetchOnlineJsonText("https://example.com/log.json", {timeoutMs: 5}))
+      .rejects.toThrow(/timed out/)
+  })
+
   it("stops a streamed report once it exceeds the configured limit", async () => {
     const body = new ReadableStream({
       start(controller) {

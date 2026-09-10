@@ -39,8 +39,19 @@ export function validateOnlineJsonUrl(value: unknown): UrlResult {
 
 // --- Fetching a log ---
 
-const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
-const DEFAULT_MAX_REPORT_BYTES = 25 * 1024 * 1024;
+// The two bounds are a pair, and the timeout is the slower of them to reach.
+//
+// AbortSignal.timeout is an overall deadline, not an idle one: a download that is progressing steadily
+// is still cut off when it expires. So the timeout has to be long enough for the largest log the size
+// limit admits, or the size limit never decides anything and a reader with a big log is told their
+// network failed when it did not.
+//
+// 100 MB in 120 seconds is a sustained 6.7 Mbit/s, which is the slowest connection this expects to
+// serve a maximum-size log to. Ordinary logs are nowhere near it - the v2.5.1 capture is 0.2 MB and a
+// 2,000-entry round about 6 MB - so this deadline is only ever met by a log at the ceiling or by a host
+// that has stopped answering.
+const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_REPORT_BYTES = 100 * 1024 * 1024;
 
 type FetchLimits = {timeoutMs?: number; maxBytes?: number};
 
