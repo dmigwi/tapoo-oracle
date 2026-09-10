@@ -557,16 +557,16 @@ describe("V6.Q1, failed-state repetition", () => {
   })
 })
 
-// How many moves landed, when the log never says outright. annotateApplied prefers the replay result
+// How many moves landed, when the log never says outright. settlePredictions prefers the replay result
 // and falls back to triangulating between the cell readings either side of the prediction.
-describe("resolving how many moves applied", () => {
-  const submissionsOf = (entries: LogEntry[]) =>
+describe("settling how many moves applied", () => {
+  const settledOf = (entries: LogEntry[]) =>
     buildContext(entries).predictions.map((record) => [record.before, record.applied])
 
   // A prediction naming something the maze has no move for. The walk stops there rather than stepping
   // an unknown name: `moves` is a model's own JSON, so it can hold any string at all.
   it("gives up the walk at a move the maze cannot apply", () => {
-    expect(submissionsOf([
+    expect(settledOf([
       entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
       entry(LOG_EVENTS.response, {
         payload: {message: {content: '{"moves":["Teleport","MoveDown"]}'}},
@@ -577,7 +577,7 @@ describe("resolving how many moves applied", () => {
 
   // The agent moved, and the prefix that lands on the cell it was next seen at is what applied.
   it("counts the prefix that lands on the cell the agent was next seen at", () => {
-    expect(submissionsOf([
+    expect(settledOf([
       entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
       entry(LOG_EVENTS.response, {
         payload: {message: {content: '{"moves":["MoveDown","MoveRight"]}'}},
@@ -589,7 +589,7 @@ describe("resolving how many moves applied", () => {
   // A replay that reports the moves but not how far they got. Read as none applied rather than as a
   // missing reading: the result was stated, and what it states is that nothing landed.
   it("reads a replay with no applied index as nothing applied", () => {
-    expect(submissionsOf([
+    expect(settledOf([
       entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({currentCell: {row: 0, col: 0}})]}, {turn: 0}),
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 0}),
       entry(LOG_EVENTS.request, {tools: [], messages: [toolMessage({
@@ -764,5 +764,47 @@ describe("a turn that read the outcome tool twice", () => {
 
     expect(context.endpointFailures).toBe(1)
     expect(context.agentDisablings).toBe(1)
+  })
+})
+
+// A prediction holding a command the maze cannot read keeps only its prefix, and the replay that
+// describes it still names every command sent. Both sides are narrowed the same way, or the join
+// misses and a turn Tapoo described precisely is triangulated instead.
+describe("resolving a prediction the maze could only partly read", () => {
+  it("still matches it to the replay that describes it", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: [
+        {role: "tool", content: JSON.stringify({currentCell: {row: 0, col: 0}})},
+      ]}, {turn: 0}),
+      entry(LOG_EVENTS.response, {
+        payload: {message: {content: '{"moves":["MoveDown","Teleport"]}'}},
+      }, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [{role: "tool", content: JSON.stringify({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveDown", "Teleport"],
+        lastAppliedMoveIndex: 0, lastReplayStartCell: {row: 0, col: 0}, chargedMovesCount: 2,
+      })}]}, {turn: 1}),
+    ])
+
+    const [only] = context.predictions
+    expect(only).toMatchObject({moves: ["MoveDown"], submittedCount: 2, applied: 1})
+  })
+
+  // Two predictions can share a prefix and differ in what they asked for - "MoveDown" against
+  // "MoveDown" then a command the maze cannot read - so the count is part of the key. Without it the
+  // one-move turn would take the two-command replay's applied count and report a move that never was.
+  it("does not take the applied count of a prediction that only shares its prefix", () => {
+    const context = buildContext([
+      entry(LOG_EVENTS.request, {tools: [], messages: [
+        {role: "tool", content: JSON.stringify({currentCell: {row: 0, col: 0}})},
+      ]}, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
+      entry(LOG_EVENTS.request, {tools: [], messages: [{role: "tool", content: JSON.stringify({
+        lastMoveStatus: "invalid-move", lastSubmittedMoves: ["MoveDown", "Teleport"],
+        lastAppliedMoveIndex: 1, lastReplayStartCell: {row: 0, col: 0}, chargedMovesCount: 2,
+      })}]}, {turn: 1}),
+    ])
+
+    // Triangulated from the cell readings instead, which for a turn seen at one cell only is nothing.
+    expect(context.predictions[0]?.applied).toBeNull()
   })
 })

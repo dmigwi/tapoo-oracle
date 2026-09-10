@@ -463,9 +463,12 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
     const record = recordFor(prediction.turn)
     const reported = reportedMoves(record)
 
-    // Only trusted when it describes this turn's prediction. If the two disagree the cursor has
-    // landed on someone else's record, and a wrong path drawn confidently is worse than a derived
-    // one - so it falls through to the derivation instead.
+    // Only trusted when it describes this turn's prediction: the same commands, and as many of them as
+    // the turn submitted. A record that disagrees describes another turn, and a wrong path drawn
+    // confidently is worse than a derived one - so it falls through to the derivation instead.
+    //
+    // The count is compared as well as the moves because a prefix is not an identity: a turn that sent
+    // "MoveUp" and one that sent "MoveUp" then a command the maze cannot read share theirs.
     const trusted = record !== null && reported !== null &&
       reported.count === prediction.submittedCount &&
       reported.moves.length === prediction.moves.length &&
@@ -590,8 +593,8 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
 
   // The winning turn is the one turn no later reading can settle: the round ends, so no next request
   // reports a position, and this log's round-end entry carries no lastActionResult either. Its final
-  // position is recorded though, so the closing turn is resolved the way annotateApplied resolves
-  // every other one - by finding the prefix of submitted moves that lands on the observed cell.
+  // position is recorded though, so the closing turn is settled the way settlePredictions settles every
+  // other one - by finding the prefix of submitted moves that lands on the observed cell.
   const endCell = outcome ? cellFromGridPoint(outcome.playerPosition) : null
   const last = turns.at(-1)
   if (last && last.applied === null && endCell && last.before) {

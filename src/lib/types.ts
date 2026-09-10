@@ -63,8 +63,11 @@ export type VisitStatus = "unvisited" | "explored" | "backtracking" | "oscillati
  *
  * Key -1 is the state before the first turn - what the payload logged on turn 0 covers. */
 export type TurnReports<T> = {
-  /** Store what the request on `reportingTurn` carried, under the turn it covers. `merge` combines with
-   * an existing entry when a turn carried more than one payload. */
+  /** Store what the request on `reportingTurn` carried, under the turn it covers.
+   *
+   * `merge` decides what happens when a turn carries a second payload for the same covered turn - which
+   * a turn does whenever it makes more than one request. Without one the later payload wins, so a
+   * caller that wants the first reading kept says so: `(existing) => existing`. */
   record: (reportingTurn: number, value: T, merge?: (existing: T, incoming: T) => T) => void;
   /** What is known about `turn` itself. */
   get: (turn: number) => T | undefined;
@@ -263,7 +266,7 @@ export type ParsedRound = {maze: MazeResult | null; warnings: LogWarning[]; chec
  * The unreadable commands themselves are not carried. Nothing scores their spelling, and a model's raw
  * JSON travelling through the report is a value nothing may trust and every reader must narrow.
  *
- * `before` and `applied` are filled by a second pass (`annotateApplied`), which is why they are
+ * `before` and `applied` are settled by a second pass (`settlePredictions`), which is why they are
  * nullable here rather than required. */
 export type TurnPrediction = {
   /** The moves the maze can apply, in order, ending at the first command it cannot.
@@ -360,6 +363,10 @@ export type Context = {
 };
 
 /** One turn's outcome, as get_last_prediction_outcome reported it to the turn after it.
+ *
+ * Usually to the turn after it. A turn that is interrupted and runs again re-invokes the tool, and the
+ * answer then describes that turn's own failed attempt rather than the prediction before it - which is
+ * why the store keeps a turn's first reading and not its last. See buildContext.
  *
  * Logged verbatim - this tool carries no content_checksum, which is Tapoo's marker for a message whose
  * content was trimmed or compacted - so these are the values Tapoo actually sent, not a reconstruction.

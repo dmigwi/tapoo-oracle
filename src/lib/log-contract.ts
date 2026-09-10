@@ -81,7 +81,11 @@ export {
  * no exported helper to hold.
  *
  * Turn 0's payload covers turn -1: there is no turn before the first, so that key holds the state the
- * round opened in and matches no turn. */
+ * round opened in and matches no turn.
+ *
+ * A turn writes more than once whenever it makes more than one request. What should happen then is the
+ * caller's to say, through `merge`: visit statuses accumulate, and an outcome keeps the first reading,
+ * because a turn that runs again after a failure re-reads the tool and gets an answer about itself. */
 export function turnReports<T>(): TurnReports<T> {
   const byTurn = new Map<number, T>();
 

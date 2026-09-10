@@ -75,18 +75,17 @@ export function parseTurnPrediction(content: unknown): Omit<TurnPrediction, "tur
   for (const [candidate, tier] of candidates) {
     try {
       // JSON.parse is `any`; narrowing here is what stops an arbitrary model response being carried
-      // into the rubric as if its shape were known. `moves` stays unknown[] on purpose - what the
-      // model sent is exactly the thing the questions are asking about.
+      // into the rubric as if its shape were known. Nothing past this function sees the model's own
+      // JSON: what it sent is reported as a count and a prefix, and its excess fields as one string.
       const parsed: unknown = JSON.parse(candidate)
       if (parsed !== null && typeof parsed === "object" && "moves" in parsed) {
         // A `moves` that is not a list is a malformed prediction, and it becomes an empty one rather
         // than a one-move one: wrapping it would let `{"moves": "MoveUp"}` be scored as a valid single
-        // move, which is the opposite of what the questions are asking. The key is still recorded in
-        // `keys`, so the difference between "no moves key" and "a moves key holding junk" survives.
+        // move, which is the opposite of what the questions are asking.
         //
-        // Returning whatever the model sent instead lets a string reach `.every` in the rubric, which is
-        // not a method on a string: one malformed response then throws out of buildReport and takes the
-        // whole page render with it.
+        // The difference between "no moves key" and "a moves key holding junk" survives all the same:
+        // the branch above returns null for the first, so it is counted as a response nothing could be
+        // read from, while the second is a prediction that submitted none.
         const moves: unknown = parsed.moves
         const submitted: unknown[] = Array.isArray(moves) ? moves : []
 
@@ -326,10 +325,10 @@ export function buildContext(
 
           // Keyed by the turn that read it, not by the moves it describes.
           //
-          // annotateApplied keys the same payload by JSON.stringify of its move list, and a move list
-          // is not unique to a turn: in a real 464-turn log, 502 readings collapse onto 86 distinct
-          // sequences, 30 of which were seen with different lastAppliedMoveIndex values. Last write
-          // wins, so 63 turns ended up with another turn's path, applied count and refused move.
+          // settlePredictions keys the same payload by the moves it names, and a move list is not unique
+          // to a turn: in a real 464-turn log, 502 readings collapse onto 86 distinct sequences, 30 of
+          // which were seen with different lastAppliedMoveIndex values. Keyed that way here too, last
+          // write would win and 63 turns would hold another turn's path, applied count and refused move.
           //
           // The first reading of a turn is kept, not the last. A turn usually re-reads the same result
           // on each of its requests, but not always: when a request fails mid-turn - a provider 402
@@ -458,26 +457,45 @@ export function buildContext(
     }
   }
 
-  annotateApplied(context)
+  settlePredictions(context)
   return context
 }
 
-// annotateApplied resolves how many of each prediction's moves landed, combining every channel that
-// can prove it. Neither alone is enough: replay results are absent for a model that never calls
-// get_last_prediction_outcome, and position triangulation is blind whenever a turn is not bracketed by two
-// readings.
-function annotateApplied(context: Context): void {
-  const byMoves = new Map<string, number>()
+// settlePredictions fills in what each prediction turned out to be: the cell it started from, and how
+// many of its moves landed. A prediction is parsed the moment a response arrives, but neither fact is
+// knowable then - both are settled later, by what the log went on to say.
+//
+// Two channels, because neither alone is enough: replay results are absent for a model that never calls
+// get_last_prediction_outcome, and position triangulation is blind whenever a turn is not bracketed by
+// two cell readings. What stays unsettled is left null - a figure the log did not state, which is not
+// the same as a zero.
+function settlePredictions(context: Context): void {
+  // Keyed the way a prediction is read: the prefix the maze can apply, and how many commands were sent.
+  //
+  // Both sides have to be narrowed the same way or the join silently misses. A prediction holding a
+  // command the maze cannot read keeps only its prefix, so keying the replay by its raw list would
+  // never match it - and the turn would fall through to triangulation with a perfectly good answer
+  // sitting in the log. The count travels with the prefix because a prefix is not an identity: two
+  // predictions sharing one differ in what they asked for.
+  const applies = new Map<string, number>()
+  const keyOf = (moves: readonly Move[], submitted: number): string => JSON.stringify([moves, submitted])
+
   for (const replay of context.replays) {
     // Two different producers push into replays, so the field is only trusted to be a list of strings
-    // once it has been checked here. Read verbatim: the names are move commands, keyed against the
-    // model's own submitted list, and the two must not be transformed differently on the way in.
-    const submitted = asArray(replay.lastSubmittedMoves)
-      .filter((move): move is string => typeof move === "string")
-    if (submitted.length > 0) {
-      const index = replay.lastAppliedMoveIndex
-      byMoves.set(JSON.stringify(submitted), typeof index === "number" ? index + 1 : 0)
+    // once it has been checked here.
+    const submitted = asArray(replay.lastSubmittedMoves).filter((move): move is string => typeof move === "string")
+    if (submitted.length === 0) {
+      continue
     }
+
+    const applicable: Move[] = []
+    for (const move of submitted) {
+      if (!isMove(move)) break
+      applicable.push(move)
+    }
+
+    const index = replay.lastAppliedMoveIndex
+    applies.set(keyOf(applicable, submitted.length), typeof index === "number" ? index + 1 : 0)
   }
 
   context.timeline.forEach((event, position) => {
@@ -490,7 +508,7 @@ function annotateApplied(context: Context): void {
     const after = findCell(context.timeline, position, 1)
     record.before = before
 
-    let applied: number | null | undefined = byMoves.get(JSON.stringify(record.moves))
+    let applied: number | null | undefined = applies.get(keyOf(record.moves, record.submittedCount))
     if (applied === undefined && before && after) {
       // Position unchanged proves the very first move failed; otherwise the prefix that lands on the
       // observed cell is what applied.
