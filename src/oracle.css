@@ -1166,20 +1166,6 @@ td {
   text-align: center;
 }
 
-.maze-controls:not(:empty) {
-  margin-bottom: 0.85rem;
-}
-
-.maze-level-select {
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--oracle-line);
-  border-radius: 0.25rem;
-  background: var(--oracle-paper);
-  color: var(--oracle-ink);
-  font: inherit;
-  font-size: var(--fs-small);
-}
-
 /* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px
    cells into dinner plates, and the walls stop reading as a maze. */
 /* The magnifier's column: the lens above the key it shares the stage with. */

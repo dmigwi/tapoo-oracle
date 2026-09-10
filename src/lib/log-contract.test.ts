@@ -672,6 +672,26 @@ describe("a log that names no round at all", () => {
   })
 })
 
+// Grouping by (game, level) alone would merge these, which is the failure buildLevels warns about one
+// level down: a repeat of a round is a fresh maze, and one group holding both draws a path across walls
+// that exist in neither. Whether such a log exists is unknown - no log in this repo returns to a round -
+// so this pins the choice rather than a shape that has been seen.
+describe("a log that returns to a round it already played", () => {
+  it("keeps each visit its own round, in the order they were played", () => {
+    const groups = groupEntriesByRound([
+      entry({turn: 1, game: 2, level: 1, payload: "first visit"}),
+      entry({turn: 1, game: 3, level: 1, payload: "the round between"}),
+      entry({turn: 2, game: 2, level: 1, payload: "second visit"}),
+    ])
+
+    expect(groups.map((group) => [group.identity, group.entries.map((one) => one.payload)])).toEqual([
+      [{game: 2, level: 1}, ["first visit"]],
+      [{game: 3, level: 1}, ["the round between"]],
+      [{game: 2, level: 1}, ["second visit"]],
+    ])
+  })
+})
+
 describe("agentsFromRound, on a log that states its own seats", () => {
   const MAZE = {
     index_chars: ["|", "---", "-", "   ", " ", "\n"],

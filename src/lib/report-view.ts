@@ -32,6 +32,93 @@ import { relativeAge } from "./utils";
 import type { SlicedLogResult, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types";
 
 
+// --- Entry points: what index.md calls ---
+//
+// All three of the page's calls arrive here, so index.md names one module and the view layer decides
+// what else the page reaches. The control itself is built in log-tabs-control.ts - it owns a DOM node
+// and its own state, which this module's render functions deliberately do not - and is re-exported
+// rather than reimplemented.
+
+export { createLogTabsInput } from "./log-tabs-control";
+
+
+/** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */
+export type ReportRegions = {
+  emptyState: RegionView;
+  notices: RegionView;
+  methodology: RegionView;
+  profile: RegionView;
+  detail: RegionView;
+};
+
+/** renderReportSections is one call per render, returning the regions the page interpolates. Returning an object rather
+ * than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
+ * reading order stays visible in the markdown rather than being buried in this file. */
+export function renderReportSections(ui: ReportUi, tabsState: LogTabsState | undefined): ReportRegions {
+  const tab = activeLogTab(tabsState);
+
+  // Round selection swaps the two regions in place rather than travelling through tab state.
+  //
+  // Routing it through the Observable input was the obvious design and it does not work: the state
+  // updates and the input event fires, but the runtime does not recompute the cell, so the page keeps
+  // the round it opened on. Swapping the nodes here is what the maze level select already does on this
+  // same page, and it keeps the whole feature inside this module - no page wiring, no new state field,
+  // and no chance of a stale round key outliving the log it came from.
+  let profileNode: RegionView = "";
+  let detailNode: RegionView = "";
+
+  // The round on screen, so a click on the tab already selected can be ignored.
+  //
+  // Written by profile() and nowhere else, because what a render is *handed* is not always what it
+  // draws: a null identity means the first round. Setting this from the identity going in would leave
+  // it naming a round that is not on screen, and the next click on the round that *is* would then
+  // re-render it - the case the guard exists to prevent.
+  //
+  // Nothing can reach that divergence today: every identity reaching selectorCallback comes off a tab
+  // this render drew, and an identity naming no round now throws rather than quietly drawing another.
+  // So this is structure rather than a fix for an observed bug - it keeps the guard correct if a second
+  // caller or a keyboard handler ever passes an identity the tabs did not.
+  let activeKey: string | null = null;
+  const roundKeyCallback = (drawn: GameIdentity): void => { activeKey = gameIdentityKey(drawn) };
+
+  // Named for what it is: a callback the round tabs fire, not part of the render. Nothing below runs
+  // until a reader picks a round. It is declared above the first render only because profile() is handed
+  // it and it needs profileNode to replace, so the two refer to each other and one has to come first.
+  const selectorCallback = (identity: GameIdentity): void => {
+    // Only for a round that is not already showing. Re-rendering the round the reader is looking at
+    // rebuilds the maze replay from scratch, which sends the scrubber back to the end and turns the
+    // magnifier off - so a click meaning "I am already here" silently threw away where they were.
+    if (gameIdentityKey(identity) === activeKey) return;
+
+    // The round's caveats live inside the profile region, so they are swapped with it and cannot be
+    // left behind naming the round the page opened on.
+    const nextProfile = profile(ui, tab, identity, selectorCallback, roundKeyCallback);
+    const nextDetail = detail(ui, tab, identity);
+    // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region
+    // that was never inserted - a test rendering one half, a caller displaying only the profile - from
+    // throwing on the first click.
+    if (profileNode instanceof Element && nextProfile instanceof Element && profileNode.parentNode) {
+      profileNode.replaceWith(nextProfile);
+    }
+    if (detailNode instanceof Element && nextDetail instanceof Element && detailNode.parentNode) {
+      detailNode.replaceWith(nextDetail);
+    }
+    profileNode = nextProfile;
+    detailNode = nextDetail;
+  };
+
+  profileNode = profile(ui, tab, null, selectorCallback, roundKeyCallback);
+  detailNode = detail(ui, tab, null);
+
+  return {
+    emptyState: emptyState(ui, tab),
+    notices: notices(ui, tab),
+    methodology: methodology(ui, tab?.result),
+    profile: profileNode,
+    detail: detailNode,
+  };
+}
+
 // --- Shared tables ---
 
 // Every conditional section is built here rather than in a markdown ${...} wrapper. Observable
@@ -376,7 +463,7 @@ function profile(
           Log contents are analyzed in your browser and never uploaded; a shared link carries the log
           address to the host serving this page.
         </p>
-        ${createMazeReplay(round.report)}
+        ${createMazeReplay(round.report.level)}
       </section>
       <section class="events-section oracle-summary">
         <h2>Behavior Profile</h2>
@@ -543,85 +630,6 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
         </p>
       </section>
     </div>`;
-}
-
-// --- Entry point ---
-
-/** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */
-export type ReportRegions = {
-  emptyState: RegionView;
-  notices: RegionView;
-  methodology: RegionView;
-  profile: RegionView;
-  detail: RegionView;
-};
-
-/** renderReportSections is one call per render, returning the regions the page interpolates. Returning an object rather
- * than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
- * reading order stays visible in the markdown rather than being buried in this file. */
-export function renderReportSections(ui: ReportUi, tabsState: LogTabsState | undefined): ReportRegions {
-  const tab = activeLogTab(tabsState);
-
-  // Round selection swaps the two regions in place rather than travelling through tab state.
-  //
-  // Routing it through the Observable input was the obvious design and it does not work: the state
-  // updates and the input event fires, but the runtime does not recompute the cell, so the page keeps
-  // the round it opened on. Swapping the nodes here is what the maze level select already does on this
-  // same page, and it keeps the whole feature inside this module - no page wiring, no new state field,
-  // and no chance of a stale round key outliving the log it came from.
-  let profileNode: RegionView = "";
-  let detailNode: RegionView = "";
-
-  // The round on screen, so a click on the tab already selected can be ignored.
-  //
-  // Written by profile() and nowhere else, because what a render is *handed* is not always what it
-  // draws: a null identity means the first round. Setting this from the identity going in would leave
-  // it naming a round that is not on screen, and the next click on the round that *is* would then
-  // re-render it - the case the guard exists to prevent.
-  //
-  // Nothing can reach that divergence today: every identity reaching selectorCallback comes off a tab
-  // this render drew, and an identity naming no round now throws rather than quietly drawing another.
-  // So this is structure rather than a fix for an observed bug - it keeps the guard correct if a second
-  // caller or a keyboard handler ever passes an identity the tabs did not.
-  let activeKey: string | null = null;
-  const roundKeyCallback = (drawn: GameIdentity): void => { activeKey = gameIdentityKey(drawn) };
-
-  // Named for what it is: a callback the round tabs fire, not part of the render. Nothing below runs
-  // until a reader picks a round. It is declared above the first render only because profile() is handed
-  // it and it needs profileNode to replace, so the two refer to each other and one has to come first.
-  const selectorCallback = (identity: GameIdentity): void => {
-    // Only for a round that is not already showing. Re-rendering the round the reader is looking at
-    // rebuilds the maze replay from scratch, which sends the scrubber back to the end and turns the
-    // magnifier off - so a click meaning "I am already here" silently threw away where they were.
-    if (gameIdentityKey(identity) === activeKey) return;
-
-    // The round's caveats live inside the profile region, so they are swapped with it and cannot be
-    // left behind naming the round the page opened on.
-    const nextProfile = profile(ui, tab, identity, selectorCallback, roundKeyCallback);
-    const nextDetail = detail(ui, tab, identity);
-    // replaceWith only works on a node with a parent. Guarding rather than asserting keeps a region
-    // that was never inserted - a test rendering one half, a caller displaying only the profile - from
-    // throwing on the first click.
-    if (profileNode instanceof Element && nextProfile instanceof Element && profileNode.parentNode) {
-      profileNode.replaceWith(nextProfile);
-    }
-    if (detailNode instanceof Element && nextDetail instanceof Element && detailNode.parentNode) {
-      detailNode.replaceWith(nextDetail);
-    }
-    profileNode = nextProfile;
-    detailNode = nextDetail;
-  };
-
-  profileNode = profile(ui, tab, null, selectorCallback, roundKeyCallback);
-  detailNode = detail(ui, tab, null);
-
-  return {
-    emptyState: emptyState(ui, tab),
-    notices: notices(ui, tab),
-    methodology: methodology(ui, tab?.result),
-    profile: profileNode,
-    detail: detailNode,
-  };
 }
 
 // --- The build stamp ---

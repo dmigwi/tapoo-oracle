@@ -81,7 +81,7 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
         // `keys`, so the difference between "no moves key" and "a moves key holding junk" survives.
         //
         // Returning whatever the model sent instead lets a string reach `.every` in the rubric, which is
-        // not a method on a string: one malformed response then throws out of answerRubric and takes the
+        // not a method on a string: one malformed response then throws out of buildReport and takes the
         // whole page render with it.
         const moves: unknown = parsed.moves
         return {moves: Array.isArray(moves) ? moves : [], tier, keys: Object.keys(parsed)}

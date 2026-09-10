@@ -162,7 +162,7 @@ export function buildLevels(entries: LogEntry[], answered?: Context): Level[] {
   const groups = groupEntriesByRound(entries)
 
   return groups.map(({identity, entries: groupEntries}) => {
-    // The caller's context when it has one, which is the common case: answerRubric has already built a
+    // The caller's context when it has one, which is the common case: buildReport has already built a
     // context over exactly these entries, and building a second identical one is the largest avoidable
     // cost of opening a log.
     //

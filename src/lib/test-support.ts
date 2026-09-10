@@ -1,7 +1,7 @@
-import {parseTapooLogText} from "./log-contract";
+import {LOG_EVENTS, parseTapooLogText} from "./log-contract";
 import {fnv1a64Checksum} from "./utils";
 import {sliceLogIntoRounds, roundReportFor} from "./log-tabs";
-import type {SlicedLogResult, Level, LogWarning, RegionView, Report} from "./types";
+import type {GroupResult, Level, LogEntry, LogLevel, SlicedLogResult, LogWarning, RegionView, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -83,30 +83,6 @@ export function rendered(region: RegionView): HTMLElement {
     throw new Error("expected a rendered region, got the empty one");
   }
   return region as HTMLElement;
-}
-
-/** A report carrying nothing but the rounds a maze test is about.
- *
- * The replay views take a whole `Report` because that is what the page hands them, but the maze
- * suites are about rounds. Stating the rest once here keeps each case to the round it exercises, and
- * keeps the two suites agreeing on what an otherwise-empty report looks like. */
-export function reportWith(...levels: Level[]): Report {
-  return {
-    label: "fixture",
-    agents: [],
-    output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
-      cachedPromptTokens: null, finishReasons: []},
-    predictions: 0,
-    traversalSpeed: null,
-    traversalSpeedClass: null,
-    capabilities: [],
-    violations: [],
-    diagnostics: {
-      endpointFailures: 0, emptyResponses: 0, unparseableResponses: 0, tokenExhaustions: 0,
-      agentDisablings: 0, harnessFailures: 0,
-    },
-    levels,
-  };
 }
 
 /** The message text of each warning, for a test asserting on wording rather than on impact. */
@@ -255,4 +231,52 @@ export function twoSeatDriftLog(): Record<string, unknown> {
       }, 5),
     ],
   };
+}
+
+// --- Rubric-shaped log entries ---
+//
+// A log is a sequence of entries, and every rubric question is answered from what those entries do or
+// do not contain. These builders keep a test to the entries it is actually about: anything a test does
+// not add is absent from the log, which is the state the rubric answers NO for.
+//
+// Shared rather than copied per suite, so the engine, the report and the rounds all answer questions
+// about the same shape of log.
+
+let clock = 0;
+
+/** One entry, stamped game 1 level 1 and clocked a second after the last. */
+export function rubricEntry(
+  payload: string,
+  details?: unknown,
+  {log = "info", turn = 0}: {log?: LogLevel; turn?: number} = {},
+): LogEntry {
+  clock += 1000;
+  return {epochMs: clock, time: "2026-08-31T09-00-00+02-00", level: 1, game: 1, turn, log, payload, details};
+}
+
+/** A tool result as a request carries it: the payload, serialised, under the tool role. */
+export const toolMessage = (payload: unknown) => ({role: "tool", content: JSON.stringify(payload)});
+
+/** One turn: the request carrying whichever tool results it read, then the model's reply. */
+export function rubricTurn(
+  number: number,
+  {tools = [], content, messages = []}: {tools?: string[]; content?: string; messages?: unknown[]} = {},
+): LogEntry[] {
+  return [
+    rubricEntry(LOG_EVENTS.request, {tools: tools.map((name) => ({name})), messages}, {turn: number}),
+    rubricEntry(LOG_EVENTS.response, {payload: {model: "test-model", message: {content}}}, {turn: number}),
+  ];
+}
+
+/** The round a report answered, or a failure naming what was expected. */
+export function levelOf(report: Report): Level {
+  if (!report.level) throw new Error("expected the report to answer a round");
+  return report.level;
+}
+
+/** One rubric group by id, from either half of the profile. */
+export function groupOf(report: Report, id: string): GroupResult {
+  const found = [...report.capabilities, ...report.violations].find((candidate) => candidate.id === id);
+  if (!found) throw new Error(`no such group: ${id}`);
+  return found;
 }

@@ -2,11 +2,11 @@ import {describe, expect, it} from "vitest"
 
 import {cellFromKey, cellFromLogged, cellKeyFromLogged, getCellKey, openMovesFromLogged} from "./log-contract"
 import {mazeReplayModel} from "./maze-model"
-import {createInitialLogTabs, deleteLogTab, trimLogTabLabel} from "./log-tabs"
+import {createInitialLogTabs, deleteLogTab, extractTabLabelFromUrl} from "./log-tabs"
 import {buildLevels} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
-import {at, must, reportWith} from "./test-support"
+import {at, must} from "./test-support"
 import {asTrimmedText} from "./utils"
 import type {LogEntry, LogTabsState} from "./types"
 
@@ -64,7 +64,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
     const levels = buildLevels([
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: [0, 5]}),
     ])
-    const model = must(mazeReplayModel(reportWith(...levels))[0], "a model for the round")
+    const model = must(mazeReplayModel(at(levels, 0)), "a model for the round")
 
     expect(must(model.stats, "maze stats").successPathCells).not.toBeNull()
   })
@@ -119,7 +119,7 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
 
 describe("defect 2: a model can answer with a moves key that is not a list", () => {
   // `moves` was returned as whatever the model sent. A string reached `.every` in the rubric - not a
-  // function on a string - and the TypeError propagated out of answerRubric, so one malformed
+  // function on a string - and the TypeError propagated out of buildReport, so one malformed
   // response took down the entire page render rather than failing one question.
   it("does not throw on a moves key holding a bare string", () => {
     expect(() => parsePrediction('{"moves": "MoveUp"}')).not.toThrow()
@@ -230,7 +230,7 @@ describe("defect 6: untrusted input was stringified rather than rejected", () =>
   })
 
   it("does not name a report '[object Object]'", () => {
-    expect(trimLogTabLabel({})).toBe("")
+    expect(extractTabLabelFromUrl({} as unknown as string)).toBe("Report 1")
   })
 
   it("refuses an object as a URL for the reason a reader can act on", () => {

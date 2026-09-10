@@ -516,7 +516,13 @@ export type Report = {
      * measuring instrument breaking, and a round carrying them was not the experiment it reports. */
     harnessFailures: number;
   };
-  levels: Level[];
+
+  /** The round this report answers, carrying the encoded maze and the path walked through it, or null
+   * when the entries held no round to answer. Evidence to look at, not a verdict.
+   *
+   * One, not a list: a report is built from one round's entries - roundReportFor answers the round a
+   * reader opened - so a list could only ever hold that one. */
+  level: Level | null;
 };
 
 /** One model response, normalized across the three provider wire shapes.

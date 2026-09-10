@@ -10,9 +10,322 @@
 // document is hidden.
 
 import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
-import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
+import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, LevelModel, Maze, Move, Report, SummaryRow, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, Level, LevelModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
+
+// --- Entry point: what report-view calls ---
+
+/** createMazeReplay builds the whole section for the round on screen and returns its root node.
+ *
+ * Takes the round, not the report it came from: this section draws one maze, and a verdict is not one
+ * of its inputs. `null` renders the empty section, for a report that answered no round.
+ *
+ * Shapes its own data from there, so the page hands over a round rather than a pre-built model. */
+export function createMazeReplay(round: Level | null): HTMLElement {
+  const replayModel = mazeReplayModel(round);
+
+  const root = createHtmlElement("section", "maze-replay");
+  root.setAttribute("aria-label", "Maze traversal timeline replay");
+
+  if (!replayModel) return root;
+
+  const heading = createHtmlElement("h2", "maze-heading", "Maze Traversal Timeline Replay");
+  root.append(heading);
+
+  // A mode rather than a bare hover behaviour. Hovering a grid does nothing anywhere else on this page,
+  // so a lens that only appeared on hover would be invisible until stumbled into - and a reader who does
+  // not want it keeps a grid that behaves normally.
+  const magnify = createHtmlElement("button", "maze-magnify") as HTMLButtonElement;
+  magnify.type = "button";
+  magnify.setAttribute("aria-pressed", "false");
+  // The label states what the button is doing, not only what it would do. aria-pressed already carries
+  // that to a screen reader; this is the same fact for everyone else, and it is the difference between
+  // a button that looks selected and one that says so.
+  const magnifyLabel = createHtmlElement("span", null, "Magnify");
+  magnify.append(magnifierIcon(), magnifyLabel);
+
+  const figure = createHtmlElement("div", "maze-figure");
+  const caption = createHtmlElement("p", "maze-caption");
+  const scrubberRow = createHtmlElement("div", "maze-scrubber");
+  // The two bar strips and the slider share one horizontal space, so a bar sits under the position it
+  // describes. The track carries the inline padding that keeps them aligned with the thumb.
+  const track = createHtmlElement("div", "maze-track");
+  const movesStrip = createHtmlElement("div", "maze-bars maze-bars-moves");
+  const decayStrip = createHtmlElement("div", "maze-bars maze-bars-decay");
+  const range = createHtmlElement("input") as HTMLInputElement;
+  range.type = "range";
+  range.className = "maze-range";
+  const readout = createHtmlElement("span", "maze-readout");
+  track.append(movesStrip, range, decayStrip);
+  scrubberRow.append(track, readout);
+
+  // Rebuilt when the round changes, not when the scrubber moves.
+  let movesBars: HTMLElement[] = [];
+  let decayBars: HTMLElement[] = [];
+
+  // Beside the grid it describes, not down with the decay legend: it is a key to the maze, and a key
+  // reads where the thing it explains is. The stage puts the two on one row while there is width for
+  // both and lets the key drop underneath when there is not.
+  const stage = createHtmlElement("div", "maze-stage");
+  // The lens takes the column the key sits in, above it, so the magnified view reads at the same height
+  // as the grid it is reading. With the mode off the column is the key alone.
+  const aside = createHtmlElement("div", "maze-aside");
+  const lens = createHtmlElement("div", "maze-lens");
+  // The button lives inside the lens, and the body is what gets replaced on every paint - so the
+  // control survives the redraw that rebuilds the view around it.
+  const lensBody = createHtmlElement("div", "maze-lens-body");
+  const visitLegend = createHtmlElement("ul", "maze-legend maze-visit-legend");
+  // Directly above the panel it opens, rather than off in the controls row: the button and the view it
+  // produces are one thing, and a control that sits apart from its effect has to be connected by the
+  // reader before it means anything.
+  lens.append(magnify, lensBody);
+  aside.append(lens, visitLegend);
+  stage.append(figure, aside);
+  const legend = createHtmlElement("ul", "maze-legend maze-decay-legend");
+  const summary = createHtmlElement("div", "maze-summary");
+  root.append(stage, caption, scrubberRow, legend, summary);
+
+  // The round on screen. A report answers one round, so this is set once - showLevel still owns it,
+  // because it is what wires the frame, the scrubber and the panels to a model.
+  let active: LevelModel = replayModel;
+
+  // The lens is a view concern, so its state lives here rather than on the Frame: paint() replaces the
+  // overlay on every scrub, and these two have to survive that.
+  let magnifying = false;
+  let focused: CellKey | null = null;
+
+  // Keyed by the seat's place in the round's roster, resolved once by agentIndexOf so the trail, the
+  // marker and the stats card beside them all name the same seat. -1 is a turn no seat claims, which
+  // takes the first colour rather than none at all: an uncoloured trail reads as a wall.
+  const colorOf = (seat: number): string =>
+    AGENT_COLORS[(seat < 0 ? 0 : seat) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
+
+  let overlay: SVGElement | null = null;
+
+  // The radius the log recorded, or ours. A null radius means the log never said what the agent could
+  // see, so the lens still magnifies but stops claiming to be that window.
+  const lensRadius = (): number => active.historyWindowRadius ?? DEFAULT_LENS_RADIUS;
+  const claimsAgentWindow = (): boolean => active.historyWindowRadius !== null;
+
+  const paintLens = (frame: Frame): void => {
+    lensBody.replaceChildren();
+    // Open is a class, not `hidden`: the button is inside this box and has to stay reachable when there
+    // is no view yet. Closed, the box carries no border or padding, so it is the button and nothing else.
+    lens.classList.toggle("is-open", magnifying);
+    if (!magnifying) return;
+
+    // Opens on the agent's current cell, so turning the mode on shows something at once - and that
+    // default is the useful one, because it is the window the agent actually had this turn.
+    const cell = focused ?? frame.currentCell;
+    if (cell === null) return;
+
+    const radius = lensRadius();
+    const grid = buildLens(active, frame, cell, radius, claimsAgentWindow(), colorOf);
+    if (grid) lensBody.append(grid);
+
+    // "Visited cells", not "what the agent could see". The radius bounds which cells could be reported;
+    // it does not mean they were. The agent is only told about ground it has already entered, so the
+    // walls this lens draws on ground it never walked come from our decoded maze and were never in front
+    // of the model - which the caveat says, because the drawing itself invites the opposite reading.
+    const note = createHtmlElement(
+      "p",
+      "maze-lens-note",
+      claimsAgentWindow()
+        ? `Visited cells the agent can see from ${spellCell(cell)} - ${formatCount(radius)} cells out`
+        : `Magnified around ${spellCell(cell)}; the log did not record how far the history window reached`,
+    );
+    note.append(
+      createHtmlElement(
+        "span",
+        "maze-lens-caveat",
+        "The unvisited structure drawn here was never exposed to it.",
+      ),
+    );
+    lensBody.append(note);
+  };
+
+  const paint = (): void => {
+    const frame = mazeFrameAt(active, Number(range.value));
+    if (overlay) drawFrame(overlay, frame, active, colorOf);
+    caption.textContent = turnNarrative(frame, active);
+    // The log's own turn number, the same identifier the caption and the bar tooltips use - read from
+    // frame.turn so the two cannot drift. `turnIndex / totalTurns` counts turns *played* instead, which
+    // reads "16 / 16" beside a caption saying "Turn 15".
+    const last = active.turns.at(-1)?.turn;
+    readout.textContent = frame.turn === null || last === undefined ? "Start" : `Turn ${frame.turn.turn} / ${last}`;
+    range.setAttribute("aria-valuetext", turnNarrative(frame, active));
+
+    // The strips and the slider have to agree about where you are. Toggling classes on kept references
+    // is the whole update - the bars themselves do not change as you scrub.
+    //
+    // The slider fades its track ahead of the thumb; the strips fade the turns ahead of it, so all
+    // three read as one control rather than a slider with two decorations beside it.
+    buildVisitLegend(visitLegend, active, frame);
+    buildDecayLegend(legend, frame, decayStrip.hidden === true);
+    paintLens(frame);
+
+    const current = frame.turnIndex - 1;
+    const total = Number(range.max);
+    range.style.setProperty("--progress", `${total > 0 ? (frame.turnIndex / total) * 100 : 0}%`);
+    for (const bars of [movesBars, decayBars]) {
+      for (const [index, bar] of bars.entries()) {
+        bar.classList.toggle("is-current", index === current);
+        bar.classList.toggle("is-future", index > current);
+      }
+    }
+  };
+
+  // Moving a pointer across a large grid fires an event per pixel of travel. Rebuilding 25 cells each
+  // time is waste the lens does not need, so a move that stays inside the same cell does nothing.
+  const focusCell = (cell: CellKey | null): void => {
+    if (!magnifying || cell === null || cell === focused) return;
+    focused = cell;
+    paint();
+  };
+
+  const cellUnder = (target: EventTarget | null): CellKey | null =>
+    target instanceof Element ? target.getAttribute("data-cell") : null;
+
+  magnify.addEventListener("click", () => {
+    magnifying = !magnifying;
+    magnify.setAttribute("aria-pressed", String(magnifying));
+    magnify.classList.toggle("is-on", magnifying);
+    magnifyLabel.textContent = magnifying ? "Magnifying" : "Magnify";
+    figure.classList.toggle("is-magnifying", magnifying);
+    // Released rather than remembered: turning the mode back on should start where the agent is, not
+    // wherever the pointer happened to leave the grid a while ago.
+    if (!magnifying) focused = null;
+    paint();
+  });
+
+  figure.addEventListener("pointerover", (event) => focusCell(cellUnder(event.target)));
+  // Touch has no hover, so a tap has to count as one or the mode does nothing on a phone.
+  figure.addEventListener("click", (event) => focusCell(cellUnder(event.target)));
+
+  // The button is reachable by keyboard on its own; this is what makes the grid reachable once the mode
+  // is on, so the lens is not a mouse-only feature.
+  figure.addEventListener("keydown", (event) => {
+    if (!magnifying) return;
+    const step = ARROW_STEPS[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const from = focused ?? mazeFrameAt(active, Number(range.value)).currentCell;
+    if (from === null) return;
+    const {row, col} = cellXY(from);
+    const [rowStep, colStep] = step;
+    const next = getCellKey({row: row + rowStep, col: col + colStep});
+    if (active.maze?.exits.has(next)) focusCell(next);
+  });
+
+  const showLevel = (model: LevelModel): void => {
+    active = model;
+    figure.replaceChildren();
+    summary.replaceChildren();
+    legend.replaceChildren();
+    legend.hidden = true;
+    visitLegend.replaceChildren();
+    visitLegend.hidden = true;
+
+    if (!model.maze) {
+      // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
+      // silently dropping the grid would read as "this round had nothing worth showing".
+      //
+      // And reported *only* here. parseGameRound decodes the same maze and hands back the failure
+      // without raising a warning of its own, because a notice above the round tabs said the same thing
+      // less well: the reader is looking at the space the traversal should occupy, which is where they
+      // can see what is missing from it.
+      //
+      // "Maze unavailable" was the heading, and it read as a temporary condition - something that might
+      // load in a moment - rather than as a payload that arrived wrong or never arrived at all.
+      const notice = createHtmlElement("div", "notice notice-error");
+      notice.append(
+        createHtmlElement("strong", null, "The encoded maze payload is missing or inaccurate")
+      );
+      notice.append(createHtmlElement("span", null, model.error));
+      notice.append(
+        createHtmlElement(
+          "span",
+          null,
+          "Without it this round has no traversal replay and no maze statistics - no shortest route, " +
+            "no dead ends, no count of the cells entered. Every rubric verdict beside it still stands: " +
+            "the questions answer from the exits the log's own tool results confirmed, not from this payload."
+        )
+      );
+      notice.append(
+        createHtmlElement(
+          "span",
+          null,
+          "A round resumed from a saved snapshot, or logs reset mid-round, never write the level-started entry that carries the maze."
+        )
+      );
+      figure.append(notice);
+      scrubberRow.hidden = true;
+      caption.textContent = "";
+      return;
+    }
+
+    scrubberRow.hidden = false;
+    const svg = createSvgElement("svg", {
+      viewBox: `-2 -2 ${model.maze.cols * CELL + 4} ${model.maze.rows * CELL + 4}`,
+      class: "maze-grid",
+      role: "img",
+      "aria-label": `${model.maze.rows} by ${model.maze.cols} maze with the traversal drawn on it`
+    });
+    svg.append(ungradedHatch());
+    drawWalls(svg, model.maze);
+    overlay = createSvgElement("g", {class: "maze-overlay"});
+    svg.append(overlay);
+    // Markers last, so they paint above the overlay rather than under it.
+    //
+    // SVG has no z-index; paint order is document order. With the markers drawn before the overlay the
+    // start marker was invisible at every frame: the start cell is in frame.visited from frame 0 by
+    // construction, and the visited tint is a full-cell opaque rect, so it buried a mark that was being
+    // drawn correctly the whole time. The destination only escaped because the agent has not reached it
+    // yet - it would have gone the same way on the winning frame.
+    //
+    // Start and destination are the two fixed landmarks on the grid. They are what the trail is read
+    // against, so nothing the trail draws should be able to hide them.
+    // Above the overlay so it catches the pointer, below the markers so it cannot hide them.
+    svg.append(hitLayer(model.maze));
+    drawMarkers(svg, model);
+    svg.setAttribute("tabindex", "0");
+    figure.append(svg);
+
+    range.min = "0";
+    range.max = String(model.turns.length);
+    range.value = String(model.turns.length);
+    range.setAttribute("aria-label", `Turn to show, 0 to ${model.turns.length}`);
+
+    // Built once per round. drawFrame runs on every scrub and has no business rebuilding 900 nodes.
+    movesBars = buildMovesBars(movesStrip, model);
+    decayBars = buildDecayBars(decayStrip, model);
+
+    const levelPanel = createHtmlElement("div", "maze-summary-panel");
+    levelPanel.append(
+      createHtmlElement("h3", "maze-summary-heading", "Level"),
+      // The Turns row is the one cell that carries colour, so the view swaps in the rendered tally over
+      // the model's plain-text form of the same numbers.
+      summaryTable(
+        mazeLevelRows(model).map((row) => (row.field === "Turns" ? {...row, value: turnRow(model)} : row)),
+        ["Property", "Value"],
+      ),
+    );
+    if (model.stats && model.agents.length > 0) levelPanel.append(agentStatsRow(model));
+
+    summary.append(
+      summaryPanel("Maze", mazeStructureRows(model)),
+      levelPanel,
+    );
+
+    paint();
+  };
+
+  range.addEventListener("input", paint);
+
+  showLevel(replayModel);
+  return root;
+}
 
 // --- Drawing constants ---
 
@@ -808,328 +1121,4 @@ function agentStatsRow(model: LevelModel): HTMLElement {
   });
 
   return container;
-}
-
-// --- Entry point ---
-
-/** createMazeReplay builds the whole section for one report and returns its root node. */
-export function createMazeReplay(report: Report): HTMLElement {
-  // Takes the report, not a pre-built model: both adapters live in this module, and having the caller
-  // run them meant the view's own data shaping was spelled out at every call site.
-  const models = mazeReplayModel(report);
-
-  const root = createHtmlElement("section", "maze-replay");
-  root.setAttribute("aria-label", "Maze traversal timeline replay");
-
-  if (models.length === 0) return root;
-
-  const heading = createHtmlElement("h2", "maze-heading", "Maze Traversal Timeline Replay");
-  root.append(heading);
-
-  const controls = createHtmlElement("div", "maze-controls");
-  const select = createHtmlElement("select", "maze-level-select");
-  select.setAttribute("aria-label", "Level to replay");
-  models.forEach((model, index) => {
-    const option = createHtmlElement("option", null, levelSelectLabel(model, models.length > 1)) as HTMLOptionElement;
-    option.value = String(index);
-    select.append(option);
-  });
-  if (models.length > 1) controls.append(select);
-
-  // A mode rather than a bare hover behaviour. Hovering a grid does nothing anywhere else on this page,
-  // so a lens that only appeared on hover would be invisible until stumbled into - and a reader who does
-  // not want it keeps a grid that behaves normally.
-  const magnify = createHtmlElement("button", "maze-magnify") as HTMLButtonElement;
-  magnify.type = "button";
-  magnify.setAttribute("aria-pressed", "false");
-  // The label states what the button is doing, not only what it would do. aria-pressed already carries
-  // that to a screen reader; this is the same fact for everyone else, and it is the difference between
-  // a button that looks selected and one that says so.
-  const magnifyLabel = createHtmlElement("span", null, "Magnify");
-  magnify.append(magnifierIcon(), magnifyLabel);
-  root.append(controls);
-
-  const figure = createHtmlElement("div", "maze-figure");
-  const caption = createHtmlElement("p", "maze-caption");
-  const scrubberRow = createHtmlElement("div", "maze-scrubber");
-  // The two bar strips and the slider share one horizontal space, so a bar sits under the position it
-  // describes. The track carries the inline padding that keeps them aligned with the thumb.
-  const track = createHtmlElement("div", "maze-track");
-  const movesStrip = createHtmlElement("div", "maze-bars maze-bars-moves");
-  const decayStrip = createHtmlElement("div", "maze-bars maze-bars-decay");
-  const range = createHtmlElement("input") as HTMLInputElement;
-  range.type = "range";
-  range.className = "maze-range";
-  const readout = createHtmlElement("span", "maze-readout");
-  track.append(movesStrip, range, decayStrip);
-  scrubberRow.append(track, readout);
-
-  // Rebuilt when the round changes, not when the scrubber moves.
-  let movesBars: HTMLElement[] = [];
-  let decayBars: HTMLElement[] = [];
-
-  // Beside the grid it describes, not down with the decay legend: it is a key to the maze, and a key
-  // reads where the thing it explains is. The stage puts the two on one row while there is width for
-  // both and lets the key drop underneath when there is not.
-  const stage = createHtmlElement("div", "maze-stage");
-  // The lens takes the column the key sits in, above it, so the magnified view reads at the same height
-  // as the grid it is reading. With the mode off the column is the key alone.
-  const aside = createHtmlElement("div", "maze-aside");
-  const lens = createHtmlElement("div", "maze-lens");
-  // The button lives inside the lens, and the body is what gets replaced on every paint - so the
-  // control survives the redraw that rebuilds the view around it.
-  const lensBody = createHtmlElement("div", "maze-lens-body");
-  const visitLegend = createHtmlElement("ul", "maze-legend maze-visit-legend");
-  // Directly above the panel it opens, rather than off in the controls row: the button and the view it
-  // produces are one thing, and a control that sits apart from its effect has to be connected by the
-  // reader before it means anything.
-  lens.append(magnify, lensBody);
-  aside.append(lens, visitLegend);
-  stage.append(figure, aside);
-  const legend = createHtmlElement("ul", "maze-legend maze-decay-legend");
-  const summary = createHtmlElement("div", "maze-summary");
-  root.append(stage, caption, scrubberRow, legend, summary);
-
-  // models is non-empty here: the caller returned early for a report with no rounds.
-  let active: LevelModel = models[0]!;
-
-  // The lens is a view concern, so its state lives here rather than on the Frame: paint() replaces the
-  // overlay on every scrub, and these two have to survive that.
-  let magnifying = false;
-  let focused: CellKey | null = null;
-
-  // Keyed by the seat's place in the round's roster, resolved once by agentIndexOf so the trail, the
-  // marker and the stats card beside them all name the same seat. -1 is a turn no seat claims, which
-  // takes the first colour rather than none at all: an uncoloured trail reads as a wall.
-  const colorOf = (seat: number): string =>
-    AGENT_COLORS[(seat < 0 ? 0 : seat) % AGENT_COLORS.length] ?? AGENT_COLORS[0]!;
-
-  let overlay: SVGElement | null = null;
-
-  // The radius the log recorded, or ours. A null radius means the log never said what the agent could
-  // see, so the lens still magnifies but stops claiming to be that window.
-  const lensRadius = (): number => active.historyWindowRadius ?? DEFAULT_LENS_RADIUS;
-  const claimsAgentWindow = (): boolean => active.historyWindowRadius !== null;
-
-  const paintLens = (frame: Frame): void => {
-    lensBody.replaceChildren();
-    // Open is a class, not `hidden`: the button is inside this box and has to stay reachable when there
-    // is no view yet. Closed, the box carries no border or padding, so it is the button and nothing else.
-    lens.classList.toggle("is-open", magnifying);
-    if (!magnifying) return;
-
-    // Opens on the agent's current cell, so turning the mode on shows something at once - and that
-    // default is the useful one, because it is the window the agent actually had this turn.
-    const cell = focused ?? frame.currentCell;
-    if (cell === null) return;
-
-    const radius = lensRadius();
-    const grid = buildLens(active, frame, cell, radius, claimsAgentWindow(), colorOf);
-    if (grid) lensBody.append(grid);
-
-    // "Visited cells", not "what the agent could see". The radius bounds which cells could be reported;
-    // it does not mean they were. The agent is only told about ground it has already entered, so the
-    // walls this lens draws on ground it never walked come from our decoded maze and were never in front
-    // of the model - which the caveat says, because the drawing itself invites the opposite reading.
-    const note = createHtmlElement(
-      "p",
-      "maze-lens-note",
-      claimsAgentWindow()
-        ? `Visited cells the agent can see from ${spellCell(cell)} - ${formatCount(radius)} cells out`
-        : `Magnified around ${spellCell(cell)}; the log did not record how far the history window reached`,
-    );
-    note.append(
-      createHtmlElement(
-        "span",
-        "maze-lens-caveat",
-        "The unvisited structure drawn here was never exposed to it.",
-      ),
-    );
-    lensBody.append(note);
-  };
-
-  const paint = (): void => {
-    const frame = mazeFrameAt(active, Number(range.value));
-    if (overlay) drawFrame(overlay, frame, active, colorOf);
-    caption.textContent = turnNarrative(frame, active);
-    // The log's own turn number, the same identifier the caption and the bar tooltips use - read from
-    // frame.turn so the two cannot drift. `turnIndex / totalTurns` counts turns *played* instead, which
-    // reads "16 / 16" beside a caption saying "Turn 15".
-    const last = active.turns.at(-1)?.turn;
-    readout.textContent = frame.turn === null || last === undefined ? "Start" : `Turn ${frame.turn.turn} / ${last}`;
-    range.setAttribute("aria-valuetext", turnNarrative(frame, active));
-
-    // The strips and the slider have to agree about where you are. Toggling classes on kept references
-    // is the whole update - the bars themselves do not change as you scrub.
-    //
-    // The slider fades its track ahead of the thumb; the strips fade the turns ahead of it, so all
-    // three read as one control rather than a slider with two decorations beside it.
-    buildVisitLegend(visitLegend, active, frame);
-    buildDecayLegend(legend, frame, decayStrip.hidden === true);
-    paintLens(frame);
-
-    const current = frame.turnIndex - 1;
-    const total = Number(range.max);
-    range.style.setProperty("--progress", `${total > 0 ? (frame.turnIndex / total) * 100 : 0}%`);
-    for (const bars of [movesBars, decayBars]) {
-      for (const [index, bar] of bars.entries()) {
-        bar.classList.toggle("is-current", index === current);
-        bar.classList.toggle("is-future", index > current);
-      }
-    }
-  };
-
-  // Moving a pointer across a large grid fires an event per pixel of travel. Rebuilding 25 cells each
-  // time is waste the lens does not need, so a move that stays inside the same cell does nothing.
-  const focusCell = (cell: CellKey | null): void => {
-    if (!magnifying || cell === null || cell === focused) return;
-    focused = cell;
-    paint();
-  };
-
-  const cellUnder = (target: EventTarget | null): CellKey | null =>
-    target instanceof Element ? target.getAttribute("data-cell") : null;
-
-  magnify.addEventListener("click", () => {
-    magnifying = !magnifying;
-    magnify.setAttribute("aria-pressed", String(magnifying));
-    magnify.classList.toggle("is-on", magnifying);
-    magnifyLabel.textContent = magnifying ? "Magnifying" : "Magnify";
-    figure.classList.toggle("is-magnifying", magnifying);
-    // Released rather than remembered: turning the mode back on should start where the agent is, not
-    // wherever the pointer happened to leave the grid a while ago.
-    if (!magnifying) focused = null;
-    paint();
-  });
-
-  figure.addEventListener("pointerover", (event) => focusCell(cellUnder(event.target)));
-  // Touch has no hover, so a tap has to count as one or the mode does nothing on a phone.
-  figure.addEventListener("click", (event) => focusCell(cellUnder(event.target)));
-
-  // The button is reachable by keyboard on its own; this is what makes the grid reachable once the mode
-  // is on, so the lens is not a mouse-only feature.
-  figure.addEventListener("keydown", (event) => {
-    if (!magnifying) return;
-    const step = ARROW_STEPS[event.key];
-    if (!step) return;
-    event.preventDefault();
-    const from = focused ?? mazeFrameAt(active, Number(range.value)).currentCell;
-    if (from === null) return;
-    const {row, col} = cellXY(from);
-    const [rowStep, colStep] = step;
-    const next = getCellKey({row: row + rowStep, col: col + colStep});
-    if (active.maze?.exits.has(next)) focusCell(next);
-  });
-
-  const showLevel = (model: LevelModel): void => {
-    active = model;
-    figure.replaceChildren();
-    summary.replaceChildren();
-    legend.replaceChildren();
-    legend.hidden = true;
-    visitLegend.replaceChildren();
-    visitLegend.hidden = true;
-
-    if (!model.maze) {
-      // A round with no usable maze is reported, not skipped: the profile beside it is still real, and
-      // silently dropping the grid would read as "this round had nothing worth showing".
-      //
-      // And reported *only* here. parseGameRound decodes the same maze and hands back the failure
-      // without raising a warning of its own, because a notice above the round tabs said the same thing
-      // less well: the reader is looking at the space the traversal should occupy, which is where they
-      // can see what is missing from it.
-      //
-      // "Maze unavailable" was the heading, and it read as a temporary condition - something that might
-      // load in a moment - rather than as a payload that arrived wrong or never arrived at all.
-      const notice = createHtmlElement("div", "notice notice-error");
-      notice.append(
-        createHtmlElement("strong", null, "The encoded maze payload is missing or inaccurate")
-      );
-      notice.append(createHtmlElement("span", null, model.error));
-      notice.append(
-        createHtmlElement(
-          "span",
-          null,
-          "Without it this round has no traversal replay and no maze statistics - no shortest route, " +
-            "no dead ends, no count of the cells entered. Every rubric verdict beside it still stands: " +
-            "the questions answer from the exits the log's own tool results confirmed, not from this payload."
-        )
-      );
-      notice.append(
-        createHtmlElement(
-          "span",
-          null,
-          "A round resumed from a saved snapshot, or logs reset mid-round, never write the level-started entry that carries the maze."
-        )
-      );
-      figure.append(notice);
-      scrubberRow.hidden = true;
-      caption.textContent = "";
-      return;
-    }
-
-    scrubberRow.hidden = false;
-    const svg = createSvgElement("svg", {
-      viewBox: `-2 -2 ${model.maze.cols * CELL + 4} ${model.maze.rows * CELL + 4}`,
-      class: "maze-grid",
-      role: "img",
-      "aria-label": `${model.maze.rows} by ${model.maze.cols} maze with the traversal drawn on it`
-    });
-    svg.append(ungradedHatch());
-    drawWalls(svg, model.maze);
-    overlay = createSvgElement("g", {class: "maze-overlay"});
-    svg.append(overlay);
-    // Markers last, so they paint above the overlay rather than under it.
-    //
-    // SVG has no z-index; paint order is document order. With the markers drawn before the overlay the
-    // start marker was invisible at every frame: the start cell is in frame.visited from frame 0 by
-    // construction, and the visited tint is a full-cell opaque rect, so it buried a mark that was being
-    // drawn correctly the whole time. The destination only escaped because the agent has not reached it
-    // yet - it would have gone the same way on the winning frame.
-    //
-    // Start and destination are the two fixed landmarks on the grid. They are what the trail is read
-    // against, so nothing the trail draws should be able to hide them.
-    // Above the overlay so it catches the pointer, below the markers so it cannot hide them.
-    svg.append(hitLayer(model.maze));
-    drawMarkers(svg, model);
-    svg.setAttribute("tabindex", "0");
-    figure.append(svg);
-
-    range.min = "0";
-    range.max = String(model.turns.length);
-    range.value = String(model.turns.length);
-    range.setAttribute("aria-label", `Turn to show, 0 to ${model.turns.length}`);
-
-    // Built once per round. drawFrame runs on every scrub and has no business rebuilding 900 nodes.
-    movesBars = buildMovesBars(movesStrip, model);
-    decayBars = buildDecayBars(decayStrip, model);
-
-    const levelPanel = createHtmlElement("div", "maze-summary-panel");
-    levelPanel.append(
-      createHtmlElement("h3", "maze-summary-heading", "Level"),
-      // The Turns row is the one cell that carries colour, so the view swaps in the rendered tally over
-      // the model's plain-text form of the same numbers.
-      summaryTable(
-        mazeLevelRows(model).map((row) => (row.field === "Turns" ? {...row, value: turnRow(model)} : row)),
-        ["Property", "Value"],
-      ),
-    );
-    if (model.stats && model.agents.length > 0) levelPanel.append(agentStatsRow(model));
-
-    summary.append(
-      summaryPanel("Maze", mazeStructureRows(model)),
-      levelPanel,
-    );
-
-    paint();
-  };
-
-  range.addEventListener("input", paint);
-  select.addEventListener("change", () => {
-    const chosen = models[Number((select as HTMLSelectElement).value)];
-    if (chosen) showLevel(chosen);
-  });
-
-  showLevel(models[0]!);
-  return root;
 }

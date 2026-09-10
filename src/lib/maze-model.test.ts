@@ -6,7 +6,7 @@ import {turnReports} from "./log-contract"
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
 import {agentsFromRound} from "./log-contract"
 import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn, SummaryRow} from "./types"
-import {sliceLogText, firstRound, must, reportWith} from "./test-support";
+import {sliceLogText, firstRound, must} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -76,7 +76,7 @@ const charged = (charges: Array<number | null>): Turn[] =>
   }))
 
 const modelFor = (overrides: LevelOverrides = {}) =>
-  must(mazeReplayModel(reportWith(level(overrides)))[0], "a model for the round")
+  must(mazeReplayModel(level(overrides)), "a model for the round")
 
 describe("mazeReplayModel", () => {
   it("decodes the maze and lists the seats that acted", () => {
@@ -362,13 +362,13 @@ describe("agentsFromRound", () => {
   it("reconciles with the unique-cell count Tapoo reports for the round", () => {
     const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
     const round = firstRound(result)
-    const level = must(round.levels[0], "the fixture's only round")
+    const level = must(round.level, "the fixture's only round")
 
     expect(level.outcome?.playerUniqueCellsVisited).toBe(17)
     expect(must(level.agents[0], "the round's only seat").uniqueCells).toBe(17)
 
     // And the radius the round was actually configured with, read from the same export.
-    const model = must(mazeReplayModel(round)[0], "a model for the round")
+    const model = must(mazeReplayModel(round.level), "a model for the round")
     expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
   })
 

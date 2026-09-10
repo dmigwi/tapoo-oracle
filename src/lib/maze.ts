@@ -15,6 +15,48 @@ import {MOVES, getCellKey, isMove, stepFrom} from "./geometry";
 import {fnv1a64Checksum} from "./utils";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, OpenCellExits, Result} from "./types";
 
+// --- Entry point: what log-contract and maze-model call ---
+
+/** mazeFromEncoded is the one call a consumer needs: encoded field in, wall graph and stats out. */
+export function mazeFromEncoded(
+  encoded: EncodedMaze | null | undefined,
+  {startCell, destinationCell}: {startCell?: CellKey | null; destinationCell?: CellKey | null} = {},
+): MazeResult {
+  const decoded = decodeEncodedMaze(encoded);
+  if (!decoded.ok) {
+    return decoded;
+  }
+
+  const built = mazeFromDecodedGrid(decoded.grid, encoded?.dimensions);
+  if (!built.ok) {
+    return built;
+  }
+
+  const stats = mazeStats(built.maze, {startCell, destinationCell});
+
+  // Validate the two structural invariants that hold for any perfect maze (a spanning tree).
+  //
+  // edges == cells - 1: a connected acyclic graph on N nodes has exactly N-1 edges. More or fewer
+  // means the maze has a cycle or a disconnected region - either breaks the guarantee that every
+  // cell is reachable and that there is exactly one path between any two cells.
+  //
+  // deadEnds == deg3 + 2·deg4 + 2: follows from the handshaking lemma on a tree. Summing degrees
+  // gives 2·edges = 2·(cells-1). Expanding by degree class and eliminating corridors (deg2) yields
+  // this identity. A violation means the cell-classification counts are internally inconsistent.
+  if (stats.edges !== stats.cells - 1) {
+    return {ok: false, error: `Maze has cycles or disconnected regions: expected ${stats.cells - 1} edges for ${stats.cells} cells but found ${stats.edges}.`};
+  }
+  if (stats.deadEnds !== stats.deg3 + 2 * stats.deg4 + 2) {
+    return {ok: false, error: `Maze failed dead-end invariant: expected ${stats.deg3 + 2 * stats.deg4 + 2} dead ends (deg3=${stats.deg3}, deg4=${stats.deg4}) but found ${stats.deadEnds}.`};
+  }
+
+  if (startCell && destinationCell && stats.successPathCells === null) {
+    return {ok: false, error: "Maze has no navigable path from start to destination. The experiment is invalid."};
+  }
+
+  return {ok: true, maze: built.maze, grid: decoded.grid, stats};
+}
+
 // --- Rendered grid geometry ---
 
 // The distance in rendered-grid units between neighboring logical cell centers. Tapoo renders a maze
@@ -215,46 +257,4 @@ function mazeStats(
       return moves === null ? null : moves + 1;
     })(),
   };
-}
-
-// --- Entry point ---
-
-/** mazeFromEncoded is the one call a consumer needs: encoded field in, wall graph and stats out. */
-export function mazeFromEncoded(
-  encoded: EncodedMaze | null | undefined,
-  {startCell, destinationCell}: {startCell?: CellKey | null; destinationCell?: CellKey | null} = {},
-): MazeResult {
-  const decoded = decodeEncodedMaze(encoded);
-  if (!decoded.ok) {
-    return decoded;
-  }
-
-  const built = mazeFromDecodedGrid(decoded.grid, encoded?.dimensions);
-  if (!built.ok) {
-    return built;
-  }
-
-  const stats = mazeStats(built.maze, {startCell, destinationCell});
-
-  // Validate the two structural invariants that hold for any perfect maze (a spanning tree).
-  //
-  // edges == cells - 1: a connected acyclic graph on N nodes has exactly N-1 edges. More or fewer
-  // means the maze has a cycle or a disconnected region - either breaks the guarantee that every
-  // cell is reachable and that there is exactly one path between any two cells.
-  //
-  // deadEnds == deg3 + 2·deg4 + 2: follows from the handshaking lemma on a tree. Summing degrees
-  // gives 2·edges = 2·(cells-1). Expanding by degree class and eliminating corridors (deg2) yields
-  // this identity. A violation means the cell-classification counts are internally inconsistent.
-  if (stats.edges !== stats.cells - 1) {
-    return {ok: false, error: `Maze has cycles or disconnected regions: expected ${stats.cells - 1} edges for ${stats.cells} cells but found ${stats.edges}.`};
-  }
-  if (stats.deadEnds !== stats.deg3 + 2 * stats.deg4 + 2) {
-    return {ok: false, error: `Maze failed dead-end invariant: expected ${stats.deg3 + 2 * stats.deg4 + 2} dead ends (deg3=${stats.deg3}, deg4=${stats.deg4}) but found ${stats.deadEnds}.`};
-  }
-
-  if (startCell && destinationCell && stats.successPathCells === null) {
-    return {ok: false, error: "Maze has no navigable path from start to destination. The experiment is invalid."};
-  }
-
-  return {ok: true, maze: built.maze, grid: decoded.grid, stats};
 }

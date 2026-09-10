@@ -356,7 +356,7 @@ describe("when a round is answered", () => {
     const [first, second] = rounds(twoRoundTab())
     if (!first || !second) throw new Error("expected two rounds")
 
-    expect(roundReportFor(first).report.levels).toHaveLength(1)
+    expect(roundReportFor(first).report.level?.identity).toEqual({game: 2, level: 1})
     expect(roundReportFor(first).report.label).toMatch(/Game 2 \u00b7 Level 1$/)
     expect(roundReportFor(second).report.label).toMatch(/Game 3 \u00b7 Level 2$/)
   })

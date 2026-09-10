@@ -1,9 +1,12 @@
 import {describe, expect, it} from "vitest"
 
+import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
 import {buildLevels, gameIdentityKey, resolveActiveAgentNames} from "./rounds"
-import {at} from "./test-support"
-import type {LogEntry, LogLevel} from "./types"
+import {buildContext} from "./rubric-engine"
+import {buildReport} from "./rubric-report"
+import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
+import type {Level, LogEntry, LogLevel} from "./types"
 
 const entry = (
   payload: string,
@@ -337,5 +340,136 @@ describe("a turn that produced no prediction", () => {
 
     expect(turns.filter((turn) => turn.moves.length > 0)).toHaveLength(2)
     expect(turns).toHaveLength(3)
+  })
+})
+
+// --- Levels, built from a round's entries ---
+
+describe("a round's identity on a log that labels only its boundaries", () => {
+  it("takes game and level from the round, not from the entry that opens it", () => {
+    const entries = [
+      {epochMs: 1, log: "info", payload: LOG_EVENTS.request, details: {}},
+      {epochMs: 2, log: "info", payload: LOG_EVENTS.levelStarted, details: {}, game: 7, level: 3, turn: 0},
+      {epochMs: 3, log: "info", payload: LOG_EVENTS.request, details: {}, turn: 1},
+    ] as unknown as LogEntry[]
+
+    const level = must(buildLevels(entries)[0], "a level")
+
+    expect(level.identity).toEqual({game: 7, level: 3})
+    expect(gameIdentityKey(level.identity)).toBe("7/3")
+    // The entry the group opens with says neither, which is the whole point.
+    expect(entries[0]).not.toHaveProperty("game")
+  })
+})
+
+describe("buildLevels reusing the caller's context", () => {
+  // A Level carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
+  // compares function identity and fails on two runs that agree completely. Projected to data instead.
+  const shape = (levels: Level[]) =>
+    levels.map((level) => ({
+      ...level,
+      observedExits: [...level.observedExits].map(([cell, moves]) => [cell, [...moves].sort()]),
+      visitStatusAfterTurn: level.visitStatusAfterTurn
+        .ascending()
+        .map(([turn, cells]) => [turn, [...cells]]),
+    }))
+
+  it("produces the same levels whether or not it is given one", () => {
+    const entries = fixtureData.entries as LogEntry[]
+    const context = buildContext(entries, {label: "fixture"})
+
+    expect(shape(buildLevels(entries, context))).toEqual(shape(buildLevels(entries)))
+  })
+
+  // The reuse is refused when the entries hold more than one round: the caller's context spans all of
+  // them, and a level built from it would carry another maze's positions and exits.
+  it("ignores a context that spans more than one round", () => {
+    // Each round submits its own move, so a context spanning both would give round 1 round 2's turn -
+    // exactly the leak buildLevels exists to prevent. With one submission each, a spanning context
+    // hands every level two turns instead of one.
+    // Written out rather than through `entry` above, which pins level and game to 1.
+    let clock = 0
+    const at = (game: number, level: number, turn: number, payload: string, details?: unknown): LogEntry =>
+      ({epochMs: (clock += 1000), time: "2026-08-31T09-00-00+02-00", level, game, turn, log: "info", payload, details})
+    const round = (game: number, level: number, move: string) => [
+      at(game, level, 0, LOG_EVENTS.levelStarted, {level}),
+      at(game, level, 1, LOG_EVENTS.response, {payload: {message: {content: `{"moves":["${move}"]}`}}}),
+    ]
+    const twoRounds = [...round(1, 1, "MoveUp"), ...round(1, 2, "MoveDown")]
+    const spanning = buildContext(twoRounds, {label: "two"})
+
+    const perRound = shape(buildLevels(twoRounds))
+    expect(perRound).toHaveLength(2)
+    expect(perRound.map((level) => level.turns.length)).toEqual([1, 1])
+    expect(shape(buildLevels(twoRounds, spanning))).toEqual(perRound)
+  })
+})
+
+describe("buildLevels", () => {
+  const round = (game: number, level: number, content: string) => [
+    entry(LOG_EVENTS.levelStarted, {startPosition: {x: 1, y: 1}}, {turn: 0}),
+    ...turn(0, {tools: ["get_maze_structure"], content}),
+  ].map((record) => ({...record, game, level}))
+
+  it("keeps a retry of the same level as its own round", () => {
+    // A retry regenerates the maze, so grouping by level alone would merge two different mazes and draw
+    // a path crossing walls that exist in neither. Asked of buildLevels rather than of a report: a
+    // report answers one round, so it has nowhere to put the second.
+    const levels = buildLevels([
+      ...round(1, 1, '{"moves":["MoveDown"]}'),
+      ...round(2, 1, '{"moves":["MoveUp"]}'),
+    ])
+
+    expect(levels.map((level) => gameIdentityKey(level.identity))).toEqual(["1/1", "2/1"])
+    expect(at(levels, 0).startCell).toBe("0,0")
+  })
+
+  it("attributes a turn to the active agent named in the request", () => {
+    const report = buildReport([
+      entry(LOG_EVENTS.request, {
+        player: "Katara the Trailblazer - Default",
+        tools: [{name: "get_maze_structure"}],
+        messages: [
+          toolMessage({
+            currentCell: [0, 0],
+            filteredTraversalHistory: [{playerName: "Katara", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          }),
+        ],
+      }, {turn: 0}),
+      entry(LOG_EVENTS.response, {payload: {model: "m", message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 0}),
+    ])
+
+    expect(firstLevel(report).turns[0]?.playerName).toBe("Katara")
+  })
+
+  it("records the refused move of a turn that was cut short", () => {
+    const report = buildReport([
+      ...turn(0, {
+        tools: ["get_maze_structure"],
+        messages: [
+          toolMessage({
+            currentCell: [0, 0],
+            filteredTraversalHistory: [{playerName: "K", cell: [0, 0], openMoves: [["MoveDown", "unvisited"]]}],
+          }),
+        ],
+        content: '{"moves":["MoveDown","MoveUp"]}',
+      }),
+      entry(LOG_EVENTS.request, {
+        tools: [{name: "get_last_prediction_outcome"}],
+        messages: [
+          toolMessage({
+            lastMoveStatus: "invalid-move",
+            lastSubmittedMoves: ["MoveDown", "MoveUp"],
+            lastAppliedMoveIndex: 0,
+            chargedMovesCount: 2,
+          }),
+        ],
+      }, {turn: 1}),
+    ])
+
+    const first = at(firstLevel(report).turns, 0)
+    expect(first.applied).toBe(1)
+    expect(first.rejectedMove).toBe("MoveUp")
+    expect(first.cells).toEqual(["0,0", "1,0"])
   })
 })

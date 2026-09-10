@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
-import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
+import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
 import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
@@ -95,13 +95,21 @@ describe("report URL tabs", () => {
   })
 
   it("derives readable report labels from URLs", () => {
-    expect(logTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
-    expect(logTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
-    expect(logTabLabelFromUrl("not a url", 2)).toBe("Report 3")
+    expect(extractTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
+    expect(extractTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
+    expect(extractTabLabelFromUrl("not a url", 2)).toBe("Report 3")
   })
 
-  it("trims long report labels from the beginning", () => {
-    expect(trimLogTabLabel("very-long-prefix-tapoo-agent-api-log.json", 27)).toBe("...tapoo-agent-api-log.json")
+  // A URL with neither a path segment nor a host still has to name its tab: every arm of this falls
+  // back, because naming a tab must not fail the load that produced it.
+  it("names a tab a URL gives nothing to name", () => {
+    expect(extractTabLabelFromUrl("file:///", 4)).toBe("Report 5")
+  })
+
+  // From the beginning, so the file name a reader tells two tabs apart by survives.
+  it("trims a long label from the beginning", () => {
+    expect(extractTabLabelFromUrl("https://example.com/logs/very-long-prefix-tapoo-agent-api-log.json", 0, 27))
+      .toBe("...tapoo-agent-api-log.json")
   })
 
   it("opens the add-report form without creating a report entry", () => {

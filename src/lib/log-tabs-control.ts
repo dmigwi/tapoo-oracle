@@ -20,6 +20,51 @@ import {
 } from "./share-link"
 import type { LogTab, LogTabsInput, LogTabsState } from "./types"
 
+// --- Entry point: what report-view re-exports to the page ---
+
+/** createLogTabsInput builds the Observable input node that owns log-tab state.
+ *
+ * It is a `viewof` element: its `value` is the current LogTabsState, and it emits an `input` event
+ * whenever that value changes, which is what makes the markdown's dependent cells recompute. Every
+ * decision it makes is delegated to the pure reducers in log-tabs.ts. */
+export function createLogTabsInput(
+  {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
+): LogTabsInput {
+  let state = createInitialLogTabs();
+  const root = createReportWorkspaceRoot(() => state);
+
+  const dispatchInput = (): void => {
+    root.dispatchEvent(new Event("input", {bubbles: true}));
+  };
+
+  const setState = (nextState: LogTabsState): void => {
+    state = nextState;
+    dispatchInput();
+    renderReportWorkspace(root, state, actions);
+  };
+
+  const updateDraftUrl = (draftUrl: string): void => {
+    state = {...state, draftUrl, draftStatus: "empty", draftError: undefined};
+    dispatchInput();
+  };
+
+  // Declared here rather than above the handlers that close over it: every one of those references
+  // runs from an event, long after this line, so the binding they capture is always initialised.
+  const actions: LogTabActions = {
+    getState: () => state,
+    setState,
+    updateDraftUrl,
+    loadNewTab: () => loadDraftLogTab({getState: () => state, setState, fetchText}),
+    retryTab: (tabId: string) => retryLogTab(tabId, {getState: () => state, setState, fetchText})
+  };
+
+  renderReportWorkspace(root, state, actions);
+  void restoreSharedReport({getState: () => state, setState, fetchText});
+  return root;
+}
+
+// --- The state the controls act on ---
+
 /** What the rendered controls may ask the workspace to do.
  *
  * The render helpers are handed this rather than the state setter alone, because several of them
@@ -405,45 +450,4 @@ function createReportUrlForm(state: LogTabsState, actions: LogTabActions): HTMLE
   }
 
   return form;
-}
-
-/** createLogTabsInput builds the Observable input node that owns log-tab state.
- *
- * It is a `viewof` element: its `value` is the current LogTabsState, and it emits an `input` event
- * whenever that value changes, which is what makes the markdown's dependent cells recompute. Every
- * decision it makes is delegated to the pure reducers in log-tabs.ts. */
-export function createLogTabsInput(
-  {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
-): LogTabsInput {
-  let state = createInitialLogTabs();
-  const root = createReportWorkspaceRoot(() => state);
-
-  const dispatchInput = (): void => {
-    root.dispatchEvent(new Event("input", {bubbles: true}));
-  };
-
-  const setState = (nextState: LogTabsState): void => {
-    state = nextState;
-    dispatchInput();
-    renderReportWorkspace(root, state, actions);
-  };
-
-  const updateDraftUrl = (draftUrl: string): void => {
-    state = {...state, draftUrl, draftStatus: "empty", draftError: undefined};
-    dispatchInput();
-  };
-
-  // Declared here rather than above the handlers that close over it: every one of those references
-  // runs from an event, long after this line, so the binding they capture is always initialised.
-  const actions: LogTabActions = {
-    getState: () => state,
-    setState,
-    updateDraftUrl,
-    loadNewTab: () => loadDraftLogTab({getState: () => state, setState, fetchText}),
-    retryTab: (tabId: string) => retryLogTab(tabId, {getState: () => state, setState, fetchText})
-  };
-
-  renderReportWorkspace(root, state, actions);
-  void restoreSharedReport({getState: () => state, setState, fetchText});
-  return root;
 }

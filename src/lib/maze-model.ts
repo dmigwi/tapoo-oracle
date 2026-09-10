@@ -9,53 +9,47 @@
 
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, LevelModel, Report, SummaryRow, Turn, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, Level, LevelModel, SummaryRow, Turn, VisitStatus } from "./types"
 
-/** levelSelectLabel names a round in the replay's level picker.
+// --- Entry point: what maze-view calls ---
+
+/** mazeReplayModel turns one round into everything the maze view needs, or the reason it cannot be
+ * drawn. Null for a report that answered no round.
  *
- * Not roundLabel: the picker sits under a heading that already says this is the maze replay, so it
- * leads with the level and mentions the game only when there is more than one to tell apart. Derived
- * from the identity rather than stored on the model, because it is a rendering of two numbers the model
- * already carries - and a stored copy is a second thing to keep in step. */
-export const levelSelectLabel = ({identity}: LevelModel, many: boolean): string =>
-  `Level ${identity.level}${many ? ` (game ${identity.game})` : ""}`;
-
-/** mazeReplayModel turns each played round into everything the maze view needs, or the reason it cannot
- * be drawn.
+ * Takes the round rather than the report holding it: the replay draws a maze, and a verdict is not one
+ * of its inputs.
  *
  * The maze is not optional context: a traversal drawn on a grid that failed its checksum would be a
  * picture of damaged bytes presented as evidence. So a round that cannot be decoded carries an error
  * instead of a partial grid, and the view renders the error. */
-export function mazeReplayModel(report: Report): LevelModel[] {
-  const levels = report?.levels ?? [];
+export function mazeReplayModel(level: Level | null | undefined): LevelModel | null {
+  if (!level) return null;
 
-  return levels.map((level) => {
-    // The destination arrives already resolved to a cell key: one reader in the contract handles both
-    // logged shapes, for every field carrying a cell. Converting here instead means handling {row, col}
-    // and turning a compacted [row, col] into "undefined,undefined" - no destination drawn, and
-    // "no route found" reported as evidence.
-    const destination = level.destinationCell;
-    const built = mazeFromEncoded(level.encodedMaze, {
-      startCell: level.startCell,
-      destinationCell: destination
-    });
-
-    return {
-      identity: level.identity,
-      maze: built.ok ? built.maze : null,
-      error: built.ok ? null : built.error,
-      stats: built.ok ? built.stats : null,
-      startCell: level.startCell,
-      destinationCell: destination,
-      endCell: level.endCell,
-      observedExits: level.observedExits,
-      visitStatusAfterTurn: level.visitStatusAfterTurn,
-      historyWindowRadius: level.historyWindowRadius,
-      turns: level.turns,
-      outcome: level.outcome,
-      agents: level.agents
-    };
+  // The destination arrives already resolved to a cell key: one reader in the contract handles both
+  // logged shapes, for every field carrying a cell. Converting here instead means handling {row, col}
+  // and turning a compacted [row, col] into "undefined,undefined" - no destination drawn, and
+  // "no route found" reported as evidence.
+  const destination = level.destinationCell;
+  const built = mazeFromEncoded(level.encodedMaze, {
+    startCell: level.startCell,
+    destinationCell: destination
   });
+
+  return {
+    identity: level.identity,
+    maze: built.ok ? built.maze : null,
+    error: built.ok ? null : built.error,
+    stats: built.ok ? built.stats : null,
+    startCell: level.startCell,
+    destinationCell: destination,
+    endCell: level.endCell,
+    observedExits: level.observedExits,
+    visitStatusAfterTurn: level.visitStatusAfterTurn,
+    historyWindowRadius: level.historyWindowRadius,
+    turns: level.turns,
+    outcome: level.outcome,
+    agents: level.agents
+  };
 }
 
 /** agentIndexOf resolves a turn to the seat that played it, as an index into `agents`, or -1 for a turn
