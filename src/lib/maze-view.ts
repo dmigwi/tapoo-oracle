@@ -10,7 +10,7 @@
 // document is hidden.
 
 import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
-import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
+import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
 
@@ -660,9 +660,24 @@ function buildMovesBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {
   return bars;
 }
 
-// One name per charge, used by the legend, the bar tooltips and the Turns row alike. A reader who
-// learns "invalid move" from the legend must meet the same words in the summary table, or the two
-// surfaces read as two unrelated tallies that happen to share numbers.
+/** DECAY_REASONS names what each decay charge was for, in the units the legend is explaining. Tapoo's
+ * charging rule is an ordinal scale of three, not a measurement: every turn pays the base charge, a
+ * refused move adds a penalty on top of it, and a turn that submitted nothing to apply pays the most.
+ *
+ * The two penalties are named for what usually earns them. The three-unit charge is levied whenever
+ * lastSubmittedMoves is empty, which a malformed response is the common cause of - though an exhausted
+ * token cap and a request that never came back are charged the same, and a reader meeting a three
+ * beside a failed request should read the row above it rather than the label alone. */
+const DECAY_REASONS: Record<number, string> = {
+  1: "base charge",
+  2: "invalid move penalty",
+  3: "malformed response penalty",
+};
+
+// One name per charge, used by the legend, the bar tooltips and the Turns row alike. All three are
+// drawn here, which is why the words live here: a reader who learns "invalid move penalty" from the
+// legend must meet the same words in the summary table, or the two surfaces read as two unrelated
+// tallies that happen to share numbers.
 const decayLabel = (charge: number): string => DECAY_REASONS[charge] ?? `${charge} decay`;
 
 function buildDecayBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {

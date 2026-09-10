@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
-import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parseTurnPrediction} from "./rubric-engine"
+import {buildContext, parseTurnPrediction} from "./rubric-context"
+import {CAPABILITIES, VIOLATIONS, aggregate} from "./rubric-report"
 import type {LogEntry} from "./types"
 import {at, must, rubricEntry as entry, rubricTurn as turn, toolMessage} from "./test-support";
 

@@ -4,7 +4,7 @@
 // that imports nothing can be imported by anything, so a helper living here is reachable from every
 // other module in the graph without the question of direction ever arising.
 //
-// The rule is not decoration. `log-contract.ts` needed the record coercion that `rubric-engine.ts`
+// The rule is not decoration. `log-contract.ts` needed the record coercion that `rubric-context.ts`
 // already exported, could not have it - the rubric engine imports the log contract - and so wrote its
 // own, twice over, in shapes that disagreed about whether an array is a record. That is what a helper
 // with nowhere to live costs.

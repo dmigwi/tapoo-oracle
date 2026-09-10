@@ -382,14 +382,15 @@ describe("the bars beside the scrubber", () => {
   })
 
   it("names why each turn was charged, and marks the severity", () => {
-    // Every turn pays a base unit; an invalid move costs two; a broken response format costs three.
+    // Every turn pays the base charge; a refused move adds a penalty; a turn that submitted nothing
+    // to apply pays the most.
     const node = build(charged(1, 2, 3))
     const decay = bars(node, "decay")
 
     expect(decay.map((bar) => bar.title)).toEqual([
       "Turn 0: 1 decay - base charge",
-      "Turn 1: 2 decay - invalid move",
-      "Turn 2: 3 decay - output format violation",
+      "Turn 1: 2 decay - invalid move penalty",
+      "Turn 2: 3 decay - malformed response penalty",
     ])
     expect(decay.map((bar) => [...bar.classList].find((name) => name.startsWith("is-decay-"))))
       .toEqual(["is-decay-1", "is-decay-2", "is-decay-3"])
@@ -687,13 +688,13 @@ describe("the decay legend", () => {
   it("names each charge and counts it, so a two-pixel bar means something", () => {
     expect(legend(build(charged(1, 2, 3)))).toEqual([
       "base charge - 1",
-      "invalid move - 1",
-      "output format violation - 1",
+      "invalid move penalty - 1",
+      "malformed response penalty - 1",
     ])
   })
 
   it("counts every turn that paid each charge", () => {
-    expect(legend(build(charged(1, 1, 2)))).toEqual(["base charge - 2", "invalid move - 1"])
+    expect(legend(build(charged(1, 1, 2)))).toEqual(["base charge - 2", "invalid move penalty - 1"])
   })
 
   // The key describes the strip above it, and that strip fades everything ahead of the thumb - so the
@@ -712,7 +713,7 @@ describe("the decay legend", () => {
     expect(legend(node)).toEqual(["base charge - 2"])
 
     scrubTo(node, 3)
-    expect(legend(node)).toEqual(["base charge - 2", "invalid move - 1"])
+    expect(legend(node)).toEqual(["base charge - 2", "invalid move penalty - 1"])
   })
 
   it("names nothing at the start position, where no turn has been charged", () => {
@@ -752,20 +753,20 @@ describe("the decay legend", () => {
       part.title,
     ])).toEqual([
       ["is-decay-1", "2", "base charge"],
-      ["is-decay-2", "1", "invalid move"],
+      ["is-decay-2", "1", "invalid move penalty"],
     ])
   })
 
   // Colour is what ties the row to the strip, and colour is exactly what a screen reader cannot relay.
   it("names each count in words for a reader who sees no colour", () => {
     expect(query(build(charged(1, 1, 2)), ".maze-turns-cell").textContent)
-      .toBe("32 base charge1 invalid move")
+      .toBe("32 base charge1 invalid move penalty")
   })
 
   it("keeps unreported turns visible rather than folding them into a charge", () => {
     const parts = queryAll<HTMLElement>(build(charged(1, 2, null)), ".maze-turns-part")
     expect(parts.map((part) => part.title)).toEqual([
-      "base charge", "invalid move", "decay not reported",
+      "base charge", "invalid move penalty", "decay not reported",
     ])
   })
 

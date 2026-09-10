@@ -171,17 +171,6 @@ export function mazeFrameAt(levelModel: ReplayModel, turnIndex: number): Frame {
   };
 }
 
-/** DECAY_REASONS is Tapoo's charging rule, which is an ordinal scale of three and not a measurement.
- * Every turn pays a base unit; an invalid move costs two; a response that broke the output format
- * costs three. Lives here rather than in the view because two surfaces now read the same scale - the
- * strip under the scrubber and the Turns row - and a reader comparing them must not find two
- * vocabularies for one rule. */
-export const DECAY_REASONS: Record<number, string> = {
-  1: "base charge",
-  2: "invalid move",
-  3: "output format violation",
-};
-
 /** The most a turn can be charged: Tapoo's own ceiling.
  *
  * Three is charged only when lastSubmittedMoves is empty - a malformed response, an exhausted token

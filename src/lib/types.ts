@@ -68,7 +68,11 @@ export type TurnReports<T> = {
   record: (reportingTurn: number, value: T, merge?: (existing: T, incoming: T) => T) => void;
   /** What is known about `turn` itself. */
   get: (turn: number) => T | undefined;
-  /** Every entry, ascending by the turn it covers. */
+  /** Every entry, ascending by the turn it covers.
+   *
+   * The same array until the next `record`, so a reader must not mutate what it is handed: this is the
+   * order the scrubber asks for on every frame, and rebuilding it per frame is work the round already
+   * finished doing. */
   ascending: () => Array<[number, T]>;
   values: () => T[];
   readonly size: number;

@@ -4,7 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 import {LOG_EVENTS} from "./log-events"
 import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
 import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgentNames} from "./rounds"
-import {buildContext} from "./rubric-engine"
+import {buildContext} from "./rubric-context"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
 import type {AgentSummary, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup} from "./types"

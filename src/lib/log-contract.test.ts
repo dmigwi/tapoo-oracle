@@ -1377,3 +1377,41 @@ describe("a response this analyzer cannot read", () => {
     expect(expectOk(result).warnings).toEqual([])
   })
 })
+
+// The order is held between writes, because the scrubber asks for it on every frame it draws. A cache
+// that outlived a write would hand a reader the round as it was one payload ago.
+describe("the order turnReports hands out", () => {
+  it("is ascending however the payloads arrived", () => {
+    const store = turnReports<string>()
+    store.record(4, "d")
+    store.record(1, "a")
+    store.record(3, "c")
+
+    expect(store.ascending().map(([turn]) => turn)).toEqual([0, 2, 3])
+  })
+
+  it("is the same array until something is recorded, and a fresh one after", () => {
+    const store = turnReports<string>()
+    store.record(1, "a")
+
+    const first = store.ascending()
+    expect(store.ascending()).toBe(first)
+
+    store.record(2, "b")
+    const second = store.ascending()
+    expect(second).not.toBe(first)
+    expect(second.map(([turn]) => turn)).toEqual([0, 1])
+  })
+
+  // A merge writes too, so the order it produces has to be rebuilt like any other write.
+  it("rebuilds after a merge into an existing turn", () => {
+    const store = turnReports<string>()
+    store.record(1, "a")
+    const before = store.ascending()
+
+    store.record(1, "b", (existing, incoming) => existing + incoming)
+
+    expect(store.ascending()).not.toBe(before)
+    expect(store.ascending()).toEqual([[0, "ab"]])
+  })
+})

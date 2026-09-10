@@ -2,7 +2,7 @@
 // means about who is answerable for it.
 //
 // Its own module because several files need it and none can own it: log-contract validates entries
-// against it, rubric-engine counts by it, and report-adapters reads its classes. Holding it in
+// against it, rubric-context counts by it, and report-adapters reads its classes. Holding it in
 // log-contract made those files import the contract to name an event, closing cycles whose
 // module-evaluation order decides whether a top-level `const` exists yet.
 

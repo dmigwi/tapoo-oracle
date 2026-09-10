@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
-import {CAPABILITIES, VIOLATIONS} from "./rubric-engine"
+import {CAPABILITIES, VIOLATIONS} from "./rubric-report"
 import {buildReport} from "./rubric-report"
 import {groupOf as group, levelOf as firstLevel, rubricEntry as entry, rubricTurn as turn, toolMessage} from "./test-support";
 
 // The report one round's entries build to: the rubric verdicts, and the facts printed beside them.
-// What each question reads out of a log is rubric-engine.test.ts.
+// What each question reads out of a log is rubric-context.test.ts.
 
 describe("buildReport", () => {
   it("answers every group defined by the rubric, with fractions preserved", () => {

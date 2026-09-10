@@ -85,16 +85,23 @@ export {
 export function turnReports<T>(): TurnReports<T> {
   const byTurn = new Map<number, T>();
 
+  // The ascending order, built after the last write and kept until the next one.
+  //
+  // Sorted rather than trusted to insertion order: entries do arrive in recorded order today, but a
+  // reader that walks them to a bound is relying on the ordering, not on the writer's habits. Held
+  // rather than recomputed because reading is the hot path and writing is not - the scrubber asks for
+  // this order on every frame it draws, long after the round stopped being written to.
+  let ordered: Array<[number, T]> | null = null;
+
   return {
     record(reportingTurn, value, merge) {
       const turn = reportingTurn - 1;
       const existing = byTurn.get(turn);
       byTurn.set(turn, existing !== undefined && merge ? merge(existing, value) : value);
+      ordered = null;
     },
     get: (turn) => byTurn.get(turn),
-    // Sorted rather than trusted to insertion order: entries do arrive in recorded order today, but a
-    // reader that walks them to a bound is relying on the ordering, not on the writer's habits.
-    ascending: () => [...byTurn].sort(([a], [b]) => a - b),
+    ascending: () => (ordered ??= [...byTurn].sort(([a], [b]) => a - b)),
     values: () => [...byTurn.values()],
     get size() {
       return byTurn.size;

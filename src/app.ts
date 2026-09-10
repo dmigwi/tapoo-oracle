@@ -21,8 +21,8 @@
 //
 //   renderReportSections    report-view       one call per render, returning the page's five regions
 //     |- rubric-report      roundReportFor answers the round on screen, once, and memoizes it:
-//     |                     buildReport (rubric-engine.buildContext, rounds.buildPlayedRounds,
-//     |                     answerRubric), plus log-contract.parseRound for its payloads
+//     |                     buildReport (rubric-context.buildContext, rounds.buildPlayedRound,
+//     |                     answerRubric and the rubric questions), plus log-contract.parseRound
 //     |- report-adapters    that report as rows, cards and sentences
 //     `- maze-view          createMazeReplay draws the round, via maze-model.mazeReplayModel
 //
