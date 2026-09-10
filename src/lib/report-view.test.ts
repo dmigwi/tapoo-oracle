@@ -10,7 +10,7 @@ import {createInitialLogTabs, roundReportFor} from "./log-tabs"
 import {roundLabel} from "./rounds"
 import {activeLogTab, activeRound, renderReportSections, stampBuildAge} from "./report-view"
 import type {LogEntry, RegionView, LogTab, LogTabsState} from "./types"
-import {analyzeLogText, query, queryAll, rendered, twoSeatDriftLog} from "./test-support";
+import {sliceLogText, query, queryAll, rendered, twoSeatDriftLog} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
 // those two, and a stub would be testing the stub's shape rather than the one that ships.
@@ -116,21 +116,21 @@ const fullSetupExport = JSON.stringify({
 })
 
 const fullSetupTab = (): LogTab => {
-  const result = analyzeLogText(fullSetupExport, {label: "full-setup.json"})
+  const result = sliceLogText(fullSetupExport, {label: "full-setup.json"})
   expect(result.ok).toBe(true)
   return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "full-setup.json", status: "loaded", result}
 }
 
 const twoRoundTab = (): LogTab => {
-  const result = analyzeLogText(twoRoundExport, {label: "two-rounds.json"})
+  const result = sliceLogText(twoRoundExport, {label: "two-rounds.json"})
   expect(result.ok).toBe(true)
   return {id: "t2", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "two-rounds.json", status: "loaded", result}
 }
 
 const loadedTab = (): LogTab => {
-  const result = analyzeLogText(logExport, {label: "gemma4.json"})
+  const result = sliceLogText(logExport, {label: "gemma4.json"})
   expect(result.ok).toBe(true)
   return {id: "t1", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "gemma4.json", status: "loaded", result}
@@ -394,7 +394,7 @@ describe("where a warning is attributed", () => {
       level: 2,
     })
 
-    const result = analyzeLogText(JSON.stringify(parsed), {label: "two-rounds.json"})
+    const result = sliceLogText(JSON.stringify(parsed), {label: "two-rounds.json"})
     expect(result.ok).toBe(true)
     return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
       label: "two-rounds.json", status: "loaded", result}
@@ -641,7 +641,7 @@ describe("detail", () => {
   // is read rather than after. Comma-joined and in the same ink, two models read as a list - and at a
   // glance as one long name - so the finding was invisible in the table that holds its evidence.
   it("marks the setting a seat changed, and only that one", () => {
-    const result = analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const result = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
     const tab: LogTab = {id: "d", url: "https://example.com/d.json", loadedUrl: "https://example.com/d.json",
       label: "drift", status: "loaded", result}
     const host = rendered(renderReportSections(ui, stateWith(tab)).detail)
@@ -711,7 +711,7 @@ describe("notices", () => {
   })
 
   it("surfaces contract warnings without hiding the report they came with", () => {
-    const result = analyzeLogText(logExport.replace('"agent-api"', '"human"'), {label: "g.json"})
+    const result = sliceLogText(logExport.replace('"agent-api"', '"human"'), {label: "g.json"})
     const sections = renderReportSections(ui, stateWith({...loadedTab(), result}))
 
     expect(rendered(sections.notices).className).toBe("notice notice-warn")

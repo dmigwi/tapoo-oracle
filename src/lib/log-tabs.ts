@@ -10,40 +10,28 @@ import { agentSettingsCheck, parseGameRound, seatRosterCheck } from "./log-contr
 import { loadTapooLogFromUrl } from "./share-link"
 import { answerRubric } from "./report"
 import { groupEntriesByRound, roundLabel } from "./rounds"
-import type { Analysis, LogWarning, LogTab, LogTabsState, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types"
+import type { SlicedLogResult, LogTab, LogTabsState, ParsedLog, RoundReport, RoundSlice } from "./types"
 import {asTrimmedText, clamp} from "./utils";
 
 
-/** buildReportAnalysis cuts a parsed log into rounds: one slice per round, not one report per log.
+/** sliceLogIntoRounds cuts a parsed log into one slice per round, passing the log's warnings and checks
+ * through untouched.
  *
- * A Tapoo log is a sequence of independent games: a new maze, a new start cell, a fresh decay budget.
- * Aggregating them gives verdicts that belong to no maze in particular - a capability answered YES because
- * round 3 showed it, printed above round 1's replay - and a "Rounds" count whose only job is to admit the
- * report is a blend. A round is the unit a verdict is about, so every answer on screen is a statement
- * about the maze beside it.
+ * A round is the unit every verdict is about: each is an independent game with its own maze, start cell
+ * and decay budget.
  *
- * It answers nothing itself. A slice is entries and an identity, which costs no rubric pass - that is
- * roundReportFor's job, done for the round a reader opened rather than for all of them at load.
- *
- * The step both loaders share. Exported so a test can reach it from text without a network - see
- * analyzeLogText in test-support.ts. */
-export function buildReportAnalysis(
-  {source, warnings, checks}: {source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]},
-  label: string,
-): Analysis {
+ * A slice is entries and an identity, so this costs no rubric pass - that is roundReportFor's, run for
+ * the round a reader opens. */
+export function sliceLogIntoRounds({source, warnings, checks}: ParsedLog, label: string): SlicedLogResult {
   const [first, ...rest]: RoundSlice[] = groupEntriesByRound(source.entries).map(({identity, entries}) => ({
     identity,
     reportLabel: `${label} - ${roundLabel(identity)}`,
     entries,
   }));
 
-  // The one place the "at least one round" invariant is enforced, rather than every render guarding
-  // against a state that cannot happen.
-  //
-  // It cannot: parseTapooLogText refuses a log with no readable entries, and groupEntriesByRound yields
-  // a group for any non-empty list - a log that never names a round still gets one holding everything.
-  // Checked here anyway, because this is where the claim is made, and a failure says so out loud instead
-  // of rendering a page with nothing on it.
+  // Unreachable: parseTapooLogText refuses a log with no readable entries, and groupEntriesByRound
+  // groups any non-empty list - a log naming no round still gets one holding everything. Stated once
+  // here, so no render has to guard the empty case.
   if (!first) {
     return {ok: false, error: "This log analyzed to no rounds, so there is nothing to report."};
   }
@@ -215,34 +203,30 @@ export function deleteLogTab(
 const fetchOptions = (fetchText?: (url: string) => Promise<string>) =>
   fetchText ? {fetchText} : undefined;
 
-/** What loading one URL produced: either an address that never validated, or the fields a log tab
- * takes from it.
+/** What loading one URL produced: either an address that never validated, or a whole log tab bar its id.
  *
- * Two arms rather than one shape with optional fields, so a caller cannot read `fields` off a failure:
- * narrowing on `unvalidated` is what hands it the other three. The same reason Result is a union - see
+ * Two arms rather than one shape with optional fields, so a caller cannot read a tab's fields off a
+ * failure: narrowing on `unvalidated` is what hands it the rest. The same reason Result is a union - see
  * its note in types.ts.
  *
- * Not Result itself, though, and the difference is worth knowing: `ok: false` would read as "the load
- * failed", and here a load that failed is a *success* - it carries the error inside `fields`, because
- * the URL validated and the reader gets a tab they can retry. `unvalidated` means only that the address
- * never validated. */
-type LoadedLogTabFields =
-  | {unvalidated: string}
-  | {label: string; url: string; fields: Partial<LogTab>};
+ * Not Result itself, though: `ok: false` would read as "the load failed", and here a load that failed is
+ * a *success* - it carries its error as the tab's own `error`, because the URL validated and the reader
+ * gets a tab they can retry. `unvalidated` means only that the address never validated.
+ *
+ * `Omit<LogTab, "id">` rather than fields of its own: everything a load decides is something a tab
+ * holds, and the id is the one thing it does not - the add path mints one, the reload path already has
+ * one. Naming the tab's own shape is what keeps a field added to LogTab from being silently dropped
+ * here. */
+type LoadedLogTabFields = {unvalidated: string} | Omit<LogTab, "id">;
 
-/** loadLogTabFields fetches one URL and turns it into the fields a log tab carries.
+/** loadLogTabFields fetches one URL and turns it into a log tab, bar its id.
  *
- * A log tab, specifically: it fetches, and a round tab is never fetched - it is a slice of a log
- * already in memory.
+ * The half the add and reload paths share, so a tab that arrives by retry cannot differ from one that
+ * arrived first time.
  *
- * The half both loaders share, extracted because it is the half where a divergence would be a bug.
- * Building `{status, result, loadedUrl, error}` in each of them instead, nothing catches the two
- * disagreeing about whether a failed reload keeps its stale report - and the label alone offers two
- * plausible spellings, `loaded.url ?? state.draftUrl` and `loaded.url ?? ""`.
- *
- * `unvalidated` is returned rather than folded in because it is the one outcome the two callers handle
- * differently: it has no tab to attach an error to on the add path, so that path leaves it in the draft
- * field, while the reload path has a tab sitting right there. */
+ * `unvalidated` is returned separately because it is the one outcome the two callers handle differently:
+ * the add path has no tab to attach the error to and leaves it in the draft field, while the reload path
+ * has a tab sitting right there. */
 async function loadLogTabFields(
   url: unknown,
   index: number,
@@ -256,14 +240,14 @@ async function loadLogTabFields(
   // Past the guard above, a load that failed still validated, so it has a URL to name.
   const resolved = loaded.url ?? asTrimmedText(url);
   const label = logTabLabelFromUrl(resolved, index);
-  const result = loaded.ok ? buildReportAnalysis(loaded, label) : undefined;
 
   return {
-    label,
     url: resolved,
-    fields: loaded.ok
-      ? {status: "loaded", label, result, loadedUrl: loaded.url, error: undefined}
-      : {status: "error", label, result, loadedUrl: loaded.url, error: loaded.error},
+    label,
+    status: loaded.ok ? "loaded" : "error",
+    result: loaded.ok ? sliceLogIntoRounds(loaded, label) : undefined,
+    loadedUrl: loaded.url,
+    error: loaded.ok ? undefined : loaded.error,
   };
 }
 
@@ -288,13 +272,7 @@ export async function loadNewLogTabFromUrl(
     };
   }
 
-  const tab: LogTab = {
-    id: state.pendingTabId ?? logTabId(),
-    url: loaded.url,
-    label: loaded.label,
-    status: "empty",
-    ...loaded.fields,
-  };
+  const tab: LogTab = {id: state.pendingTabId ?? logTabId(), ...loaded};
 
   return {
     ...state,
@@ -332,5 +310,5 @@ export async function loadLogTabFromUrl(
     });
   }
 
-  return updateLogTab(state, tabId, loaded.fields);
+  return updateLogTab(state, tabId, loaded);
 }

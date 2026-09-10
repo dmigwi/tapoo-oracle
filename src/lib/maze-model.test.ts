@@ -5,8 +5,8 @@ import {turnReports} from "./log-contract"
 
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
 import {agentsFromRound} from "./log-contract"
-import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn} from "./types"
-import {analyzeLogText, firstRound, must, reportWith} from "./test-support";
+import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn, SummaryRow} from "./types"
+import {sliceLogText, firstRound, must, reportWith} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -167,7 +167,7 @@ describe("mazeFrameAt", () => {
   })
 })
 
-const value = (rows: {field: string; value: string}[], field: string) =>
+const value = (rows: SummaryRow[], field: string) =>
   rows.find((row) => row.field === field)?.value
 
 // Statuses are reported per turn, and only for the cells inside that turn's history window - so a cell
@@ -360,7 +360,7 @@ describe("agentsFromRound", () => {
   // states its own figure in the outcome record, and ours has to equal it. Counting the start square
   // made this 18 against Tapoo's 17.
   it("reconciles with the unique-cell count Tapoo reports for the round", () => {
-    const result = analyzeLogText(JSON.stringify(fixtureData), {label: "gemma4"})
+    const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
     const round = firstRound(result)
     const level = must(round.levels[0], "the fixture's only round")
 

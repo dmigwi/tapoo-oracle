@@ -4,7 +4,7 @@
 // outright, which is why the adapters are pure and testable without a DOM.
 
 import { agentSeatLabel } from "./log-contract"
-import type { AgentSummary, LogWarning, GroupKind, GroupResult, Report, TapooLog, ValidationCheck } from "./types"
+import type { AgentSummary, LogWarning, GroupKind, GroupResult, Report, SummaryRow, TapooLog, ValidationCheck } from "./types"
 import { capitalize, formatCount } from "./utils"
 
 /** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
@@ -43,9 +43,14 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
  *
  * Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
  * the test can then assert on the groups themselves rather than on punctuation. */
-export function profileCards(
-  report: Report,
-): Array<{label: string; value: string; groups: Array<{id: string; label: string}>; tone: string}> {
+/** One capability group named on a card: its rubric id and the name a reader reads. */
+export type ProfileCardGroup = {id: string; label: string};
+
+/** One profile card: its heading, the `met/total` it scored, the groups it met, and the tone the view
+ * paints it in. */
+export type ProfileCard = {label: string; value: string; groups: ProfileCardGroup[]; tone: string};
+
+export function profileCards(report: Report): ProfileCard[] {
   const card = (label: string, groups: GroupResult[], tone: string) => {
     const met = groups.filter((group) => group.met);
     return {
@@ -128,9 +133,11 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
  *   problem. Each of these has a rubric question behind it.
  *
  *   Times disabled - the round stopped. It bounds what every figure beside it covers. */
-export function diagnosticRows(
-  report: Report,
-): Array<{signal: string; count: number; scoredBy: string | null}> {
+/** One diagnostics line: what went wrong, how often, and the rubric question that scores it - null
+ * when nothing does. */
+export type DiagnosticRow = {signal: string; count: number; scoredBy: string | null};
+
+export function diagnosticRows(report: Report): DiagnosticRow[] {
   // scoredBy is the rubric question this signal answers, or null when nothing scores it. A nullable id
   // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code
   // from a word was to look at the characters. The distinction is knowledge this table already has.
@@ -171,9 +178,9 @@ export function diagnosticTableData(report: Report): {columns: string[]; rows: A
  * Nothing here is scored. It is context for reading the verdicts above - a model given 3,000 prompt
  * tokens per turn and one given 300 are not doing the same task, and neither is a run that spent most
  * of its completion budget on reasoning tokens. */
-export function modelOutputRows(report: Report): Array<{field: string; value: string}> {
+export function modelOutputRows(report: Report): SummaryRow[] {
   const {output} = report;
-  const rows: Array<{field: string; value: string}> = [
+  const rows: SummaryRow[] = [
     {field: "Responses", value: formatCount(output.responses)},
   ];
 
@@ -207,7 +214,7 @@ export function modelOutputRows(report: Report): Array<{field: string; value: st
  *
  * Only what belongs to the file and the round. A model, a provider, an effort and a player describe a
  * *seat* instead, and a round can seat more than one, so those live per seat - see agentRows. */
-export function provenanceRows(source: TapooLog): Array<{field: string; value: string}> {
+export function provenanceRows(source: TapooLog): SummaryRow[] {
   return [
     // No source URL row. It is the one field here that is not read out of the log itself, the panel
     // above already carries the share link that identifies the same log, and a table cell is the
@@ -362,7 +369,7 @@ const rank = (name: string): number => {
  * A file-wide check is marked rather than grouped. The reader has already chosen a round from the tabs
  * above, so splitting one short table under a second set of headings reads as a second choice to make;
  * an asterisk and one line of footnote says the same thing without asking anything of them. */
-export function validationRows(checks: ValidationCheck[]): Array<{field: string; value: string}> {
+export function validationRows(checks: ValidationCheck[]): SummaryRow[] {
   const said = {passed: "passed", failed: "FAILED", unchecked: "not checked"};
   return [...checks]
     .sort((first, second) => rank(first.name) - rank(second.name))

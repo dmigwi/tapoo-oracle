@@ -29,7 +29,7 @@ import { createInitialLogTabs, roundReportFor } from "./log-tabs";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
-import type { Analysis, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types";
+import type { SlicedLogResult, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types";
 
 
 // --- Shared tables ---
@@ -293,7 +293,7 @@ function roundNotices({html}: ReportUi, round: RoundReport): RegionView {
  * passes it - so it takes the first round without searching for it.
  *
  * Undefined means one thing only: this tab has no report to show a round from. A parsed log always has
- * at least one round - Analysis.rounds says so in its type - so "loaded but roundless" is not a state
+ * at least one round - SlicedLog.rounds says so in its type - so "loaded but roundless" is not a state
  * a caller has to render around.
  *
  * Throws on an identity naming no round, because that is a programming error rather than anything a
@@ -414,7 +414,7 @@ function profile(
 // question answers YES or NO, and what a NO means. A rule stated in three places - here, the hero lede,
 // the profile summary - reads as three separate hedges rather than one method, so the lede and the summary
 // say what they are for and leave the method to the section named after it.
-function methodology({html}: ReportUi, result: Analysis | undefined): RegionView {
+function methodology({html}: ReportUi, result: SlicedLogResult | undefined): RegionView {
   if (!result?.ok) return "";
   return html`<details class="events-section methodology-section">
       <summary>
@@ -547,13 +547,19 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
 
 // --- Entry point ---
 
+/** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */
+export type ReportRegions = {
+  emptyState: RegionView;
+  notices: RegionView;
+  methodology: RegionView;
+  profile: RegionView;
+  detail: RegionView;
+};
+
 /** renderReportSections is one call per render, returning the regions the page interpolates. Returning an object rather
  * than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's
  * reading order stays visible in the markdown rather than being buried in this file. */
-export function renderReportSections(
-  ui: ReportUi,
-  tabsState: LogTabsState | undefined,
-): {emptyState: RegionView; notices: RegionView; methodology: RegionView; profile: RegionView; detail: RegionView} {
+export function renderReportSections(ui: ReportUi, tabsState: LogTabsState | undefined): ReportRegions {
   const tab = activeLogTab(tabsState);
 
   // Round selection swaps the two regions in place rather than travelling through tab state.

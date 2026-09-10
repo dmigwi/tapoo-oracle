@@ -9,7 +9,7 @@
 
 import { mazeFromEncoded } from "./maze"
 import { clamp, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, LevelModel, Report, Turn, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, LevelModel, Report, SummaryRow, Turn, VisitStatus } from "./types"
 
 /** levelSelectLabel names a round in the replay's level picker.
  *
@@ -62,7 +62,8 @@ export function mazeReplayModel(report: Report): LevelModel[] {
  * no seat claims.
  *
  * By the stated seat first and the name second, which is how agentsFromRound gathers these records -
- * resolving them differently here would colour a trail for a seat the table does not list. The name still has to work on its own: a legacy log states no seat on any turn, and the one
+ * resolving them differently here would colour a trail for a seat the table does not list. The name
+ * still has to work on its own: a legacy log states no seat on any turn, and the one
  * seatId such a log carries reaches the record from the round-end entry, so the seat matches nothing and
  * the name is all there is.
  *
@@ -175,8 +176,6 @@ export function mazeFrameAt(levelModel: LevelModel, turnIndex: number): Frame {
     turn: current ?? null
   };
 }
-
-type SummaryRow = {field: string; value: string};
 
 /** DECAY_REASONS is Tapoo's charging rule, which is an ordinal scale of three and not a measurement.
  * Every turn pays a base unit; an invalid move costs two; a response that broke the output format

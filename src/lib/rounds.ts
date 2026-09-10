@@ -101,55 +101,55 @@ export function roundLabel({game, level}: GameIdentity): string {
   return parts.length > 0 ? parts.join(" \u00b7 ") : "Whole log";
 }
 
+
 /** groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
  *
  * The one definition of what a round is. The replay reads it to build a maze per round, and the report
  * reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
  * tab whose maze came from somewhere else. */
 export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
-  // An entry that does not name its round belongs to the round in progress.
-  //
-  // Reading `entry.game ?? "?"` per entry instead filed every such entry under a fabricated round "?/?".
-  // On a log that stamps game and level only on its round boundaries, that split one real round in two:
-  // a round holding the encoded maze and no turns, and a phantom round holding all the turns and no
-  // maze. The reader saw a replay whose scrubber ran 0 to 0 and a Turns column reading zero, on a log
-  // with hundreds of them.
-  //
-  // Entries are in recorded order, so the round in progress is whatever the last entry to name one
-  // said. Anything before the first such entry is held back and joins the round that opens after it -
-  // it cannot belong to an earlier one, because there is none.
-  const groups = new Map<string, RoundGroup>()
-  const beforeFirstRound: LogEntry[] = []
-  let game: number | null = null
-  let level: number | null = null
+  const groupedRounds: RoundGroup[] = []
+  let roundEntries: LogEntry[] = []
+  
+  // The key every entry recorded before the log names its first round carries.
+  const UNNAMED_ROUND_KEY = gameIdentityKey({game: null, level: null});
+
+  // The round the entry in hand belongs to. Carried forward rather than read off the entry, because an
+  // entry that names no round belongs to the round in progress - and game and level advance
+  // independently, so a log that stamps one without the other still names a round, "2/?".
+  let currentRound: GameIdentity = {game: null, level: null}
+
+  // The same two values one entry back, which is the round every entry gathered so far belongs to.
+  let prevRound: GameIdentity = currentRound
+  let prevRoundKey = UNNAMED_ROUND_KEY
 
   for (const entry of entries) {
-    if (typeof entry.game === "number") game = entry.game
-    if (typeof entry.level === "number") level = entry.level
-
-    if (game === null && level === null) {
-      beforeFirstRound.push(entry)
-      continue
+    currentRound = {
+      game: typeof entry.game === "number" ? entry.game : currentRound.game,
+      level: typeof entry.level === "number" ? entry.level : currentRound.level,
     }
 
-    const key = gameIdentityKey({game, level})
-    // Identity comes from the running cursor, not from the group's first entry: on a log that stamps
-    // game and level only on round boundaries, the first entry of a group often carries neither, and a
-    // tab labelled from it would read "Whole log" beside fourteen properly named siblings.
-    const group = groups.get(key) ?? {identity: {game, level}, entries: []}
-    if (group.entries.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
-      group.entries.push(...beforeFirstRound.splice(0))
+    // Nothing is closed while the previous round is still the unnamed one: those entries were recorded
+    // before the log named any round, so they join the round about to open rather than forming one of
+    // their own.
+    const currentRoundKey = gameIdentityKey(currentRound)
+    if (prevRoundKey !== UNNAMED_ROUND_KEY && currentRoundKey !== prevRoundKey) {
+      groupedRounds.push({identity: prevRound, entries: roundEntries})
+      roundEntries = [] // clear old entries.
     }
-    group.entries.push(entry)
-    groups.set(key, group)
+
+    roundEntries.push(entry)
+    prevRound = currentRound
+    prevRoundKey = currentRoundKey
   }
 
-  // A log that never names a round at all: one round, holding everything.
-  if (beforeFirstRound.length > 0) {
-    groups.set(gameIdentityKey({game: null, level: null}), {identity: {game: null, level: null}, entries: beforeFirstRound})
+  // The round still being gathered has no successor to close it, and a log that named no round at all
+  // is gathered entirely here - one round, holding everything.
+  if (roundEntries.length > 0) {
+    groupedRounds.push({identity: prevRound, entries: roundEntries})
   }
 
-  return [...groups.values()]
+  return groupedRounds
 }
 
 /** buildLevels groups the log into one record per played round and derives the path walked in each.

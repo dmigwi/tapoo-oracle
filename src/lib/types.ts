@@ -185,8 +185,14 @@ export type LogWarning = {impact: WarningImpact; message: string};
  * on the way out is how a caveat goes unsaid.
  *
  * One type for the whole ingress, not one per step: parsing the JSON and checking the envelope are two
- * halves of one operation, and nothing outside parseTapooLogText ever holds the value between them. */
-export type LogTextResult = Result<{source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]}>;
+ * halves of one operation, and nothing outside parseTapooLogText ever holds the value between them.
+ *
+ * `checks` is what was verified about the file itself, which is true of every round in it. The view
+ * lists them with the round's own checks rather than under a heading of their own: a reader has already
+ * chosen which round they are reading, and a second grouping below that choice reads as a second choice
+ * to make. */
+export type ParsedLog = {source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]};
+export type LogTextResult = Result<ParsedLog>;
 /** A share-link payload, or why the token could not be read. */
 export type PayloadResult = Result<{payload: string}>;
 
@@ -561,7 +567,7 @@ export type ModelOutput = {
 /** One round's entries and the identity naming its round tab - everything the tab strip needs, and
  * nothing that costs a rubric pass.
  *
- * This is what an Analysis carries, so opening a log of fourteen rounds does not answer fourteen
+ * This is what a SlicedLog carries, so opening a log of fourteen rounds does not answer fourteen
  * rubrics to show one. A slice becomes a RoundReport when somebody looks at it. */
 export type RoundSlice = {
   /** Which round this is. What a round-tab selection carries, and what the tab's text is derived from. */
@@ -580,26 +586,21 @@ export type RoundSlice = {
  * round. Resolved on demand and memoized - see roundReportFor. */
 export type RoundReport = RoundSlice & {report: Report; round: GameRound};
 
-/** What a whole log analyzed to: its rounds, and the caveats a reader is owed. */
-export type Analysis = Result<{
-  source: TapooLog;
-  warnings: LogWarning[];
-  /** What was verified about the file itself, which is true of every round in it. Listed with the
-   * round's own checks rather than under a heading of its own: a reader has already chosen which round
-   * they are reading, and a second grouping below that choice reads as a second choice to make. */
-  checks: ValidationCheck[];
+/** A parsed log once it has been cut into rounds - what a log tab holds, and what the report view reads.
+ *
+ * The same three fields the parse produced, plus the rounds: nothing here re-parses, so a reader that
+ * has a SlicedLog needs no second look at the file.
+ *
+ * `rounds` is a non-empty tuple because it genuinely cannot be empty: the parse refuses a log with no
+ * readable entries, and a log that names no round at all still yields one round holding everything.
+ * Saying so in the type means a reader of `rounds[0]` gets a round rather than `RoundSlice | undefined`.
+ *
+ * The rounds are unanswered. Each is answered when it is opened, because a verdict about one maze is not
+ * a verdict about the next one, and a reader is looking at one of them. */
+export type SlicedLog = ParsedLog & {rounds: [RoundSlice, ...RoundSlice[]]};
 
-  /** The rounds this log recorded, in the order they were played.
-   *
-   * A non-empty tuple, because it genuinely cannot be empty: the parse refuses a log with no readable
-   * entries, and a log that names no round at all still yields one round holding everything. Saying so
-   * in the type means a reader of `rounds[0]` gets a round rather than `RoundSlice | undefined`, and the
-   * "what if there are none" branch - which rendered a blank page and said nothing - stops existing.
-   *
-   * Unanswered: each is answered when it is opened, because a verdict about one maze is not a verdict
-   * about the next one, and a reader is looking at one of them. */
-  rounds: [RoundSlice, ...RoundSlice[]];
-}>;
+/** One log cut into rounds, or the reason it could not be read. */
+export type SlicedLogResult = Result<SlicedLog>;
 
 // --- Maze replay ---
 
@@ -660,7 +661,7 @@ export type LogTab = {
   label: string;
   status: LogTabStatus;
   loadedUrl?: string;
-  result?: Analysis;
+  result?: SlicedLogResult;
   error?: string;
 };
 
@@ -677,6 +678,13 @@ export type LogTabsState = {
   sharedLinkError?: string;
   sharedLinkBroken?: string | null;
 };
+
+/** One line of a two-column summary table: the field's name, and what the log or the rubric says it is.
+ *
+ * Two columns rather than a column per fact, because a wide table trims its own values on a narrow
+ * viewport. Every summary panel on the page - provenance, model output, validation, the maze's own
+ * figures - is built from these, so they cannot disagree about what a row is. */
+export type SummaryRow = {field: string; value: string};
 
 /** The Observable "viewof" protocol: the element the page binds to carries the current value. */
 export type LogTabsInput = HTMLElement & {value: LogTabsState};

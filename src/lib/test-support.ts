@@ -1,7 +1,7 @@
 import {parseTapooLogText} from "./log-contract";
 import {fnv1a64Checksum} from "./utils";
-import {buildReportAnalysis, roundReportFor} from "./log-tabs";
-import type {Analysis, Level, LogWarning, RegionView, Report} from "./types";
+import {sliceLogIntoRounds, roundReportFor} from "./log-tabs";
+import type {SlicedLogResult, Level, LogWarning, RegionView, Report} from "./types";
 
 // Helpers shared by the suites.
 //
@@ -10,9 +10,9 @@ import type {Analysis, Level, LogWarning, RegionView, Report} from "./types";
 /** The report for a single-round log's only round.
  *
  * Most fixtures are one round, and reaching through `rounds[0]` at every call site would bury what is
- * actually being asserted. No emptiness check: Analysis.rounds is a non-empty tuple, so the first round
+ * actually being asserted. No emptiness check: SlicedLog.rounds is a non-empty tuple, so the first round
  * is a round. */
-export function firstRound(result: Analysis): Report {
+export function firstRound(result: SlicedLogResult): Report {
   return roundReportFor(expectOk(result).rounds[0]).report;
 }
 
@@ -114,28 +114,23 @@ export function messagesOf(warnings: LogWarning[]): string[] {
   return warnings.map((warning) => warning.message);
 }
 
-/** analyzeLogText slices a log given as raw text into rounds, skipping the download.
+/** sliceLogText slices a log given as raw text into rounds, skipping the download.
  *
- * A test fixture, and it lives here rather than in log-tabs.ts because nothing in the app calls it.
- * The app's own path is a URL: loadTapooLogFromUrl fetches and parses, then buildReportAnalysis slices.
- * A copy of that composition sat in log-tabs.ts describing itself as "the single entry point from
- * raw text to a rendered result", which no production caller had ever used.
- *
- * It composes the same two steps the loaders do, so a suite that exercises it exercises the real
- * pipeline - everything but the fetch, which is what a fixture on disk is standing in for.
+ * It runs the same two steps the app's loader does - parseTapooLogText, then sliceLogIntoRounds - so a
+ * test exercises the real pipeline minus the fetch. It lives here because only tests call it.
  *
  * It answers no rubric: like the app, that waits for roundReportFor. A test wanting verdicts asks
  * firstRound below, which resolves one. */
-export function analyzeLogText(
+export function sliceLogText(
   text: unknown,
   {label = "online log", sourceUrl}: {label?: string; sourceUrl?: string} = {},
-): Analysis {
+): SlicedLogResult {
   const result = parseTapooLogText(text, {sourceUrl});
   if (!result.ok) {
     return {ok: false, error: result.error};
   }
 
-  return buildReportAnalysis(result, label);
+  return sliceLogIntoRounds(result, label);
 }
 
 // --- A log with two seats, one of which did not hold still ---

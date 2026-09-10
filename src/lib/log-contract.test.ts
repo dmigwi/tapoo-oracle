@@ -8,7 +8,7 @@ import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
 import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
 import {roundReportFor} from "./log-tabs"
 import {fnv1a64Checksum} from "./utils"
-import {analyzeLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
+import {sliceLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
 // a numeric payload, an unknown level - which is exactly the shape parseTapooLogText is asked to
@@ -642,6 +642,34 @@ describe("a log that names no round at all", () => {
     expect(at(groups, 0).entries).toHaveLength(2)
     expect(roundLabel(at(groups, 0).identity)).toBe("Whole log")
   })
+
+  // Game and level advance independently, so a log that stamps one of them still names its round. The
+  // cursor moving only when both arrive would file these entries under no round at all, and the reader
+  // would meet "Whole log" on a log that says which game it is.
+  it("names a round from the counter the log did stamp", () => {
+    const groups = groupEntriesByRound([
+      entry({turn: 1, game: 2, level: undefined}),
+      entry({turn: 2, game: undefined, level: undefined}),
+    ])
+
+    expect(groups).toHaveLength(1)
+    expect(at(groups, 0).identity).toEqual({game: 2, level: null})
+    expect(at(groups, 0).entries).toHaveLength(2)
+    expect(roundLabel(at(groups, 0).identity)).toBe("Game 2")
+  })
+
+  // Entries recorded before any round was named join the round that opens after them: there is no
+  // earlier round for them to belong to, and dropping them loses the log's opening entries outright.
+  it("gives the entries recorded before the first round to that round", () => {
+    const groups = groupEntriesByRound([
+      entry({turn: 0, game: undefined, level: undefined}),
+      entry({turn: 1, game: 2, level: 1}),
+      entry({turn: 2, game: 3, level: 1}),
+    ])
+
+    expect(groups.map((group) => [group.identity, group.entries.length]))
+      .toEqual([[{game: 2, level: 1}, 2], [{game: 3, level: 1}, 1]])
+  })
 })
 
 describe("agentsFromRound, on a log that states its own seats", () => {
@@ -981,7 +1009,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
 // experiment looks like - see twoSeatDriftLog for why it is built rather than saved.
 describe("a log whose seat changed model mid-round", () => {
   const round = () => {
-    const result = expectOk(analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "two-seat"}))
+    const result = expectOk(sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "two-seat"}))
     const opened = roundReportFor(must(result.rounds[0], "a round"))
     return {report: opened.report, checks: opened.round.checks}
   }

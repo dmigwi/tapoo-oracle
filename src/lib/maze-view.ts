@@ -12,7 +12,7 @@
 import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { DECAY_REASONS, MOST_DECAY, agentIndexOf, decayTally, levelSelectLabel, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, LevelModel, Maze, Move, Report, VisitStatus } from "./types"
+import type { AgentSummary, CellKey, Frame, LevelModel, Maze, Move, Report, SummaryRow, VisitStatus } from "./types"
 
 // --- Drawing constants ---
 
@@ -675,7 +675,7 @@ const MAZE_SUMMARY_LINKS: Record<string, HTMLElement> = {
 
 // summaryPanel wraps a field/value table in a labelled container, giving each panel a clear heading
 // so the Maze and Level panels are visually distinct but structurally consistent.
-function summaryPanel(heading: string, rows: Array<{field: string; value: string}>): HTMLElement {
+function summaryPanel(heading: string, rows: SummaryRow[]): HTMLElement {
   const panel = createHtmlElement("div", "maze-summary-panel");
   panel.append(
     createHtmlElement("h3", "maze-summary-heading", heading),

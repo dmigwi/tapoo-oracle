@@ -5,7 +5,7 @@ import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, n
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, logTabLabelFromUrl, trimLogTabLabel} from "./log-tabs"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
-import {analyzeLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
+import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
 // local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
@@ -18,7 +18,7 @@ beforeAll(() => {
   fixtureText = JSON.stringify(fixtureData)
   fixture = JSON.parse(fixtureText) as Record<string, unknown>
 
-  const result = analyzeLogText(fixtureText, {label: "fixture"})
+  const result = sliceLogText(fixtureText, {label: "fixture"})
   if (!result.ok) {
     throw new Error(`Remote test fixture is not analyzable: ${result.error}`)
   }
@@ -27,9 +27,9 @@ beforeAll(() => {
   fixtureSource = result.source
 })
 
-describe("analyzeLogText", () => {
+describe("sliceLogText", () => {
   it("analyzes a real Tapoo export", () => {
-    const result = analyzeLogText(fixtureText, { label: "fixture" })
+    const result = sliceLogText(fixtureText, { label: "fixture" })
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
@@ -44,14 +44,14 @@ describe("analyzeLogText", () => {
   })
 
   it("explains an empty input rather than failing silently", () => {
-    expect(analyzeLogText("   ")).toEqual({
+    expect(sliceLogText("   ")).toEqual({
       ok: false,
       error: "Load a Tapoo agent-api log from an online JSON URL to begin.",
     })
   })
 
   it("reports malformed JSON", () => {
-    const result = analyzeLogText("{not json")
+    const result = sliceLogText("{not json")
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(/^Not valid JSON:/)
   })
@@ -60,19 +60,19 @@ describe("analyzeLogText", () => {
   // unrelated payload produced a confident-looking profile of nothing. Rejecting non-Tapoo input is
   // the behavior that replaced it, and it is worth a test of its own.
   it("rejects JSON that is not a Tapoo export", () => {
-    const result = analyzeLogText(JSON.stringify({ turns: [{ action: "move", status: "applied" }] }))
+    const result = sliceLogText(JSON.stringify({ turns: [{ action: "move", status: "applied" }] }))
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(/Not a Tapoo log export/)
   })
 
   it("surfaces contract warnings without refusing the log", () => {
-    const result = analyzeLogText(JSON.stringify({ ...fixture, mode: "human" }))
+    const result = sliceLogText(JSON.stringify({ ...fixture, mode: "human" }))
     expect(result.ok).toBe(true)
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
   })
 
   it("retains the source URL when one is provided", () => {
-    const result = analyzeLogText(fixtureText, {
+    const result = sliceLogText(fixtureText, {
       label: "sample-agent-api-log.json",
       sourceUrl: "https://example.com/logs/sample-agent-api-log.json",
     })
@@ -145,10 +145,10 @@ describe("report URL tabs", () => {
   // downstream has to render around "loaded, but no rounds". A log that names no round at all still
   // gets one holding everything.
   it("always yields at least one round", () => {
-    const result = analyzeLogText(fixtureText, {label: "fixture"})
+    const result = sliceLogText(fixtureText, {label: "fixture"})
 
     expect(expectOk(result).rounds.length).toBeGreaterThan(0)
-    expect(expectOk(analyzeLogText(JSON.stringify({
+    expect(expectOk(sliceLogText(JSON.stringify({
       name: "tapoo",
       version: "2.5.1",
       mode: "agent-api",
@@ -303,7 +303,7 @@ describe("presentation", () => {
     const rows = provenanceRows(fixtureSource)
     expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.1")
 
-    const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
+    const withoutVersion = sliceLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
     const missing = provenanceRows(withoutVersionOk.source)
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
@@ -381,12 +381,12 @@ describe("warningHeadline", () => {
   it("classifies the caveats a real log produces", () => {
     // A non-agent-api round is answered by questions written for a different mode, so the verdicts may
     // be wrong; a missing build version leaves every verdict standing but unattributable.
-    const wrongMode = analyzeLogText(JSON.stringify({...fixture, mode: "human"}))
+    const wrongMode = sliceLogText(JSON.stringify({...fixture, mode: "human"}))
     expect(expectOk(wrongMode).warnings.map((w) => w.impact)).toContain("inaccurate")
     expect(warningHeadline(expectOk(wrongMode).warnings))
       .toBe("This report may be inaccurate.")
 
-    const noVersion = analyzeLogText(JSON.stringify({...fixture, version: undefined}))
+    const noVersion = sliceLogText(JSON.stringify({...fixture, version: undefined}))
     expect(expectOk(noVersion).warnings.every((w) => w.impact === "incomplete")).toBe(true)
     expect(warningHeadline(expectOk(noVersion).warnings)).toBe("This report is missing important parts.")
   })
@@ -396,7 +396,7 @@ describe("modelOutputRows", () => {
   // What the provider said about its own work, normalized across two API shapes that report
   // overlapping but different things. Not scored - it is context for reading the verdicts.
   const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
-    ...firstRound(analyzeLogText(fixtureText, {label: "fixture"})),
+    ...firstRound(sliceLogText(fixtureText, {label: "fixture"})),
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, finishReasons: [], ...output},
   })
@@ -448,7 +448,7 @@ describe("modelOutputRows", () => {
 // column reads zero and a count that never arrived would look exactly the same.
 describe("the diagnostics a round actually reports", () => {
   it("carries a failed request and a harness fault through to the table", () => {
-    const analysis = analyzeLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const analysis = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
     const table = diagnosticTableData(firstRound(analysis))
 
     expect(table.rows[0]).toMatchObject({
@@ -539,7 +539,7 @@ describe("provenance names the setup a verdict depends on", () => {
   // to the Agents table, where they belong to a seat: a round can seat two agents on two providers, and
   // one row could only ever name one of them.
   it("names each seat's provider and effort on the seat, not on the round", () => {
-    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
+    const result = expectOk(sliceLogText(fixtureText, {label: "fixture"}))
     const fields = provenanceRows(result.source).map((row) => row.field)
 
     expect(fields).toEqual(["Tapoo version", "Control mode", "Downloaded at", "Log entries"])
