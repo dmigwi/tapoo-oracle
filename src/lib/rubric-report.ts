@@ -13,7 +13,7 @@
 // rubric pass buildReport calls: the file reads in the order the work happens.
 
 import { agentSettingsCheck, classifyTraversalSpeed, parseRound, seatRosterCheck } from "./log-contract"
-import { buildPlayedRounds } from "./rounds"
+import { buildPlayedRound } from "./rounds"
 import { CAPABILITIES, VIOLATIONS, aggregate, buildContext } from "./rubric-engine"
 import type { Context, GroupKind, GroupResult, LogEntry, Report, RoundReport, RoundSlice, RubricGroup } from "./types"
 
@@ -72,7 +72,7 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
  * Three steps, each owned elsewhere:
  *
  *   buildContext (rubric-engine) reads the entries into the facts every question is answered from;
- *   buildPlayedRounds (rounds)  derives the round's maze and path from that same context;
+ *   buildPlayedRound (rounds)   derives the round's maze and path from that same context;
  *   answerRubric (below)         answers the capability and violation groups against it.
  *
  * What this function itself does is compose those three and name the facts a reader reads beside the
@@ -81,9 +81,9 @@ export function buildReport(entries: LogEntry[], { label = "log" }: { label?: st
   const context = buildContext(entries, { label })
 
   // Built once and read twice: the report's agent summaries come from the same round the replay draws,
-  // so the two cannot disagree about who played. This is handed one round's entries, so
-  // buildPlayedRounds regroups them into the one round it already has.
-  const playedRound = buildPlayedRounds(entries, context)[0] ?? null
+  // so the two cannot disagree about who played. The context travels with the entries it was built
+  // from - buildPlayedRound never builds a second one.
+  const playedRound = buildPlayedRound(entries, context)
 
   const {capabilities, violations} = answerRubric(context)
   const winningOutcome = context.outcomes.find((outcome) => outcome.outcome === "won")
@@ -92,7 +92,7 @@ export function buildReport(entries: LogEntry[], { label = "log" }: { label?: st
     label,
     agents: playedRound?.agents ?? [],
     output: {...context.output, finishReasons: [...context.output.finishReasons]},
-    predictions: context.submissions.length,
+    predictions: context.predictions.length,
     traversalSpeed: winningOutcome ? Number(winningOutcome.traversalSpeed) : null,
     traversalSpeedClass: winningOutcome ? classifyTraversalSpeed(winningOutcome.traversalSpeed) : null,
     capabilities,

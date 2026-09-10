@@ -3,10 +3,10 @@ import {describe, expect, it} from "vitest"
 import {cellFromKey, cellFromLogged, cellKeyFromLogged, getCellKey, openMovesFromLogged} from "./log-contract"
 import {mazeReplayModel} from "./maze-model"
 import {createInitialLogTabs, deleteLogTab, extractTabLabelFromUrl} from "./log-tabs-view"
-import {buildPlayedRounds} from "./rounds"
-import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
+import {buildPlayedRound} from "./rounds"
+import {VIOLATIONS, buildContext, parseTurnPrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"
-import {at, must} from "./test-support"
+import {must} from "./test-support"
 import {asTrimmedText} from "./utils"
 import type {LogEntry, LogTabsState} from "./types"
 
@@ -45,26 +45,29 @@ describe("defect 1: a logged cell arrives in two shapes", () => {
   // destinationCell, did not - so the key became "undefined,undefined": no destination drawn, and the
   // shortest route reported to the reader as "no route found" on a maze that has one.
   it("resolves a destination logged in the compacted form", () => {
-    const levels = buildPlayedRounds([
+    const entries = [
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: [0, 5]}),
-    ])
+    ]
+    const round = must(buildPlayedRound(entries, buildContext(entries)), "a round")
 
-    expect(at(levels, 0).destinationCell).toBe("0,5")
+    expect(round.destinationCell).toBe("0,5")
   })
 
   it("resolves the same destination logged uncompacted, unchanged", () => {
-    const levels = buildPlayedRounds([
+    const entries = [
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}}),
-    ])
+    ]
+    const round = must(buildPlayedRound(entries, buildContext(entries)), "a round")
 
-    expect(at(levels, 0).destinationCell).toBe("0,5")
+    expect(round.destinationCell).toBe("0,5")
   })
 
   it("reports a route rather than 'no route found' for a compacted destination", () => {
-    const levels = buildPlayedRounds([
+    const entries = [
       levelStarted({maze: encodedMaze, startPosition: {x: 1, y: 1}, destinationCell: [0, 5]}),
-    ])
-    const model = must(mazeReplayModel(at(levels, 0)), "a model for the round")
+    ]
+    const round = must(buildPlayedRound(entries, buildContext(entries)), "a round")
+    const model = must(mazeReplayModel(round), "a model for the round")
 
     expect(must(model.stats, "maze stats").successPathCells).not.toBeNull()
   })
@@ -122,22 +125,28 @@ describe("defect 2: a model can answer with a moves key that is not a list", () 
   // function on a string - and the TypeError propagated out of buildReport, so one malformed
   // response took down the entire page render rather than failing one question.
   it("does not throw on a moves key holding a bare string", () => {
-    expect(() => parsePrediction('{"moves": "MoveUp"}')).not.toThrow()
+    expect(() => parseTurnPrediction('{"moves": "MoveUp"}')).not.toThrow()
   })
 
   it("treats it as no moves rather than one move", () => {
     // Wrapping it would score a malformed response as a valid single-move prediction, which is the
     // opposite of what the rubric is asking.
-    expect(must(parsePrediction('{"moves": "MoveUp"}'), "a parsed prediction").moves).toEqual([])
+    expect(must(parseTurnPrediction('{"moves": "MoveUp"}'), "a parsed prediction").moves).toEqual([])
   })
 
-  it("records that the key was present even so", () => {
-    // The difference between "no moves key" and "a moves key holding junk" is what C1 asks about.
-    expect(must(parsePrediction('{"moves": "MoveUp"}'), "a parsed prediction").keys).toEqual(["moves"])
+  it("is still a prediction, which a response with no moves key is not", () => {
+    // The difference between "no moves key" and "a moves key holding junk" survives as the record
+    // existing at all: the first parses to nothing and is counted as unreadable, the second is a
+    // prediction that submitted none.
+    const junk = must(parseTurnPrediction('{"moves": "MoveUp"}'), "a parsed prediction")
+
+    expect(junk.submittedCount).toBe(0)
+    expect(junk.invalidFormatKeys).toBe("")
+    expect(parseTurnPrediction('{"reasoning": "heading south"}')).toBeNull()
   })
 
   it("keeps a well-formed list exactly as sent", () => {
-    expect(must(parsePrediction('{"moves": ["MoveUp", "MoveLeft"]}'), "a parsed prediction").moves)
+    expect(must(parseTurnPrediction('{"moves": ["MoveUp", "MoveLeft"]}'), "a parsed prediction").moves)
       .toEqual(["MoveUp", "MoveLeft"])
   })
 })

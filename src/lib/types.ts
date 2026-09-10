@@ -249,16 +249,43 @@ export type ParsedRound = {maze: MazeResult | null; warnings: LogWarning[]; chec
 
 // --- Rubric engine ---
 
-/** One prediction and what became of it.
+/** What one turn predicted, and what became of it: the moves the model submitted, the cell it stood on,
+ * and how many of them landed.
  *
- * `moves` is `unknown[]` because it comes straight out of a model's JSON: the parser checks that a
- * `moves` key exists, not that it holds move commands, so every use has to narrow. `before` and
- * `applied` are filled by a second pass (`annotateApplied`), which is why they are nullable here
- * rather than required. */
-export type Submission = {
-  moves: unknown[];
+ * Narrowed once, at the parse boundary: `moves` holds the commands the maze can apply and
+ * `submittedCount` how many were sent. A prediction with fewer moves than it sent held something the
+ * maze has no move for, which is the finding C1.Q3 reports - and no reader validates a second time.
+ *
+ * The unreadable commands themselves are not carried. Nothing scores their spelling, and a model's raw
+ * JSON travelling through the report is a value nothing may trust and every reader must narrow.
+ *
+ * `before` and `applied` are filled by a second pass (`annotateApplied`), which is why they are
+ * nullable here rather than required. */
+export type TurnPrediction = {
+  /** The moves the maze can apply, in order, ending at the first command it cannot.
+   *
+   * Narrowed at the parse boundary so no reader validates a second time. A model's JSON can hold
+   * anything, and what it held is not carried past that boundary - only how much of it there was. */
+  moves: Move[];
+  /** How many commands the model sent, readable or not. `moves.length` short of this is a prediction
+   * holding something the maze has no move for - "Up" where the protocol says "MoveUp" - which is
+   * exactly what C1.Q3 scores. */
+  submittedCount: number;
   tier: 1 | 2 | 3;
-  keys: string[];
+  /** The top-level fields that made the prediction's format invalid - everything it carried beyond
+   * `moves` - named in one string, or `""` for the shape the protocol asks for.
+   *
+   * A string rather than a list, and deliberately not a shape anything can compute over. An invalid
+   * prediction has no schema - any number of fields, named anything - so there is nothing stable to
+   * model, and modelling it would dress an undesired state of the model's output as structure. C1.Q2
+   * asks only whether this is empty; a reader shown it only wants to read it. Trimmed past 25
+   * characters the way Tapoo compacts a logged text, since a model that returned twelve fields has
+   * answered the question with the first few.
+   *
+   * Keys, not the format as a whole: a fenced or prose-wrapped response is invalid too, and `tier`
+   * reports that; a command the maze cannot read is invalid too, and `moves` against `submittedCount`
+   * reports that. This field answers for the object's fields alone. */
+  invalidFormatKeys: string;
   turn: number;
   before?: CellKey | null;
   applied?: number | null;
@@ -267,7 +294,7 @@ export type Submission = {
 /** One thing that happened, in log order: the agent stood somewhere, or it submitted moves. */
 export type TimelineEvent =
   | {kind: "position"; cell: CellKey}
-  | {kind: "submission"; record: Submission};
+  | {kind: "prediction"; record: TurnPrediction};
 
 /** Everything one round's entries yielded, gathered in a single pass.
  *
@@ -310,7 +337,7 @@ export type Context = {
   visitStatusAfterTurn: VisitStatusByTurn;
   positions: CellKey[];
   timeline: TimelineEvent[];
-  submissions: Submission[];
+  predictions: TurnPrediction[];
   replays: Replay[];
   declaredTools: Set<string>;
   toolCalls: Array<string | undefined>;
@@ -384,7 +411,10 @@ export type TurnSummary = {
    * the decorated `"Katara the Trailblazer - 0.95x"` label. Resolved here and nowhere else. */
   playerName: string | null;
   before: CellKey | null;
-  moves: unknown[];
+  /** The moves the maze could apply, narrowed at the parse boundary. */
+  moves: Move[];
+  /** How many commands the turn submitted, readable or not - the denominator of "1 of 2 applied". */
+  submittedCount: number;
   applied: number | null;
   cells: CellKey[];
   rejectedMove: string | null;

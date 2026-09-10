@@ -3,11 +3,11 @@ import {describe, expect, it} from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
 import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
-import {agentsFromRound, buildPlayedRounds, gameIdentityKey, resolveActiveAgentNames} from "./rounds"
+import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgentNames} from "./rounds"
 import {buildContext} from "./rubric-engine"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
-import type {AgentSummary, PlayedRound, LogEntry, LogLevel, RawTurnSetup} from "./types"
+import type {AgentSummary, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup} from "./types"
 
 const entry = (
   payload: string,
@@ -36,6 +36,15 @@ const prediction = (moves: string[], turn: number, round: {game?: number; level?
 // charge, cells and setup belong to nobody - reported as a round with fewer agents than it had, with
 // nothing on the page saying so. Tested directly for that reason: the failure leaves no trace to assert on
 // further downstream.
+// Every round in this file is built the way the app builds one: a context over exactly these entries,
+// handed to buildPlayedRound. Grouped first where a case holds more than one round, because a context
+// describes one.
+const playedRound = (entries: LogEntry[]): PlayedRound =>
+  must(buildPlayedRound(entries, buildContext(entries, {label: "round"})), "a round")
+
+const playedRounds = (entries: LogEntry[]): PlayedRound[] =>
+  groupEntriesByRound(entries).map((group) => playedRound(group.entries))
+
 describe("resolveActiveAgentNames", () => {
   const request = (turn: number, details: Record<string, unknown>) =>
     entry(LOG_EVENTS.request, details, {turn})
@@ -118,14 +127,14 @@ describe("which round an entry belongs to", () => {
   ]
 
   it("keeps a round whole when only its boundaries name it", () => {
-    const levels = buildPlayedRounds(roundMarkersOnly)
+    const levels = playedRounds(roundMarkersOnly)
 
     expect(levels).toHaveLength(1)
     expect(gameIdentityKey(at(levels, 0).identity)).toBe("6/54")
   })
 
   it("gives that round both its maze and its turns, not one each", () => {
-    const level = at(buildPlayedRounds(roundMarkersOnly), 0)
+    const level = playedRound(roundMarkersOnly)
 
     // The pairing is the whole point: a round with a maze and no turns cannot be replayed, and a round
     // with turns and no maze has nothing to draw them on.
@@ -134,11 +143,11 @@ describe("which round an entry belongs to", () => {
   })
 
   it("invents no round that the log never recorded", () => {
-    expect(buildPlayedRounds(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
+    expect(playedRounds(roundMarkersOnly).map((level) => gameIdentityKey(level.identity))).not.toContain("?/?")
   })
 
   it("separates two rounds that each name themselves", () => {
-    const levels = buildPlayedRounds([
+    const levels = playedRounds([
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 0, game: 6, level: 54}),
       prediction(["MoveDown"], 0),
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 1, game: 6, level: 55}),
@@ -151,7 +160,7 @@ describe("which round an entry belongs to", () => {
 
   it("attaches a preamble to the round that opens after it", () => {
     // Entries before the first round marker cannot belong to an earlier round, because there is none.
-    const levels = buildPlayedRounds([
+    const levels = playedRounds([
       prediction(["MoveDown"], 0),
       entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 1, game: 6, level: 54}),
       prediction(["MoveUp"], 1),
@@ -162,7 +171,7 @@ describe("which round an entry belongs to", () => {
   })
 
   it("treats a log that names no round at all as one round", () => {
-    const levels = buildPlayedRounds([prediction(["MoveDown"], 0), prediction(["MoveUp"], 1)])
+    const levels = playedRounds([prediction(["MoveDown"], 0), prediction(["MoveUp"], 1)])
 
     expect(levels).toHaveLength(1)
     expect(at(levels, 0).turns).toHaveLength(2)
@@ -190,7 +199,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("takes the path from the record rather than inferring it", () => {
     // Two turns submit the identical batch and end differently. Keyed by moves, the second overwrites
     // the first; keyed by reporting turn, each keeps its own.
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown", "MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown", "MoveDown"],
         lastAppliedMoveIndex: 1, chargedMovesCount: 2}),
@@ -207,7 +216,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("attributes the record to the turn before the one that read it", () => {
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 3}),
@@ -217,7 +226,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("names the refused move from the record's applied index", () => {
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown", "MoveUp"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown", "MoveUp"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 2}),
@@ -229,7 +238,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("falls back to the derivation when the record describes a different prediction", () => {
     // A wrong path drawn confidently is worse than a derived one, so a record whose moves do not match
     // this turn's is not trusted at all.
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 9, col: 9}, lastSubmittedMoves: ["MoveLeft", "MoveLeft"],
         lastAppliedMoveIndex: 1, chargedMovesCount: 7}),
@@ -241,7 +250,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   })
 
   it("does not borrow a later matching record when the next turn did not report", () => {
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       prediction(["MoveDown"], 1, {game: 6, level: 54}),
       outcomeTool(2, {lastReplayStartCell: {row: 5, col: 5}, lastSubmittedMoves: ["MoveDown"],
@@ -258,7 +267,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
     // No turn follows the last one to report it, so the total settles it - and the subtraction covers
     // every reading, not only those that reached a turn, or a turn that made no prediction would hand
     // its cost to the closing turn.
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       // Turn 0 reads the placeholder before it predicts, the way every real turn does - which is what
       // makes the reading count match the round's own turnCount.
       outcomeTool(0, {lastMoveStatus: null, lastSubmittedMoves: [], chargedMovesCount: 0}),
@@ -279,7 +288,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
   it("leaves the closing charge unknown when a turn never reported", () => {
     // turnCount says three turns; only one reading exists, so the remainder would absorb the missing
     // turns' cost and attribute all of it to the last one.
-    const levels = buildPlayedRounds(round(
+    const levels = playedRounds(round(
       prediction(["MoveDown"], 0, {game: 6, level: 54}),
       outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown"],
         lastAppliedMoveIndex: 0, chargedMovesCount: 1}),
@@ -294,7 +303,7 @@ describe("reading a turn from the outcome Tapoo reported", () => {
 
 describe("a turn that produced no prediction", () => {
   // A malformed response, an exhausted token cap, or a failed request leaves no moves to replay, so
-  // nothing becomes a submission - so without this the turn is absent from the replay while Tapoo still
+  // nothing becomes a prediction - so without this the turn is absent from the replay while Tapoo still
   // counts it and still charges three units for it, its heaviest penalty. On one real log that is 464 turns
   // reported against Tapoo's own 473, and a decay strip that can never reach the round total because its
   // most expensive turns are the missing ones.
@@ -305,13 +314,13 @@ describe("a turn that produced no prediction", () => {
       tools: [],
     }, {turn, game: 6, level: 54})
 
-  const roundWithEmptyTurn = () => buildPlayedRounds([
+  const roundWithEmptyTurn = () => playedRounds([
     entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE, startPosition: {x: 1, y: 1}}, {turn: 0, game: 6, level: 54}),
     outcomeTool(0, {lastMoveStatus: null, lastSubmittedMoves: [], chargedMovesCount: 0}),
     prediction(["MoveDown"], 0, {game: 6, level: 54}),
     outcomeTool(1, {lastReplayStartCell: {row: 0, col: 0}, lastSubmittedMoves: ["MoveDown"],
       lastAppliedMoveIndex: 0, chargedMovesCount: 1, predictionStatus: "all-applied"}),
-    // Turn 1 answers with something unusable - no prediction is parsed, so no submission exists.
+    // Turn 1 answers with something unusable - no prediction is parsed, so nothing is recorded.
     outcomeTool(2, {lastMoveStatus: "malformed-response", predictionStatus: "empty-prediction",
       lastSubmittedMoves: [], lastAppliedMoveIndex: null, chargedMovesCount: 3}),
     prediction(["MoveDown"], 2, {game: 6, level: 54}),
@@ -324,7 +333,7 @@ describe("a turn that produced no prediction", () => {
   })
 
   it("carries the charge Tapoo levied for it", () => {
-    expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], applied: 0, decayCharged: 3})
+    expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], submittedCount: 0, applied: 0, decayCharged: 3})
   })
 
   it("leaves the agent where the turn before it ended", () => {
@@ -336,7 +345,7 @@ describe("a turn that produced no prediction", () => {
   })
 
   it("does not count as a prediction", () => {
-    // report.predictions counts submissions; turns counts turns. The two differ by exactly these.
+    // report.predictions counts predictions; turns counts turns. The two differ by exactly these.
     const turns = roundWithEmptyTurn()[0]!.turns
 
     expect(turns.filter((turn) => turn.moves.length > 0)).toHaveLength(2)
@@ -354,7 +363,7 @@ describe("a round's identity on a log that labels only its boundaries", () => {
       {epochMs: 3, log: "info", payload: LOG_EVENTS.request, details: {}, turn: 1},
     ] as unknown as LogEntry[]
 
-    const level = must(buildPlayedRounds(entries)[0], "a level")
+    const level = playedRound(entries)
 
     expect(level.identity).toEqual({game: 7, level: 3})
     expect(gameIdentityKey(level.identity)).toBe("7/3")
@@ -363,31 +372,31 @@ describe("a round's identity on a log that labels only its boundaries", () => {
   })
 })
 
-describe("buildPlayedRounds reusing the caller's context", () => {
-  // A PlayedRound carries Maps and a TurnReports whose members are closures, so toEqual on the record itself
-  // compares function identity and fails on two runs that agree completely. Projected to data instead.
-  const shape = (levels: PlayedRound[]) =>
-    levels.map((level) => ({
-      ...level,
-      observedExits: [...level.observedExits].map(([cell, moves]) => [cell, [...moves].sort()]),
-      visitStatusAfterTurn: level.visitStatusAfterTurn
-        .ascending()
-        .map(([turn, cells]) => [turn, [...cells]]),
-    }))
+describe("the context buildPlayedRound is handed", () => {
+  // A PlayedRound carries Maps and a TurnReports whose members are closures, so toEqual on the record
+  // itself compares function identity and fails on two runs that agree completely. Projected to data.
+  const shape = (round: PlayedRound) => ({
+    ...round,
+    observedExits: [...round.observedExits].map(([cell, moves]) => [cell, [...moves].sort()]),
+    visitStatusAfterTurn: round.visitStatusAfterTurn.ascending().map(([turn, cells]) => [turn, [...cells]]),
+  })
 
-  it("produces the same levels whether or not it is given one", () => {
+  const roundOf = (entries: LogEntry[]) =>
+    must(buildPlayedRound(entries, buildContext(entries, {label: "round"})), "a round")
+
+  // The caller's context, over exactly these entries. buildContext is the most expensive read the app
+  // makes, so the record must be derived from the one already built rather than from a second walk.
+  it("derives the round from the context it is given", () => {
     const entries = fixtureData.entries as LogEntry[]
     const context = buildContext(entries, {label: "fixture"})
 
-    expect(shape(buildPlayedRounds(entries, context))).toEqual(shape(buildPlayedRounds(entries)))
+    expect(shape(must(buildPlayedRound(entries, context), "a round"))).toEqual(shape(roundOf(entries)))
   })
 
-  // The reuse is refused when the entries hold more than one round: the caller's context spans all of
-  // them, and a level built from it would carry another maze's positions and exits.
-  it("ignores a context that spans more than one round", () => {
-    // Each round submits its own move, so a context spanning both would give round 1 round 2's turn -
-    // exactly the leak buildPlayedRounds exists to prevent. With one submission each, a spanning context
-    // hands every level two turns instead of one.
+  // A context describes one round, so entries holding two are a caller's mistake rather than something
+  // to paper over: positions and exits from one maze reaching another is the leak this file exists to
+  // prevent, and a round silently built from a spanning context would carry the other maze's turns.
+  it("refuses entries holding more than one round", () => {
     // Written out rather than through `entry` above, which pins level and game to 1.
     let clock = 0
     const at = (game: number, level: number, turn: number, payload: string, details?: unknown): LogEntry =>
@@ -397,12 +406,18 @@ describe("buildPlayedRounds reusing the caller's context", () => {
       at(game, level, 1, LOG_EVENTS.response, {payload: {message: {content: `{"moves":["${move}"]}`}}}),
     ]
     const twoRounds = [...round(1, 1, "MoveUp"), ...round(1, 2, "MoveDown")]
-    const spanning = buildContext(twoRounds, {label: "two"})
 
-    const perRound = shape(buildPlayedRounds(twoRounds))
-    expect(perRound).toHaveLength(2)
-    expect(perRound.map((level) => level.turns.length)).toEqual([1, 1])
-    expect(shape(buildPlayedRounds(twoRounds, spanning))).toEqual(perRound)
+    expect(() => buildPlayedRound(twoRounds, buildContext(twoRounds, {label: "two"})))
+      .toThrow(/handed 2 rounds/)
+
+    // Answered one at a time, each with its own context, every round holds only its own turn.
+    const perRound = groupEntriesByRound(twoRounds).map((group) => roundOf(group.entries))
+    expect(perRound.map((one) => one.turns.length)).toEqual([1, 1])
+  })
+
+  // Entries that hold no round at all - an empty log. Nothing to build, and nothing to invent.
+  it("builds no round from entries that hold none", () => {
+    expect(buildPlayedRound([], buildContext([], {label: "empty"}))).toBeNull()
   })
 })
 
@@ -416,7 +431,7 @@ describe("buildPlayedRounds", () => {
     // A retry regenerates the maze, so grouping by level alone would merge two different mazes and draw
     // a path crossing walls that exist in neither. Asked of buildPlayedRounds rather than of a report: a
     // report answers one round, so it has nowhere to put the second.
-    const levels = buildPlayedRounds([
+    const levels = playedRounds([
       ...round(1, 1, '{"moves":["MoveDown"]}'),
       ...round(2, 1, '{"moves":["MoveUp"]}'),
     ])
@@ -497,7 +512,7 @@ describe("agentsFromRound", () => {
   const seat = (
     name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
   ) => ({
-    turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+    turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
     cells, rejectedMove: null, decayCharged: decay,
   })
   const setup = (over: Partial<RawTurnSetup> = {}): RawTurnSetup =>
@@ -664,7 +679,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   ]
 
   const agentsOf = (shape: Shape): AgentSummary[] =>
-    must(buildPlayedRounds(round(shape))[0], "a round").agents
+    playedRound(round(shape)).agents
 
   it("reads the seat, the full model and the connection off every request", () => {
     expect(agentsOf("upstream")).toEqual([
@@ -698,7 +713,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
         : logEntry
     )
 
-    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    const seats = playedRound(entries).agents
     expect(seats.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
     // Bumi keeps their own turn, unlabelled by the seat and model that belong to Katara alone.
     expect(seats.map((agent) => [agent.seatId, agent.models])).toEqual([
@@ -733,15 +748,15 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       }}),
     ]
 
-    expect(must(buildPlayedRounds(stranger("upstream"))[0], "a round").turns.map((turn) => turn.playerName))
+    expect(playedRound(stranger("upstream")).turns.map((turn) => turn.playerName))
       .toEqual(["Aang"])
-    expect(must(buildPlayedRounds(stranger("upstream"))[0], "a round").agents.map((agent) => [agent.name, agent.apis]))
+    expect(playedRound(stranger("upstream")).agents.map((agent) => [agent.name, agent.apis]))
       .toEqual([["Aang", ["ollama"]]])
 
     // And with nothing stated, from the label alone.
-    expect(must(buildPlayedRounds(stranger("legacy"))[0], "a round").turns.map((turn) => turn.playerName))
+    expect(playedRound(stranger("legacy")).turns.map((turn) => turn.playerName))
       .toEqual(["Aang"])
-    expect(must(buildPlayedRounds(stranger("legacy"))[0], "a round").agents.map((agent) => agent.name))
+    expect(playedRound(stranger("legacy")).agents.map((agent) => agent.name))
       .toEqual(["Aang"])
   })
 
@@ -770,7 +785,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       }}),
     ]
 
-    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    const seats = playedRound(entries).agents
     expect(seats.map((agent) => [agent.seatId, agent.name, agent.models, agent.apis]))
       .toEqual([[7, "", ["gemma4:cloud"], ["ollama"]]])
     // Named by the one thing known about it, with no dangling separator where a name would go.
@@ -784,7 +799,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   // every seat shares that key instead.
   it("counts each seat's cells against the seat, not against its name or number", () => {
     const played = (turn: number, seatId: number, cells: string[]) => ({
-      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
       cells, rejectedMove: null, decayCharged: null,
     })
 
@@ -814,7 +829,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       seatId, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
     })
     const played = (turn: number, seatId: number, cells: string[]) => ({
-      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
       cells, rejectedMove: null, decayCharged: null,
     })
 
@@ -851,7 +866,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       }}),
     ]
 
-    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    const seats = playedRound(entries).agents
 
     // One seat, and it is the one that played: the outcome filled in the name it knew.
     expect(seats.map((agent) => [agent.seatId, agent.name, agent.traversalSpeed])).toEqual([[3, "", 1]])
@@ -874,7 +889,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       }}),
     ]
 
-    const seats = must(buildPlayedRounds(entries)[0], "a round").agents
+    const seats = playedRound(entries).agents
     expect(seats.map((agent) => [agent.seatId, agent.name, agent.models]))
       .toEqual([[1, "Katara", ["gemma4:cloud"]]])
   })
@@ -887,7 +902,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       seatId: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
     })
     const played = (turn: number, seatId: number | null, cells: string[]) => ({
-      turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"], applied: 1,
+      turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
       cells, rejectedMove: null, decayCharged: null,
     })
 
@@ -916,5 +931,75 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     expect(legacy.map((agent) => agent.seatId)).toEqual([1, null])
     // And the model is the echo, short of the suffix saying where it was served from.
     expect(legacy.map((agent) => agent.models)).toEqual([["gemma4:cloud"], ["moonshotai/Kimi-K3"]])
+  })
+})
+
+// The replay's move names are the move commands themselves, and the model's submitted list is the same
+// vocabulary, so the two compare directly. Read as anything else - a prefix stripped off one side, say -
+// and the comparison that decides whether Tapoo's own account of a turn is trusted stops matching.
+describe("the moves a replay reports", () => {
+  const outcomeOf = (moves: string[]) => toolMessage({
+    lastMoveStatus: "applied",
+    predictionStatus: "all-applied",
+    lastReplayStartIndex: 0,
+    lastReplayStartCell: {row: 20, col: 18},
+    lastSubmittedMoves: moves,
+    lastAppliedMoveIndex: moves.length - 1,
+    chargedMovesCount: 1,
+  })
+
+  const roundOf = (submitted: string[], reported: string[]) => playedRound([
+    logEntry({turn: 0, payload: LOG_EVENTS.request, details: {tools: [], messages: [
+      toolMessage({currentCell: {row: 20, col: 18}}),
+    ]}}),
+    logEntry({turn: 0, payload: LOG_EVENTS.response, details: {
+      payload: {message: {content: JSON.stringify({moves: submitted})}},
+    }}),
+    logEntry({turn: 1, payload: LOG_EVENTS.request, details: {tools: [], messages: [outcomeOf(reported)]}}),
+  ])
+
+  // Tapoo's own account of the turn: where the replay began, how far it got, what it charged.
+  it("trusts the record when the reported moves are the submitted ones", () => {
+    const moves = ["MoveLeft", "MoveLeft", "MoveDown", "MoveLeft"]
+    const [only] = roundOf(moves, moves).turns
+
+    expect(only).toMatchObject({before: "20,18", applied: 4, decayCharged: 1, rejectedMove: null})
+    expect(only?.cells).toEqual(["20,18", "20,17", "20,16", "21,16", "21,15"])
+  })
+
+  // A record describing another turn's prediction. Falling through to the derivation is the point: a
+  // wrong path drawn confidently is worse than one the log did not settle.
+  it("falls through to the derivation when the record describes other moves", () => {
+    const [only] = roundOf(["MoveLeft", "MoveLeft"], ["MoveUp", "MoveRight"]).turns
+
+    expect(only?.decayCharged).toBeNull()
+  })
+})
+
+// Both sides of the trust test are read the same way: the applicable prefix. A record listing a command
+// the maze has no move for describes a prediction whose prefix ends there too, so the two still meet -
+// and Tapoo's own account of where the replay began and how far it got is used rather than derived.
+describe("a replay reporting a command the maze cannot read", () => {
+  it("compares the prefix on both sides, and still trusts the record", () => {
+    const moves = ["MoveDown", "Teleport"]
+    const round = playedRound([
+      logEntry({turn: 0, payload: LOG_EVENTS.request, details: {tools: [], messages: [
+        toolMessage({currentCell: {row: 0, col: 0}}),
+      ]}}),
+      logEntry({turn: 0, payload: LOG_EVENTS.response, details: {
+        payload: {message: {content: JSON.stringify({moves})}},
+      }}),
+      logEntry({turn: 1, payload: LOG_EVENTS.request, details: {tools: [], messages: [toolMessage({
+        lastMoveStatus: "invalid-move",
+        lastSubmittedMoves: moves,
+        lastAppliedMoveIndex: 0,
+        lastReplayStartCell: {row: 0, col: 0},
+        chargedMovesCount: 2,
+      })]}}),
+    ])
+
+    const [only] = round.turns
+    expect(only).toMatchObject({before: "0,0", applied: 1, submittedCount: 2, decayCharged: 2})
+    expect(only?.moves).toEqual(["MoveDown"])
   })
 })

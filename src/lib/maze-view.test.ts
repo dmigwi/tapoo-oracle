@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest"
 import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
 import {agentsFromRound} from "./rounds"
-import type {CellKey, EncodedMaze, PlayedRound, Outcome, TurnSummary, VisitStatus} from "./types"
+import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, TurnSummary, VisitStatus} from "./types"
 import {at, query, queryAll} from "./test-support";
 
 const REAL_MAZE = {
@@ -21,14 +21,14 @@ const REAL_MAZE = {
 type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
   {
     turn: 2,
     seatId: null,
     playerName: "Katara",
     before: "2,0",
-    moves: ["MoveRight", "MoveUp"],
+    moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
     rejectedMove: "MoveUp", decayCharged: null,

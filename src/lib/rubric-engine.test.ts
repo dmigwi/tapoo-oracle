@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {LOG_EVENTS} from "./log-contract"
-import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parsePrediction} from "./rubric-engine"
+import {CAPABILITIES, VIOLATIONS, aggregate, buildContext, parseTurnPrediction} from "./rubric-engine"
 import type {LogEntry} from "./types"
 import {at, must, rubricEntry as entry, rubricTurn as turn, toolMessage} from "./test-support";
 
@@ -29,28 +29,28 @@ describe("aggregate", () => {
   })
 })
 
-describe("parsePrediction", () => {
+describe("parseTurnPrediction", () => {
   it("reads a bare JSON prediction at the highest tier", () => {
-    expect(parsePrediction('{"moves":["MoveUp"]}')).toMatchObject({moves: ["MoveUp"], tier: 1})
+    expect(parseTurnPrediction('{"moves":["MoveUp"]}')).toMatchObject({moves: ["MoveUp"], tier: 1})
   })
 
   // Tier is what C1.Q1 reads: a fenced or embedded prediction is still usable, but it is not the
   // bare JSON the prompt asked for, and the report has to be able to say so.
   it("recovers a fenced prediction and marks it as a lower tier", () => {
-    expect(parsePrediction('```json\n{"moves":["MoveUp"]}\n```')).toMatchObject({tier: 2})
+    expect(parseTurnPrediction('```json\n{"moves":["MoveUp"]}\n```')).toMatchObject({tier: 2})
   })
 
   it("recovers a prediction embedded in prose at the lowest tier", () => {
-    expect(parsePrediction('Sure! Here it is: {"moves":["MoveUp"]}')).toMatchObject({tier: 3})
+    expect(parseTurnPrediction('Sure! Here it is: {"moves":["MoveUp"]}')).toMatchObject({tier: 3})
   })
 
   it("returns null for JSON that carries no moves key", () => {
-    expect(parsePrediction('{"steps":["MoveUp"]}')).toBeNull()
+    expect(parseTurnPrediction('{"steps":["MoveUp"]}')).toBeNull()
   })
 
   it("returns null for empty or absent content", () => {
-    expect(parsePrediction("   ")).toBeNull()
-    expect(parsePrediction(undefined)).toBeNull()
+    expect(parseTurnPrediction("   ")).toBeNull()
+    expect(parseTurnPrediction(undefined)).toBeNull()
   })
 })
 
@@ -183,7 +183,7 @@ describe("how buildContext decides which turn an entry belongs to", () => {
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveDown"]}'}}}, {turn: 1}),
     ])
 
-    expect(context.submissions.map((s) => s.turn)).toEqual([0, 1])
+    expect(context.predictions.map((s) => s.turn)).toEqual([0, 1])
     expect([...context.turnsWithPrediction].sort()).toEqual([0, 1])
   })
 
@@ -196,7 +196,7 @@ describe("how buildContext decides which turn an entry belongs to", () => {
       entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp"]}'}}}, {turn: 4}),
     ])
 
-    expect(context.submissions.map((s) => s.turn)).toEqual([4])
+    expect(context.predictions.map((s) => s.turn)).toEqual([4])
   })
 
   it("infers boundaries from predictions when no entry carries a turn", () => {
@@ -212,7 +212,7 @@ describe("how buildContext decides which turn an entry belongs to", () => {
       return copy as LogEntry
     })
 
-    expect(buildContext(withoutTurns).submissions.map((s) => s.turn)).toEqual([0, 1, 2])
+    expect(buildContext(withoutTurns).predictions.map((s) => s.turn)).toEqual([0, 1, 2])
   })
 
   it("trusts the field on a log where only some entries carry a turn", () => {
@@ -226,25 +226,25 @@ describe("how buildContext decides which turn an entry belongs to", () => {
     delete stripped.turn
 
     const context = buildContext([at(partial, 0), stripped as LogEntry])
-    expect(context.submissions.map((s) => s.turn)).toEqual([7])
+    expect(context.predictions.map((s) => s.turn)).toEqual([7])
   })
 })
 
 describe("an OpenAI-shaped provider response", () => {
   // End to end through buildContext, not just the reader: the point is that a prediction logged this
-  // way becomes a submission, which is what the turn count, the replay and every per-turn question are
+  // way becomes a prediction, which is what the turn count, the replay and every per-turn question are
   // built from.
   const openAiResponse = (content: string, turn: number): LogEntry =>
     entry(LOG_EVENTS.response, {payload: {model: "glm-5.3", choices: [{finish_reason: "stop",
       message: {role: "assistant", content}}]}}, {turn})
 
-  it("becomes a submission, not an empty response", () => {
+  it("becomes a prediction, not an empty response", () => {
     const context = buildContext([
       entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
       openAiResponse('{"moves":["MoveUp"]}', 0),
     ])
 
-    expect(context.submissions.map((s) => s.moves)).toEqual([["MoveUp"]])
+    expect(context.predictions.map((s) => s.moves)).toEqual([["MoveUp"]])
     expect(context.emptyResponses).toBe(0)
   })
 
@@ -273,14 +273,14 @@ describe("an Anthropic-shaped provider response", () => {
     entry(LOG_EVENTS.response, {payload: {model: "claude", role: "assistant", content,
       usage: {input_tokens: 3100, output_tokens: 24}}}, {turn})
 
-  it("becomes a submission, not an empty response", () => {
+  it("becomes a prediction, not an empty response", () => {
     const context = buildContext([
       entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
       anthropic([{type: "thinking", thinking: "considering"},
         {type: "text", text: '{"moves":["MoveUp"]}'}], 0),
     ])
 
-    expect(context.submissions.map((s) => s.moves)).toEqual([["MoveUp"]])
+    expect(context.predictions.map((s) => s.moves)).toEqual([["MoveUp"]])
     expect(context.emptyResponses).toBe(0)
   })
 
@@ -319,7 +319,7 @@ describe("what buildContext does with a tool result it cannot read", () => {
     expect(context.exits.size).toBe(0)
     expect(context.positions).toEqual([])
     // The turn's prediction is still read: the unreadable result cost the tool reading, nothing else.
-    expect(context.submissions).toHaveLength(1)
+    expect(context.predictions).toHaveLength(1)
   })
 
   // Valid JSON, but not an object: "null" and "3" parse without throwing and have no keys to read.
@@ -482,7 +482,7 @@ describe("the shapes a log can state a fact in", () => {
 })
 
 // Two questions whose YES arm no test had ever reached: both are answered by walking the round's
-// submissions in order, and both need a *pair* of turns arranged just so - which no fixture had.
+// predictions in order, and both need a *pair* of turns arranged just so - which no fixture had.
 describe("C8.Q1, adaptive recovery", () => {
   const answer = (entries: LogEntry[]) =>
     must(CAPABILITIES.find((group) => group.id === "C8"), "the C8 group").evaluate(buildContext(entries)).Q1
@@ -526,7 +526,7 @@ describe("V6.Q1, failed-state repetition", () => {
   const answer = (entries: LogEntry[]) =>
     must(VIOLATIONS.find((group) => group.id === "V6"), "the V6 group").evaluate(buildContext(entries)).Q1
 
-  // The cell reading is what gives a submission its `before`, and a prediction with no cell behind it
+  // The cell reading is what gives a prediction its `before`, and a prediction with no cell behind it
   // is skipped by this question: the same moves from two different cells are two different predictions.
   const at00 = () => toolMessage({currentCell: {row: 0, col: 0}})
   const outcomeOf = (moves: string[], applied: number) => toolMessage({
@@ -560,7 +560,7 @@ describe("V6.Q1, failed-state repetition", () => {
 // and falls back to triangulating between the cell readings either side of the prediction.
 describe("resolving how many moves applied", () => {
   const submissionsOf = (entries: LogEntry[]) =>
-    buildContext(entries).submissions.map((record) => [record.before, record.applied])
+    buildContext(entries).predictions.map((record) => [record.before, record.applied])
 
   // A prediction naming something the maze has no move for. The walk stops there rather than stepping
   // an unknown name: `moves` is a model's own JSON, so it can hold any string at all.
@@ -637,5 +637,83 @@ describe("C7.Q1, a batch through confirmed corridor", () => {
       [corridor([0, 0], ["MoveDown", "MoveRight"]), corridor([1, 0], ["MoveUp", "MoveDown", "MoveRight"])],
       ["MoveDown", "MoveDown"],
     ))).toBe(false)
+  })
+})
+
+// "Up" is not "MoveUp". The protocol names the four commands in full, and a prediction using any other
+// spelling is a real finding rather than a parse detail - so what a prediction carries is pinned here:
+// how many commands were sent, and the prefix of them the maze can apply.
+describe("a prediction whose commands the maze has no move for", () => {
+  const predictionOf = (content: string) => must(parseTurnPrediction(content), "a prediction")
+
+  it("counts what the model sent and keeps only what can be applied", () => {
+    const shorthand = predictionOf('{"moves":["Up","Down"]}')
+
+    expect(shorthand.submittedCount).toBe(2)
+    expect(shorthand.moves).toEqual([])
+  })
+
+  // The prefix ends at the first unusable command rather than skipping past it: applying the ones
+  // after would walk a path the agent never took, since Tapoo stops there too.
+  it("ends the applicable prefix at the first command it cannot read", () => {
+    const mixed = predictionOf('{"moves":["MoveUp","Teleport","MoveDown"]}')
+
+    expect(mixed.submittedCount).toBe(3)
+    expect(mixed.moves).toEqual(["MoveUp"])
+  })
+
+  it("carries both in full when every command is a move", () => {
+    const clean = predictionOf('{"moves":["MoveUp","MoveDown"]}')
+
+    expect(clean.submittedCount).toBe(2)
+    expect(clean.moves).toEqual(["MoveUp", "MoveDown"])
+  })
+
+  // C1.Q3 reads that split rather than validating a second time: a prefix shorter than the submission
+  // is precisely a prediction holding a command the maze has no move for.
+  it("is what C1.Q3 answers no for", () => {
+    const answer = (content: string) =>
+      must(CAPABILITIES.find((group) => group.id === "C1"), "the C1 group").evaluate(buildContext([
+        entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+        entry(LOG_EVENTS.response, {payload: {message: {content}}}, {turn: 0}),
+      ])).Q3
+
+    expect(answer('{"moves":["MoveUp","MoveDown"]}')).toBe(true)
+    expect(answer('{"moves":["Up","Down"]}')).toBe(false)
+    expect(answer('{"moves":["MoveUp","Teleport"]}')).toBe(false)
+  })
+})
+
+// C1.Q2 asks whether every prediction object held exactly one top-level key named "moves". The finding
+// is what it held besides, so a clean prediction carries nothing and a chatty one names its excess.
+describe("a prediction carrying fields beyond its moves", () => {
+  const predictionOf = (content: string) => must(parseTurnPrediction(content), "a prediction")
+
+  it("names the fields that broke the shape, and nothing when none did", () => {
+    expect(predictionOf('{"moves":["MoveUp"]}').invalidFormatKeys).toBe("")
+    expect(predictionOf('{"moves":["MoveUp"],"reasoning":"heading south"}').invalidFormatKeys)
+      .toBe("reasoning")
+    expect(predictionOf('{"reasoning":"south","moves":["MoveUp"],"confidence":0.9}').invalidFormatKeys)
+      .toBe("reasoning, confidence")
+  })
+
+  // A model that answers with a dozen fields has broken the shape long before the list ends, so the
+  // names are trimmed the way Tapoo compacts a logged text: the opening 25 characters and an ellipsis.
+  it("trims a long list rather than carrying all of it", () => {
+    const many = predictionOf('{"moves":[],"reasoning":"x","confidence":1,"explanation":"y","plan":"z"}')
+
+    expect(many.invalidFormatKeys).toBe("reasoning, confidence, ex...")
+    expect(many.invalidFormatKeys).toHaveLength(28)
+  })
+
+  it("is what C1.Q2 answers no for", () => {
+    const answer = (content: string) =>
+      must(CAPABILITIES.find((group) => group.id === "C1"), "the C1 group").evaluate(buildContext([
+        entry(LOG_EVENTS.request, {tools: [], messages: []}, {turn: 0}),
+        entry(LOG_EVENTS.response, {payload: {message: {content}}}, {turn: 0}),
+      ])).Q2
+
+    expect(answer('{"moves":["MoveUp"]}')).toBe(true)
+    expect(answer('{"moves":["MoveUp"],"reasoning":"heading south"}')).toBe(false)
   })
 })

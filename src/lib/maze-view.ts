@@ -633,7 +633,9 @@ function buildBars(
 }
 
 function buildMovesBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {
-  const submitted = model.turns.map((turn) => turn.moves.length);
+  // What the turn asked for, readable or not: a bar reading "1 of 2" describes the attempt, and a
+  // command the maze could not read is still one the agent spent its turn on.
+  const submitted = model.turns.map((turn) => turn.submittedCount);
   const most = Math.max(1, ...submitted);
   const bars = buildBars(strip, submitted, (value) => Math.sqrt(value / most) * 100);
 
@@ -649,9 +651,9 @@ function buildMovesBars(strip: HTMLElement, model: ReplayModel): HTMLElement[] {
       continue;
     }
 
-    const share = turn.moves.length > 0 ? (turn.applied / turn.moves.length) * 100 : 0;
+    const share = turn.submittedCount > 0 ? (turn.applied / turn.submittedCount) * 100 : 0;
     bar.style.setProperty("--applied", `${share}%`);
-    bar.title = `Turn ${turn.turn}: ${turn.applied} of ${turn.moves.length} applied`;
+    bar.title = `Turn ${turn.turn}: ${turn.applied} of ${turn.submittedCount} applied`;
   }
 
   strip.hidden = bars.length === 0;
@@ -952,8 +954,8 @@ function turnNarrative(frame: Frame, model: ReplayModel): string {
   }
   parts.push(
     turn.applied === null
-      ? `${turn.moves.length} submitted, applied unrecorded`
-      : `${turn.applied} of ${turn.moves.length} applied`,
+      ? `${turn.submittedCount} submitted, applied unrecorded`
+      : `${turn.applied} of ${turn.submittedCount} applied`,
   );
   if (turn.rejectedMove) parts.push(`${turn.rejectedMove} refused`);
 

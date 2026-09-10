@@ -40,23 +40,32 @@ import type {
   LogEntry,
   Move,
   Outcome,
-  Submission,
+  TurnPrediction,
   RubricGroup,
   RawTurnSetup,
 } from "./types"
 
 // --- Reading a log entry ---
 
-/** parsePrediction recovers the moves array a model submitted, mirroring the three tiers
+// How much of an over-full prediction's field list is worth keeping. The same 25 characters Tapoo
+// compacts a logged text to, and for the same reason: the opening names answer the question, and a
+// model that returned a dozen fields has proved the point long before the list ends.
+const KEY_LIST_HEAD = 25
+const trimmedKeyList = (keys: string[]): string => {
+  const named = keys.join(", ")
+  return named.length > KEY_LIST_HEAD ? `${named.slice(0, KEY_LIST_HEAD)}...` : named
+}
+
+/** parseTurnPrediction recovers the moves array a model submitted, mirroring the three tiers
  * frontend/app/agent/protocol.ts accepts: bare JSON, a fenced block, or a trailing object after
  * prose. The tier matters on its own - it is what C1.Q1 scores - so it is returned, not discarded. */
-export function parsePrediction(content: unknown): Omit<Submission, "turn"> | null {
+export function parseTurnPrediction(content: unknown): Omit<TurnPrediction, "turn"> | null {
   if (typeof content !== "string" || !content.trim()) {
     return null
   }
 
   const text = content.trim()
-  const candidates: Array<[string, Submission["tier"]]> = [[text, 1]]
+  const candidates: Array<[string, TurnPrediction["tier"]]> = [[text, 1]]
 
   const fenced = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/)
   if (fenced?.[1]) {
@@ -84,7 +93,24 @@ export function parsePrediction(content: unknown): Omit<Submission, "turn"> | nu
         // not a method on a string: one malformed response then throws out of buildReport and takes the
         // whole page render with it.
         const moves: unknown = parsed.moves
-        return {moves: Array.isArray(moves) ? moves : [], tier, keys: Object.keys(parsed)}
+        const submitted: unknown[] = Array.isArray(moves) ? moves : []
+
+        // Narrowed once, here, so nothing downstream repeats it: the applicable prefix ends at the
+        // first command the maze has no move for, which is where Tapoo's own replay stops too.
+        const applicable: Move[] = []
+        for (const move of submitted) {
+          if (!isMove(move)) break
+          applicable.push(move)
+        }
+
+        return {
+          moves: applicable,
+          submittedCount: submitted.length,
+          tier,
+          // A prediction always holds `moves` - the branch above requires it - so what is left after
+          // dropping it is exactly the excess C1.Q2 reports.
+          invalidFormatKeys: trimmedKeyList(Object.keys(parsed).filter((key) => key !== "moves")),
+        }
       }
     } catch {
       // Candidate was not JSON; fall through to the next tier.
@@ -160,7 +186,7 @@ export function buildContext(
     visitStatusAfterTurn: turnReports<Map<CellKey, VisitStatus>>(),
     positions: [],
     timeline: [],
-    submissions: [],
+    predictions: [],
     replays: [],
     declaredTools: new Set(),
     toolCalls: [],
@@ -379,16 +405,16 @@ export function buildContext(
         continue
       }
 
-      const prediction = parsePrediction(content)
+      const prediction = parseTurnPrediction(content)
       if (!prediction) {
         context.unparseableResponses += 1
         continue
       }
 
       const record = { ...prediction, turn: currentTurn }
-      context.submissions.push(record)
+      context.predictions.push(record)
       context.turnsWithPrediction.add(currentTurn)
-      context.timeline.push({ kind: "submission", record })
+      context.timeline.push({ kind: "prediction", record })
       // Only the no-turn-field log advances a cursor; an indexed one already knows.
       if (!hasTurnField) {
         currentTurn += 1
@@ -437,7 +463,7 @@ export function buildContext(
   return context
 }
 
-// annotateApplied resolves how many of each submission's moves landed, combining every channel that
+// annotateApplied resolves how many of each prediction's moves landed, combining every channel that
 // can prove it. Neither alone is enough: replay results are absent for a model that never calls
 // get_last_prediction_outcome, and position triangulation is blind whenever a turn is not bracketed by two
 // readings.
@@ -445,10 +471,10 @@ function annotateApplied(context: Context): void {
   const byMoves = new Map<string, number>()
   for (const replay of context.replays) {
     // Two different producers push into replays, so the field is only trusted to be a list of strings
-    // once it has been checked here.
+    // once it has been checked here. Read verbatim: the names are move commands, keyed against the
+    // model's own submitted list, and the two must not be transformed differently on the way in.
     const submitted = asArray(replay.lastSubmittedMoves)
       .filter((move): move is string => typeof move === "string")
-      .map((move) => move.split(":").at(-1))
     if (submitted.length > 0) {
       const index = replay.lastAppliedMoveIndex
       byMoves.set(JSON.stringify(submitted), typeof index === "number" ? index + 1 : 0)
@@ -456,7 +482,7 @@ function annotateApplied(context: Context): void {
   }
 
   context.timeline.forEach((event, position) => {
-    if (event.kind !== "submission") {
+    if (event.kind !== "prediction") {
       return
     }
 
@@ -471,12 +497,9 @@ function annotateApplied(context: Context): void {
       // observed cell is what applied.
       applied = before === after ? 0 : null
       let cell: CellKey = before
+      // Over the applicable prefix: parseTurnPrediction already ended it at the first command the maze has
+      // no move for, which is where a walk has to stop anyway.
       for (const [step, move] of record.moves.entries()) {
-        // A move the maze cannot apply ends the walk. The submitted array is a model's JSON, so it can
-        // name anything at all.
-        if (!isMove(move)) {
-          break
-        }
         cell = stepFrom(cell, move)
         if (cell === after) {
           applied = step + 1
@@ -508,13 +531,13 @@ const exitsOf = (context: Context, cell: CellKey | null | undefined): Set<Move> 
 const isCorridor = (context: Context, cell: CellKey | null | undefined): boolean =>
   exitsOf(context, cell)?.size === 2
 
-const fullyApplied = (record: Submission): boolean => record.applied === record.moves.length
+const fullyApplied = (record: TurnPrediction): boolean => record.applied === record.submittedCount
 
 // inConfirmedCorridorRun reports whether at least two forced steps ahead are already known safe:
 // both the current cell and the one the move leads into are confirmed two-exit corridors. That is
 // the shape where batching costs nothing extra and single-stepping wastes a free decay unit.
-function inConfirmedCorridorRun(context: Context, cell: CellKey, move: unknown): boolean {
-  if (!isMove(move) || !isCorridor(context, cell) || !exitsOf(context, cell)?.has(move)) {
+function inConfirmedCorridorRun(context: Context, cell: CellKey, move: Move | undefined): boolean {
+  if (move === undefined || !isCorridor(context, cell) || !exitsOf(context, cell)?.has(move)) {
     return false
   }
 
@@ -526,25 +549,31 @@ function inConfirmedCorridorRun(context: Context, cell: CellKey, move: unknown):
 
 // C1. INSTRUCTION ADHERENCE   scope: responses a moves array was extracted from
 function instructionAdherence(context: Context): Record<string, boolean> {
-  const submissions = context.submissions
-  if (submissions.length === 0) {
+  const predictions = context.predictions
+  if (predictions.length === 0) {
     return { Q1: false, Q2: false, Q3: false }
   }
 
   return {
     // Q1. Are all prediction responses bare JSON, no fences or prose?
-    Q1: submissions.every((entry) => entry.tier === 1),
+    Q1: predictions.every((entry) => entry.tier === 1),
     // Q2. Do all carry no fields beyond "moves"?
-    Q2: submissions.every((entry) => entry.keys.length === 1 && entry.keys[0] === "moves"),
+    //
+    // Settled at the parse boundary, like Q3: a prediction naming any other top-level field carries it
+    // here, and an empty list is the shape the protocol asks for.
+    Q2: predictions.every((entry) => entry.invalidFormatKeys === ""),
     // Q3. Are all move commands one of MoveUp / MoveDown / MoveLeft / MoveRight?
-    Q3: submissions.every((entry) => entry.moves.every((move) => isMove(move))),
+    //
+    // Settled at the parse boundary: a prediction whose applicable prefix is shorter than what it sent
+    // holds a command the maze has no move for - "Up" where the protocol says "MoveUp".
+    Q3: predictions.every((entry) => entry.moves.length === entry.submittedCount),
   }
 }
 
 // C2. VALID ACTION DELIVERY
 // Q1. Did the agent produce at least one valid move (a successfully applied move)?
 function validActionDelivery(context: Context): Record<string, boolean> {
-  return { Q1: context.submissions.some((entry) => (entry.applied ?? 0) > 0) }
+  return { Q1: context.predictions.some((entry) => (entry.applied ?? 0) > 0) }
 }
 
 const contextAcquisitionQuestions = Object.fromEntries(
@@ -575,7 +604,7 @@ function contextAcquisition(context: Context): Record<string, boolean> {
 // C4. STATE AWARENESS
 // Q1. Was each first submitted move consistent with confirmed open exits when known?
 function stateAwareness(context: Context): Record<string, boolean> {
-  const checkable = context.submissions.filter((entry) => entry.before && exitsOf(context, entry.before))
+  const checkable = context.predictions.filter((entry) => entry.before && exitsOf(context, entry.before))
   if (checkable.length === 0) {
     return { Q1: false }
   }
@@ -583,10 +612,10 @@ function stateAwareness(context: Context): Record<string, boolean> {
   return {
     Q1: checkable.every((entry) => {
       const known = exitsOf(context, entry.before)
+      // The first *applicable* move: a command the maze cannot apply is absent from the prefix, and it
+      // could never be a member of an exits set that holds Moves either way.
       const first = entry.moves[0]
-      // isMove rather than a string check: the exits set holds Moves, so a name the maze cannot apply
-      // could never be a member of it.
-      return known !== null && isMove(first) && known.has(first)
+      return known !== null && first !== undefined && known.has(first)
     }),
   }
 }
@@ -625,7 +654,7 @@ function resourceEfficiency(context: Context): Record<string, boolean> {
 
 // C6. MULTI-STEP EXECUTION
 function multiStepExecution(context: Context): Record<string, boolean> {
-  const batches = context.submissions.filter((entry) => entry.moves.length >= 2)
+  const batches = context.predictions.filter((entry) => entry.submittedCount >= 2)
   return {
     // Q1. Did the agent make any batched (2+ move) prediction?
     Q1: batches.length > 0,
@@ -636,7 +665,7 @@ function multiStepExecution(context: Context): Record<string, boolean> {
 
 // C7. STRUCTURAL REASONING
 function structuralReasoning(context: Context): Record<string, boolean> {
-  const batches = context.submissions.filter((entry) => entry.moves.length >= 2)
+  const batches = context.predictions.filter((entry) => entry.submittedCount >= 2)
   const trailblazerWin = context.outcomes.some(
     (outcome) => outcome.outcome === "won" && Number(outcome.traversalSpeed) > 1.0000,
   )
@@ -661,14 +690,14 @@ function structuralReasoning(context: Context): Record<string, boolean> {
 // every tool call, so repeating one back is transcription. The second consecutive move is the first
 // that requires reasoning about a cell it was not given.
 function adaptiveRecovery(context: Context): Record<string, boolean> {
-  const submissions = context.submissions
-  for (const [index, failed] of submissions.entries()) {
-    const next = submissions[index + 1]
+  const predictions = context.predictions
+  for (const [index, failed] of predictions.entries()) {
+    const next = predictions[index + 1]
     if (!next || typeof failed.applied !== "number" || typeof next.applied !== "number") {
       continue
     }
 
-    if (failed.applied < failed.moves.length && next.applied >= 2) {
+    if (failed.applied < failed.submittedCount && next.applied >= 2) {
       return { Q1: true }
     }
   }
@@ -713,9 +742,15 @@ function warningDisregard(context: Context): Record<string, boolean> {
 function availableContextDisregard(context: Context): Record<string, boolean> {
   // Q1. Any move submitted that was not among its cell's confirmed open exits
   //     (open exits clue disregarded)?
-  return { Q1: context.submissions.some((entry) => {
+  return { Q1: context.predictions.some((entry) => {
     if (!entry.before) {
       return false
+    }
+
+    // A command the maze has no move for is not among any cell's stated exits, so a prediction that
+    // sent one disregarded the context by definition - and the prefix no longer holds it to be checked.
+    if (entry.moves.length < entry.submittedCount) {
+      return true
     }
 
     let cell = entry.before
@@ -725,13 +760,7 @@ function availableContextDisregard(context: Context): Record<string, boolean> {
         return false
       }
       // A move that is not among the cell's stated exits disregards the context - that is the question.
-      // isMove is part of the same test rather than a separate branch after it: the exits set holds
-      // Moves, so a name the maze cannot apply is not in it and is not something the cell offered.
-      //
-      // Which leaves no third case to handle: a cell cannot be recorded as offering a name the maze
-      // cannot apply, because openMovesFromLogged drops it at the parse. Were one to reach here, the
-      // agent would have used what it was told and nothing would have been disregarded.
-      if (!isMove(move) || !known.has(move)) {
+      if (!known.has(move)) {
         return true
       }
       cell = stepFrom(cell, move)
@@ -785,9 +814,9 @@ function resourceWaste(context: Context): Record<string, boolean> {
 
   // Q3. Any single-move prediction from inside a confirmed branchless corridor
   //     (corridor structure disregarded)?
-  const declinedFreeBatch = context.submissions.some(
+  const declinedFreeBatch = context.predictions.some(
     (entry) =>
-      entry.moves.length === 1 &&
+      entry.submittedCount === 1 &&
       entry.before &&
       inConfirmedCorridorRun(context, entry.before, entry.moves[0]),
   )
@@ -800,12 +829,12 @@ function resourceWaste(context: Context): Record<string, boolean> {
 //     the same cell?
 function failedStateRepetition(context: Context): Record<string, boolean> {
   const failed = new Set()
-  for (const entry of context.submissions) {
+  for (const entry of context.predictions) {
     if (!entry.before || entry.applied === null) {
       continue
     }
 
-    const key = JSON.stringify([entry.before, entry.moves])
+    const key = JSON.stringify([entry.before, entry.moves, entry.submittedCount])
     if (failed.has(key)) {
       return { Q1: true }
     }

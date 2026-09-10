@@ -4,7 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 
 import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSettingsCheck, seatRosterCheck, classifyTraversalSpeed, parseRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
-import type {AgentSummary, LogEntry, ValidationCheck} from "./types"
+import type {AgentSummary, LogEntry, Move, ValidationCheck} from "./types"
 import {groupEntriesByRound, roundLabel} from "./rounds"
 import {roundReportFor} from "./rubric-report"
 import {fnv1a64Checksum} from "./utils"
@@ -650,7 +650,7 @@ describe("a log whose seat changed model mid-round", () => {
 // fail differently - which is why the check reads the turns rather than the records they produce.
 describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
-    turn, seatId, playerName, before: "0,0", moves: ["MoveDown"], applied: 1,
+    turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
     cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null,
   })
 
