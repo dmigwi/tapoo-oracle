@@ -6,10 +6,12 @@ import * as Inputs from "@observablehq/inputs"
 import {html} from "htl"
 import {describe, expect, it} from "vitest"
 
-import {analyzeLogText, createInitialReportTabs} from "./report-tabs"
-import {activeReportTab, renderReportSections, stampBuildAge} from "./report-view"
-import type {LogEntry, Region, ReportTab, ReportTabsState} from "./types"
-import {query, queryAll, rendered} from "./test-support";
+import {createInitialLogTabs} from "./log-tabs-view"
+import {roundReportFor} from "./rubric-report"
+import {roundLabel} from "./rounds"
+import {activeLogTab, activeRound, renderReportSections, stampBuildAge} from "./report-view"
+import type {LogEntry, RegionView, LogTab, LogTabsState} from "./types"
+import {sliceLogText, query, queryAll, rendered, twoSeatDriftLog} from "./test-support";
 
 // Driven against the real Inputs and the real htl, not stubs: this module's whole job is composing
 // those two, and a stub would be testing the stub's shape rather than the one that ships.
@@ -95,39 +97,65 @@ const twoRoundExport = JSON.stringify({
   ]
 })
 
-const twoRoundTab = (): ReportTab => {
-  const result = analyzeLogText(twoRoundExport, {label: "two-rounds.json"})
+// The same round with a fully stated setup on its request - the shape every log takes once Tapoo
+// attaches them - and credentials on the endpoint, which no real log should carry but the renderer must
+// never print. The base export states none of these, so it cannot prove any of the formatting.
+const fullSetupExport = JSON.stringify({
+  ...JSON.parse(logExport) as Record<string, unknown>,
+  entries: (JSON.parse(logExport) as {entries: LogEntry[]}).entries.map((logEntry) =>
+    logEntry.payload === "Agent request."
+      ? {...logEntry, details: {
+          ...logEntry.details as Record<string, unknown>,
+          seatId: 1,
+          model: "moonshotai/Kimi-K3:baseten",
+          api: "ollama",
+          endpoint: "http://user:pass@localhost:11434/api/chat",
+          reasoning: "max",
+        }}
+      : logEntry
+  )
+})
+
+const fullSetupTab = (): LogTab => {
+  const result = sliceLogText(fullSetupExport, {label: "full-setup.json"})
+  expect(result.ok).toBe(true)
+  return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
+    label: "full-setup.json", status: "loaded", result}
+}
+
+const twoRoundTab = (): LogTab => {
+  const result = sliceLogText(twoRoundExport, {label: "two-rounds.json"})
   expect(result.ok).toBe(true)
   return {id: "t2", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "two-rounds.json", status: "loaded", result}
 }
 
-const loadedTab = (): ReportTab => {
-  const result = analyzeLogText(logExport, {label: "gemma4.json"})
+const loadedTab = (): LogTab => {
+  const result = sliceLogText(logExport, {label: "gemma4.json"})
   expect(result.ok).toBe(true)
   return {id: "t1", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
     label: "gemma4.json", status: "loaded", result}
 }
 
-const stateWith = (...tabs: ReportTab[]): ReportTabsState =>
-  ({...createInitialReportTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
-const text = (node: Region) => (node === "" ? "" : node.textContent ?? "")
+const stateWith = (...tabs: LogTab[]): LogTabsState =>
+  ({...createInitialLogTabs(), tabs, activeTabId: tabs[0]?.id ?? null})
+const text = (node: RegionView) => (node === "" ? "" : node.textContent ?? "")
 
-describe("activeReportTab", () => {
+describe("activeLogTab", () => {
   it("finds the tab the state marks active", () => {
-    const first = {id: "a"} as ReportTab
-    const second = {id: "b"} as ReportTab
-    expect(activeReportTab({tabs: [first, second], activeTabId: "b"} as ReportTabsState)).toBe(second)
+    const first = {id: "a"} as LogTab
+    const second = {id: "b"} as LogTab
+    expect(activeLogTab({tabs: [first, second], activeTabId: "b"} as LogTabsState)).toBe(second)
   })
 
   it("falls back to the first tab when the active id names none", () => {
-    const first = {id: "a"} as ReportTab
-    expect(activeReportTab({tabs: [first], activeTabId: "gone"} as ReportTabsState)).toBe(first)
+    const first = {id: "a"} as LogTab
+    expect(activeLogTab({tabs: [first], activeTabId: "gone"} as LogTabsState)).toBe(first)
   })
 
   it("survives a state that is not a tabs state at all", () => {
-    expect(activeReportTab(undefined as unknown as ReportTabsState)).toBeUndefined()
-    expect(activeReportTab({} as ReportTabsState)).toBeUndefined()
+    expect(activeLogTab(undefined as unknown as LogTabsState)).toBeUndefined()
+    expect(activeLogTab({} as LogTabsState)).toBeUndefined()
   })
 })
 
@@ -138,7 +166,7 @@ describe("renderReportSections", () => {
   })
 
   it("shows the how-to and nothing else before a report is loaded", () => {
-    const sections = renderReportSections(ui, createInitialReportTabs())
+    const sections = renderReportSections(ui, createInitialLogTabs())
 
     expect(text(sections.emptyState)).toMatch(/gist/i)
     // A page with no report must not render an empty profile shell around nothing.
@@ -171,9 +199,9 @@ describe("profile", () => {
   })
 
   it("keeps the metric strip inside the profile it summarises, under the prose", () => {
-    // The strip used to be a section of its own between the maze and the profile, which read as three
-    // unrelated blocks. It belongs to the Behavior Profile: same section, after the sentence, so the
-    // cards are the figures for the paragraph above them rather than a floating row of numbers.
+    // The strip belongs to the Behavior Profile: same section, after the sentence, so the cards are the
+    // figures for the paragraph above them. A section of its own between the maze and the profile reads as
+    // three unrelated blocks and the cards as a floating row of numbers.
     const summary = query(profile(), ".oracle-summary")
     expect(summary.querySelector(".analysis-strip")).not.toBeNull()
 
@@ -257,8 +285,8 @@ describe("profile", () => {
     ])
   })
 
-  // One page, one explanation of what a NO means: the methodology section. The summary and the hero
-  // lede used to carry copies of it, and three statements of one rule read as three hedges.
+  // One page, one explanation of what a NO means: the methodology section. Copies in the summary and the
+  // hero lede make three statements of one rule, which read as three hedges.
   it("leaves what a negative answer means to the methodology section", () => {
     const sections = renderReportSections(ui, stateWith(loadedTab()))
     expect(text(sections.profile)).not.toMatch(/not that the model is incapable/)
@@ -266,10 +294,210 @@ describe("profile", () => {
   })
 })
 
+// Both branches of the round lookup, which nothing exercised directly: the render only ever reaches it
+// with null on the first pass and an identity the tabs just drew on the second.
+describe("activeRound", () => {
+  const labelOf = (round: ReturnType<typeof activeRound>) =>
+    round === undefined ? undefined : roundLabel(round.identity)
+
+  it("takes the first round when nothing is selected", () => {
+    expect(labelOf(activeRound(twoRoundTab(), null))).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  it("takes the round an identity names", () => {
+    expect(labelOf(activeRound(twoRoundTab(), {game: 3, level: 2}))).toBe("Game 3 \u00b7 Level 2")
+  })
+
+  // An identity can only come from a round tab this module drew, so one that matches nothing means the
+  // tabs and the analysis have gone out of step - a bug here, not anything a reader did. Falling back to
+  // the first round looks entirely correct and says nothing about having been asked for another.
+  it("throws on an identity naming no round, rather than quietly showing the first", () => {
+    expect(() => activeRound(twoRoundTab(), {game: 99, level: 99})).toThrow(/no round 99\/99/)
+  })
+
+  it("has no round for a tab that carries no report", () => {
+    expect(activeRound(undefined, null)).toBeUndefined()
+    expect(activeRound({id: "x", url: "u", label: "l", status: "empty"}, null)).toBeUndefined()
+  })
+})
+
+// The other half of the split: opening a log does not answer every round in it.
+describe("when a round is answered", () => {
+  const rounds = (tab: LogTab) => {
+    const result = tab.result
+    if (!result?.ok) throw new Error("fixture did not analyze")
+    return result.rounds
+  }
+
+  // A slice is entries and an identity. Nothing in it is a verdict, so building one costs no rubric
+  // pass - which is what lets a fourteen-round file open at the price of one.
+  it("carries unanswered slices out of the parse", () => {
+    const slices = rounds(twoRoundTab())
+
+    expect(slices.map((slice) => roundLabel(slice.identity))).toEqual(["Game 2 \u00b7 Level 1", "Game 3 \u00b7 Level 2"])
+    for (const slice of slices) {
+      expect(slice).not.toHaveProperty("report")
+      expect(slice.entries.length).toBeGreaterThan(0)
+    }
+  })
+
+  // Memoized on the slice, so returning to a round is free and the view holds a stable object across
+  // renders rather than a fresh report on every scrub.
+  it("answers a round once, however often it is asked for", () => {
+    const [first, second] = rounds(twoRoundTab())
+    if (!first || !second) throw new Error("expected two rounds")
+
+    expect(roundReportFor(first)).toBe(roundReportFor(first))
+    expect(roundReportFor(second)).not.toBe(roundReportFor(first))
+  })
+
+  // And the answer is the round's own: verdicts built from that round's entries, caveats from that
+  // round's payloads.
+  it("answers each round from its own entries", () => {
+    const [first, second] = rounds(twoRoundTab())
+    if (!first || !second) throw new Error("expected two rounds")
+
+    expect(roundReportFor(first).report.playedRound?.identity).toEqual({game: 2, level: 1})
+    expect(roundReportFor(first).report.label).toMatch(/Game 2 \u00b7 Level 1$/)
+    expect(roundReportFor(second).report.label).toMatch(/Game 3 \u00b7 Level 2$/)
+  })
+})
+
+// The whole point of the parser split: a caveat about one round is shown with that round and nowhere
+// else, while a caveat about the file is shown whatever is open.
+describe("where a warning is attributed", () => {
+  // Round 2 carries a get_maze_structure result whose content does not match the checksum stamped on it.
+  // Round 1 carries nothing of the kind, so it has no caveat of its own.
+  //
+  // A damaged *maze* would not do: that is reported by the replay, in the space the traversal should
+  // have occupied, and deliberately not repeated here. A payload that fails its checksum has no such
+  // home - the maze still draws, and draws visit colours the log cannot vouch for.
+  const damagedSecondRound = (): LogTab => {
+    const parsed = JSON.parse(twoRoundExport) as {entries: Array<Record<string, unknown>>}
+    const started = parsed.entries.filter((e) => e.payload === "Agent level started.")
+    const second = started[1]
+    if (!second) throw new Error("fixture has no second round")
+    // The reconstruction only runs when the round stated how far the agent could see.
+    second.details = {...(second.details as object), historyWindowRadius: 2}
+
+    parsed.entries.push({
+      ...entry("Agent request.", {
+        messages: [{
+          role: "tool",
+          content: JSON.stringify({
+            currentCell: {row: 1, col: 1},
+            filteredTraversalHistory: [{playerName: "Katara", cell: {row: 1, col: 1}, openMoves: {}}],
+          }),
+          content_checksum: "0xdeadbeefdeadbeef",
+        }],
+      }, 6),
+      game: 3,
+      level: 2,
+    })
+
+    const result = sliceLogText(JSON.stringify(parsed), {label: "two-rounds.json"})
+    expect(result.ok).toBe(true)
+    return {id: "t3", url: "https://example.com/g.json", loadedUrl: "https://example.com/g.json",
+      label: "two-rounds.json", status: "loaded", result}
+  }
+
+  const mount = (tab: LogTab) => {
+    const sections = renderReportSections(ui, stateWith(tab))
+    const host = document.createElement("div")
+    for (const region of [sections.notices, sections.profile, sections.detail]) {
+      if (region !== "") host.append(region)
+    }
+    document.body.append(host)
+    return host
+  }
+
+  it("says nothing about the damaged round while the sound one is open", () => {
+    const host = mount(damagedSecondRound())
+
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 2 \u00b7 Level 1")
+    expect(host.textContent).not.toMatch(/does not match its checksum/)
+  })
+
+  it("says it once that round is opened, and names the round", () => {
+    const host = mount(damagedSecondRound())
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 3 \u00b7 Level 2")
+    expect(host.textContent).toMatch(/does not match its checksum/)
+    expect(query(host, ".notice-round-label").textContent).toBe("Game 3 \u00b7 Level 2")
+
+    // Under the tabs that select it, not up with the log's own caveats. Above them a reader met the
+    // round's name before knowing there were rounds to choose between.
+    const tabs = query(host, ".round-tabs")
+    const notice = query(host, ".notice-round")
+    expect(tabs.parentElement).toBe(notice.parentElement)
+    expect(tabs.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // And back again: the notice has to move with the round, or it keeps naming the one the page opened
+  // on - the same attribution bug in a smaller place.
+  it("takes the round's caveat away again when the reader leaves it", () => {
+    const host = mount(damagedSecondRound())
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+    queryAll<HTMLButtonElement>(host, ".round-tab")[0]?.click()
+
+    expect(host.textContent).not.toMatch(/does not match its checksum/)
+  })
+})
+
+// The validation summary reaches the page, at both scopes and labelled by scope.
+describe("payload validation", () => {
+  const detail = (tab: LogTab) => rendered(renderReportSections(ui, stateWith(tab)).detail)
+
+  // One table, no grouping. A reader has already chosen which round they are reading, from the tabs
+  // above; a second grouping under that choice reads as a second choice to make. The two checks that
+  // cover the whole file are marked instead, and a footnote says what the mark means.
+  it("lists every check in one table, marking the ones that cover the file", () => {
+    const node = detail(loadedTab())
+    const section = [...node.querySelectorAll("section")].find(
+      (candidate) => candidate.querySelector("h2")?.textContent === "Payload validation",
+    )
+    if (!section) throw new Error("no payload validation section")
+    const names = [...section.querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent?.trim()).filter(Boolean)[0],
+    )
+
+    expect(section.querySelectorAll(".validation-scope")).toHaveLength(0)
+    expect(names).toEqual([
+      "Log entry fields*",
+      "Model responses*",
+      "Encoded maze",
+      "Traversal payloads",
+      "Prompts and tool descriptions",
+      "Trimmed checksummed repeats",
+      "Tool descriptions",
+      "Agent personas",
+      "User warnings",
+      "Seat roster",
+      "Agent settings",
+    ])
+    expect(section.textContent).toMatch(/Checked once over the whole log file, so it holds for every round/)
+  })
+
+  // Field and value down the page, like Model Output directly above it. One row of eight columns trims its
+  // own values on a narrow viewport.
+  it("renders provenance as field and value rows", () => {
+    const node = detail(loadedTab())
+    const headers = queryAll<HTMLElement>(node, "thead th").map((th) => th.textContent?.trim())
+
+    expect(headers).toContain("MEASURE")
+    expect(headers).toContain("VALUE")
+    expect(headers).toContain("CHECK")
+    expect(headers).toContain("RESULT")
+    // Eight provenance fields, each on its own row rather than each in its own column.
+    expect(headers).not.toContain("Tapoo version")
+  })
+})
+
 describe("round tabs", () => {
   // Regions are attached to a document: selecting a round replaces them in place, and replaceWith
   // needs a parent. A detached render would pass every assertion below and do nothing on the page.
-  const mount = (tab: ReportTab) => {
+  const mount = (tab: LogTab) => {
     const sections = renderReportSections(ui, stateWith(tab))
     const host = document.createElement("div")
     for (const region of [sections.profile, sections.detail]) {
@@ -291,6 +519,61 @@ describe("round tabs", () => {
     const node = mount(loadedTab())
     expect(labels(node)).toEqual([])
     expect(query(node, ".round-identity").textContent).toBe("Game 2 \u00b7 Level 1")
+  })
+
+  // A click on the tab already selected is ignored, because re-rendering the round on screen rebuilds
+  // the maze replay: the scrubber goes back to the end and the magnifier switches off. A reader who
+  // clicks where they already are should keep their place.
+  it("ignores a click on the round already showing", () => {
+    const host = mount(twoRoundTab())
+    const before = query(host, ".maze-replay")
+    const scrubber = query<HTMLInputElement>(host, 'input[type="range"]')
+    scrubber.value = "1"
+    scrubber.dispatchEvent(new window.Event("input", {bubbles: true}))
+
+    queryAll<HTMLButtonElement>(host, ".round-tab")[0]?.click()
+
+    expect(query(host, ".maze-replay")).toBe(before)
+    expect(query<HTMLInputElement>(host, 'input[type="range"]').value).toBe("1")
+  })
+
+  // The guard is only safe while the key it compares against is the round actually on screen, and that
+  // key comes from one callback the render fires. Nothing about `key === activeKey` says so, and the
+  // ways it can rot are silent in both directions: a callback that never fires leaves the key null, so
+  // the guard never matches and every click rebuilds; a key set from the click instead of the render
+  // leaves it naming a round that is not drawn, so the guard matches the wrong one and swallows a real
+  // switch.
+  //
+  // So this asserts the invariant rather than either symptom - for every round: clicking it draws it,
+  // and clicking it again does nothing. A guard that has stopped tracking fails one half or the other.
+  it("draws the round clicked, and redraws nothing when it is clicked again", () => {
+    const host = mount(twoRoundTab())
+    const labels = queryAll<HTMLElement>(host, ".round-tab").map((button) => button.textContent)
+    expect(labels).toHaveLength(2)
+
+    for (const label of labels) {
+      const tab = queryAll<HTMLButtonElement>(host, ".round-tab").find((b) => b.textContent === label)
+      tab?.click()
+
+      // What was asked for is what is drawn - the premise the tracked key depends on.
+      expect(query(host, ".round-tab-active").textContent).toBe(label)
+
+      const drawn = query(host, ".maze-replay")
+      queryAll<HTMLButtonElement>(host, ".round-tab").find((b) => b.textContent === label)?.click()
+      expect(query(host, ".maze-replay")).toBe(drawn)
+      expect(query(host, ".round-tab-active").textContent).toBe(label)
+    }
+  })
+
+  // And a click on a different round still works, which is what the guard must not break.
+  it("still switches to a round that is not showing", () => {
+    const host = mount(twoRoundTab())
+    const before = query(host, ".maze-replay")
+
+    queryAll<HTMLButtonElement>(host, ".round-tab")[1]?.click()
+
+    expect(query(host, ".maze-replay")).not.toBe(before)
+    expect(query(host, ".round-tab-active").textContent).toBe("Game 3 \u00b7 Level 2")
   })
 
   it("opens on the first round", () => {
@@ -333,14 +616,75 @@ describe("detail", () => {
     )
   })
 
-  // Which cells are identifiers comes from the data, not from what the text looks like. An unscored
-  // signal prints "no" and must stay plain: a rule that read the characters would be right about this
-  // one by luck and wrong the day the id scheme changes.
+  // The formatting is what a reader actually sees, so it is asserted on the DOM rather than on the
+  // sentence agentRows also returns - the two could drift, and only one of them is rendered.
+  it("weights each seat's values above the words joining them", () => {
+    const host = rendered(renderReportSections(ui, stateWith(fullSetupTab())).detail)
+
+    // All three of the values a reader compares, and only those three.
+    expect(queryAll<HTMLElement>(host, ".agent-value").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten", "Ollama", "max"])
+    // Mono is the model's alone: it is the one literal string of the three.
+    expect(queryAll<HTMLElement>(host, ".agent-model").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten"])
+    // "on the X API", never "through X": the field is a wire protocol, and Hugging Face answers on
+    // OpenAI's, so naming it the way a provider is named would claim something the log does not say.
+    expect(queryAll<HTMLElement>(host, ".agent-joiner").map((node) => node.textContent))
+      .toEqual([" on the ", " API", " at ", " reasoning effort"])
+
+    // A model name is not a rubric identifier, and that chip is this page's promise that a code it marks
+    // is defined somewhere else on the page.
+    expect(queryAll<HTMLElement>(host, ".rubric-code").map((node) => node.textContent))
+      .not.toContain("moonshotai/Kimi-K3:baseten")
+  })
+
+  // A row the Agent settings check is reporting has to look different from the rows it is not, before it
+  // is read rather than after. Comma-joined and in the same ink, two models read as a list - and at a
+  // glance as one long name - so the finding was invisible in the table that holds its evidence.
+  it("marks the setting a seat changed, and only that one", () => {
+    const result = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const tab: LogTab = {id: "d", url: "https://example.com/d.json", loadedUrl: "https://example.com/d.json",
+      label: "drift", status: "loaded", result}
+    const host = rendered(renderReportSections(ui, stateWith(tab)).detail)
+
+    // One seat changed one setting, so exactly one span carries the mark - not the endpoint it kept,
+    // not the API, and nothing at all on the seat that held still.
+    expect(queryAll<HTMLElement>(host, ".agent-changed").map((node) => node.textContent))
+      .toEqual(["moonshotai/Kimi-K3:baseten \u2192 moonshotai/Kimi-K3:together"])
+    // An arrow, in the order the turns ran: a comma would say "two of these", not "this became that".
+    expect(queryAll<HTMLElement>(host, ".agent-value").map((node) => node.textContent))
+      .toEqual([
+        "moonshotai/Kimi-K3:baseten \u2192 moonshotai/Kimi-K3:together",
+        "OpenAI", "high", "gemma4:cloud", "Ollama", "max",
+      ])
+  })
+
+  // The rendered cell reads the endpoint from its own field now rather than from the sentence, so
+  // stripping the credentials on the way into the sentence alone would leave them in the DOM.
+  it("keeps credentials out of the rendered endpoint", () => {
+    const host = rendered(renderReportSections(ui, stateWith(fullSetupTab())).detail)
+
+    expect(queryAll<HTMLElement>(host, ".agent-endpoint").map((node) => node.textContent))
+      .toEqual(["http://localhost:11434/api/chat"])
+    expect(host.innerHTML).not.toMatch(/user:pass/)
+  })
+
+  // Nothing in this log declared a model, so the provider's echo is what there is to show - short of the
+  // ":provider" suffix a declared name would carry, and still better than a seat reported running
+  // nothing. The fixture above is the declared path; this is every log written before it.
+  it("shows the provider's echo where no request declared a model", () => {
+    expect(queryAll<HTMLElement>(detail(), ".agent-model").map((node) => node.textContent))
+      .toEqual(["gemma4"])
+  })
+
+  // Which cells are identifiers comes from the data, not from what the text looks like. An unscored signal
+  // prints "-" and must stay plain: a rule that read the characters would be right about this one by luck
+  // and wrong the day the id scheme changes.
   it("chips only the cells the data says are identifiers", () => {
     const chips = queryAll<HTMLElement>(detail(), ".rubric-code").map((code) => code.textContent)
     expect(chips.length).toBeGreaterThan(0)
     expect(chips).toContain("V2.Q2")
-    expect(chips).not.toContain("no")
+    expect(chips).not.toContain("-")
 
     // The count cells share a column with the scoring cells and are never identifiers.
     expect(chips.every((text) => /^[CV]\d+\.Q\d+$/.test(text ?? ""))).toBe(true)
@@ -357,7 +701,7 @@ describe("detail", () => {
 
 describe("notices", () => {
   it("reports a tab that failed to load", () => {
-    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
+    const tab: LogTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
     const sections = renderReportSections(ui, stateWith(tab))
 
     expect(rendered(sections.notices).className).toBe("notice notice-error")
@@ -368,7 +712,7 @@ describe("notices", () => {
   })
 
   it("surfaces contract warnings without hiding the report they came with", () => {
-    const result = analyzeLogText(logExport.replace('"agent-api"', '"human"'), {label: "g.json"})
+    const result = sliceLogText(logExport.replace('"agent-api"', '"human"'), {label: "g.json"})
     const sections = renderReportSections(ui, stateWith({...loadedTab(), result}))
 
     expect(rendered(sections.notices).className).toBe("notice notice-warn")
@@ -386,7 +730,7 @@ describe("notices", () => {
 })
 
 describe("methodology", () => {
-  const sectionsFor = (...tabs: ReportTab[]) => renderReportSections(ui, stateWith(...tabs))
+  const sectionsFor = (...tabs: LogTab[]) => renderReportSections(ui, stateWith(...tabs))
 
   it("explains how the report was made, once a report exists to explain", () => {
     const section = rendered(sectionsFor(loadedTab()).methodology)
@@ -402,14 +746,14 @@ describe("methodology", () => {
   })
 
   it("renders nothing before a report is loaded", () => {
-    // It used to be static markup in index.md, so an untouched page showed five stages describing the
-    // treatment of evidence it did not have yet, directly above an empty state asking for a URL.
+    // Static markup in index.md renders whatever the state: five stages describing the treatment of
+    // evidence the page does not have yet, directly above an empty state asking for a URL.
     expect(sectionsFor().methodology).toBe("")
-    expect(renderReportSections(ui, createInitialReportTabs()).methodology).toBe("")
+    expect(renderReportSections(ui, createInitialLogTabs()).methodology).toBe("")
   })
 
   it("renders nothing for a tab that failed to load", () => {
-    const tab: ReportTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
+    const tab: LogTab = {id: "t1", url: "", label: "bad.json", status: "error", error: "404 Not Found"}
 
     expect(sectionsFor(tab).methodology).toBe("")
   })

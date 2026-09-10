@@ -6,13 +6,13 @@
 // one failure path ended up with no link to name.
 
 import {parseTapooLogText} from "./log-contract";
-import type {DecodedPayload, LogWarning, PayloadResult, TapooLog, UrlResult} from "./types";
+import type {DecodedPayload, LogWarning, PayloadResult, TapooLog, UrlResult, ValidationCheck} from "./types";
 import {asTrimmedText} from "./utils";
 
 // --- Online JSON URLs ---
 
-// validateOnlineJsonUrl is the only gate on what may be loaded. Everything downstream - the codec, the
-// loader, the share link - takes its word for it.
+/** validateOnlineJsonUrl is the only gate on what may be loaded. Everything downstream - the codec, the
+ * loader, the share link - takes its word for it. */
 export function validateOnlineJsonUrl(value: unknown): UrlResult {
   const trimmed = asTrimmedText(value);
   if (!trimmed) {
@@ -39,11 +39,33 @@ export function validateOnlineJsonUrl(value: unknown): UrlResult {
 
 // --- Fetching a log ---
 
-const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
-const DEFAULT_MAX_REPORT_BYTES = 25 * 1024 * 1024;
+// The two bounds are a pair, and the timeout is the slower of them to reach.
+//
+// AbortSignal.timeout is an overall deadline, not an idle one: a download that is progressing steadily
+// is still cut off when it expires. So the timeout has to be long enough for the largest log the size
+// limit admits, or the size limit never decides anything and a reader with a big log is told their
+// network failed when it did not.
+//
+// 100 MB in 120 seconds is a sustained 6.7 Mbit/s, which is the slowest connection this expects to
+// serve a maximum-size log to. Ordinary logs are nowhere near it - the v2.5.1 capture is 0.2 MB and a
+// 2,000-entry round about 6 MB - so this deadline is only ever met by a log at the ceiling or by a host
+// that has stopped answering.
+const DEFAULT_FETCH_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_REPORT_BYTES = 100 * 1024 * 1024;
 
 type FetchLimits = {timeoutMs?: number; maxBytes?: number};
 
+/** Downloads a log over HTTP, bounded in both time and size.
+ *
+ * Both bounds are enforced, not merely declared. `content-length` is checked when the host sends one,
+ * and the body is then counted as it streams and cancelled the moment it exceeds the limit - a host
+ * that under-declares its length, or declares none, cannot make the browser hold an unbounded response.
+ *
+ * `credentials: "omit"` and `no-referrer`: the reader is loading somebody else's URL, so no cookie of
+ * theirs and no address of this page travels with the request.
+ *
+ * Throws rather than returning a Result - the failures here are network conditions rather than
+ * contract violations, and `fetchFailureMessage` is what turns one into something a reader can act on. */
 export async function fetchOnlineJsonText(
   url: string,
   {timeoutMs = DEFAULT_FETCH_TIMEOUT_MS, maxBytes = DEFAULT_MAX_REPORT_BYTES}: FetchLimits = {},
@@ -90,11 +112,11 @@ export async function fetchOnlineJsonText(
   return chunks.join("");
 }
 
-// fetchFailureMessage turns what fetch throws into something a reader can act on.
-//
-// A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
-// offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This is
-// the one failure where a link that works for whoever shared it can fail for whoever opens it.
+/** fetchFailureMessage turns what fetch throws into something a reader can act on.
+ *
+ * A refused cross-origin request arrives as a bare TypeError with no status - the same shape as an
+ * offline browser - and "Failed to fetch" tells a reader nothing about which of the two it was. This is
+ * the one failure where a link that works for whoever shared it can fail for whoever opens it. */
 export function fetchFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof DOMException && ["AbortError", "TimeoutError"].includes(error.name)) {
@@ -111,9 +133,15 @@ export function fetchFailureMessage(error: unknown): string {
  * carries the parsed log and the URL it came from, while a failure carries the URL only when there was
  * one to report - a URL that never validated has none. */
 export type LoadedLog =
-  | {ok: true; source: TapooLog; warnings: LogWarning[]; url: string}
+  | {ok: true; source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]; url: string}
   | {ok: false; error: string; url?: string};
 
+/** Validates a URL, downloads it, and parses it: the whole path from what a reader typed to a report.
+ *
+ * `fetchText` is injectable so the suites can exercise every branch without a network. Returns
+ * `LoadedLog` rather than throwing, because each of the three stages fails for a reason the reader
+ * needs to see - a bad URL, an unreachable host, and a file that is not a Tapoo log are three different
+ * things to be told. */
 export async function loadTapooLogFromUrl(
   value: unknown,
   {fetchText = fetchOnlineJsonText}: {fetchText?: (url: string) => Promise<string>} = {},
@@ -155,39 +183,39 @@ export type AppLocation = {origin: string; pathname: string};
 
 const currentLocation = (): AppLocation | undefined => globalThis.location;
 
-// appBasePath finds where the app is served from, given any page within it.
-//
-// It has to strip a report route back off, because the address bar of a shared report already
-// carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
-// drops a trailing file name so /index.html and / produce the same base.
+/** appBasePath finds where the app is served from, given any page within it.
+ *
+ * It has to strip a report route back off, because the address bar of a shared report already
+ * carries one - composing a new link from that pathname would otherwise nest /r/ inside /r/. It also
+ * drops a trailing file name so /index.html and / produce the same base. */
 export function appBasePath(pathname: string = "/"): string {
   const withoutRoute = String(pathname).replace(REPORT_ROUTE_PATTERN, "/");
   const withoutFile = withoutRoute.replace(/[^/]*\.html?$/, "");
   return withoutFile.endsWith("/") ? withoutFile : `${withoutFile}/`;
 }
 
-// reportRouteFor composes the public form of a link from a token. Every address the reader is left
-// looking at goes through here, so the route is built one way only.
+/** reportRouteFor composes the public form of a link from a token. Every address the reader is left
+ * looking at goes through here, so the route is built one way only. */
 export function reportRouteFor(token: string, location: AppLocation): string {
   return `${location.origin}${appBasePath(location.pathname)}${REPORT_ROUTE}/${token}`;
 }
 
-// appRootFor is where a reader is left when no token can be shown - never the fragment, which is an
-// internal hop and not an address anyone should be handed.
+/** appRootFor is where a reader is left when no token can be shown - never the fragment, which is an
+ * internal hop and not an address anyone should be handed. */
 export function appRootFor(location: AppLocation): string {
   return `${location.origin}${appBasePath(location.pathname)}`;
 }
 
-// reportPayloadFromPath reads the token out of a /r/<token> route.
+/** reportPayloadFromPath reads the token out of a /r/<token> route. */
 export function reportPayloadFromPath(pathname: unknown): string | null {
   return REPORT_ROUTE_PATTERN.exec(asTrimmedText(pathname))?.[1] ?? null;
 }
 
-// reportPayloadFromHash reads a token out of a location fragment.
-//
-// Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
-// cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
-// so the public form and the internal hop can change independently.
+/** reportPayloadFromHash reads a token out of a location fragment.
+ *
+ * Not the shape anyone is given: it is how 404.md hands the token to the app, since a static host
+ * cannot serve the app at an arbitrary path without a redirect. Kept separate from the route reader
+ * so the public form and the internal hop can change independently. */
 export function reportPayloadFromHash(hash: unknown): string | null {
   return REPORT_PAYLOAD_FRAGMENT_PATTERN.exec(asTrimmedText(hash))?.[1] ?? null;
 }
@@ -261,10 +289,10 @@ const LINK_ALTERED = "This link has been truncated, altered or damaged. Ask for 
 const elideToken = (token: string, head = 10, tail = 12): string =>
   token.length <= head + tail + 3 ? token : `${token.slice(0, head)}...${token.slice(-tail)}`;
 
-// damagedLinkLabel shows the failure in the shape the reader was actually handed - origin, base path,
-// /r/, then the elided token. The scheme and host are what make it recognizable as a URL at a glance
-// rather than a string of characters. Off a browser there is no origin to name, so it degrades to the
-// route path, which still reads as a link.
+/** damagedLinkLabel shows the failure in the shape the reader was actually handed - origin, base path,
+ * /r/, then the elided token. The scheme and host are what make it recognizable as a URL at a glance
+ * rather than a string of characters. Off a browser there is no origin to name, so it degrades to the
+ * route path, which still reads as a link. */
 export function damagedLinkLabel(token: string): string {
   const elided = elideToken(token);
   const location = currentLocation();
@@ -279,6 +307,14 @@ const rejectedLink = (
 
 // --- Encoding and decoding ---
 
+/** Compresses a validated log URL into the opaque token a share link carries.
+ *
+ * Compression only - never encryption, and never a permission check. The URL is fully recoverable from
+ * the token by anyone holding it, which is the point: the link has to reproduce the report on someone
+ * else's machine. `validateOnlineJsonUrl` remains the only gate on what may be loaded.
+ *
+ * Two integrity bytes are appended so a token damaged in transit is reported as damaged rather than
+ * decoding to a different address. */
 export function encodeReportPayload(value: unknown): PayloadResult {
   const validation = validateOnlineJsonUrl(value);
   if (!validation.ok) {
@@ -318,6 +354,14 @@ export function encodeReportPayload(value: unknown): PayloadResult {
   };
 }
 
+/** Reads a share token back into the URL it was made from, or says why it cannot.
+ *
+ * Every failure arm carries a link label, because a reader who is told only "this link is damaged" has
+ * no way to tell which link the app is talking about. `linkLabel` is injectable so the suites can
+ * assert on the reason without depending on a browser location.
+ *
+ * The output is a URL from an untrusted source and is validated again on the way out - a token that
+ * decodes cleanly can still name an address this app will not load. */
 export function decodeReportPayload(
   value: unknown,
   {linkLabel = damagedLinkLabel}: {linkLabel?: (token: string) => string} = {},
@@ -381,11 +425,11 @@ export function decodeReportPayload(
   return validated.ok ? validated : rejectedLink(LINK_ALTERED, token, linkLabel);
 }
 
-// shareLinkFor composes the link that reproduces one report.
-//
-// The token is a path segment, which means it is sent to the host: GitHub Pages will have the
-// (recoverable) log address in its request logs, and every shared link is served with a 404 status
-// through the shim in 404.md. That trade was made deliberately for a link that reads as a link.
+/** shareLinkFor composes the link that reproduces one report.
+ *
+ * The token is a path segment, which means it is sent to the host: GitHub Pages will have the
+ * (recoverable) log address in its request logs, and every shared link is served with a 404 status
+ * through the shim in 404.md. That trade was made deliberately for a link that reads as a link. */
 export function shareLinkFor(url: unknown, location: AppLocation | undefined = currentLocation()): string | null {
   const encoded = encodeReportPayload(url);
   if (!encoded.ok || !location) {

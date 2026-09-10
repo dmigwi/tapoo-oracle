@@ -1,7 +1,9 @@
 # Tapoo Agentic Behavior Rubric Notes
 
 These notes hold evaluator details and interpretation aids that supplement the
-canonical fact-question definitions in `src/analysis/rubric-engine.js`.
+canonical fact-question definitions in `src/lib/rubric-report.ts`, where each
+group lists its questions beside the function that answers them. What those
+answers are read from is `src/lib/rubric-context.ts`.
 
 ## Dependency Ladders
 

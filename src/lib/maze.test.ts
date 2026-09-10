@@ -69,7 +69,7 @@ describe("mazeFromEncoded", () => {
       deg3: 4,
       deg4: 0,
       edges: 23,
-      successPath: 17,
+      successPathCells: 18,
     })
   })
 
@@ -104,6 +104,18 @@ describe("successPathLength", () => {
 
   it("is null for a cell outside the maze", () => {
     expect(successPathLength(maze, START, "99,99")).toBeNull()
+  })
+
+  // The two units, pinned against each other. successPathLength counts moves - a cell to itself is
+  // zero of them - while the stat the report displays counts the cells those moves pass through, which
+  // is one more. The report prints it beside the maze's cell count, so a move count there understates
+  // both the figure and its coverage percentage by exactly one cell.
+  it("is one move fewer than the cells the stat counts", () => {
+    const {stats} = expectOk(mazeFromEncoded(REAL_MAZE, {startCell: START, destinationCell: DESTINATION}))
+    const moves = successPathLength(maze, START, DESTINATION)
+
+    expect(moves).not.toBeNull()
+    expect(stats.successPathCells).toBe((moves as number) + 1)
   })
 })
 

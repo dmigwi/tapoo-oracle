@@ -35,6 +35,21 @@ export default defineConfig(
     },
   },
   {
+    // The tab state has one door: log-tabs-view.ts. Its reducers replace a state the view repaints
+    // from, so a caller that reaches past the view can change what a reader is looking at without
+    // anything redrawing it. The view re-exports everything a consumer legitimately needs.
+    files: ["src/**/*.ts"],
+    ignores: ["src/lib/log-tabs-view.ts", "src/lib/log-tabs-state.ts", "src/lib/log-tabs-state.test.ts"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["./log-tabs-state", "**/log-tabs-state"],
+          message: "Import tab state from ./log-tabs-view, which re-exports it - see its note.",
+        }],
+      }],
+    },
+  },
+  {
     // Two rules that are right about production code and wrong about a suite. Everything else stays
     // on: the type-checked rules found real defects in these files during the conversion, and a test
     // asserting on the wrong shape is exactly the mistake worth catching.

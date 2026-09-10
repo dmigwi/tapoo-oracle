@@ -1,14 +1,18 @@
-// The report tabs control: the one Observable view the page binds to.
+// The log tabs view: the one Observable view the page binds to.
 //
-// Built imperatively because it owns its own state and repaints in place. Everything it decides is
-// delegated to the pure reducers in report-tabs.ts, so the logic stays testable without a document.
+// Built imperatively because it owns a DOM node, its own state and repaints in place - the parts of
+// the workspace that need a document. Everything it decides is delegated to the pure reducers in
+// log-tabs-state.ts, which also declares the two contracts these components are handed: LogTabActions
+// and WorkspaceSync.
 
 import {
-  addReportTab,
-  createInitialReportTabs,
-  deleteReportTab,
-  loadNewReportTabFromUrl,
-  } from "./report-tabs"
+  addLogTab,
+  createInitialLogTabs,
+  deleteLogTab,
+  loadNewLogTabFromUrl,
+  loadLogTabFromUrl,
+  updateLogTab,
+  } from "./log-tabs-state"
 import {
   appRootFor,
   decodeReportPayload,
@@ -16,27 +20,67 @@ import {
   reportPayloadFromPath,
   shareLinkFor,
 } from "./share-link"
-import type { ReportTab, ReportTabsInput, ReportTabsState } from "./types"
+import type { LogTabActions, WorkspaceSync } from "./log-tabs-state"
+import type { LogTab, LogTabsInput, LogTabsState } from "./types"
 
-/** What the rendered controls may ask the workspace to do.
+// The tab state reaches the rest of the app through here, and through nowhere else - the lint rule in
+// eslint.config.mjs says so. A reducer is only ever right beside the view that repaints from what it
+// returns, so a second caller mutating tab state without repainting is a bug this makes unwritable.
+// Re-exported rather than wrapped: the reducers are already the whole contract.
+export {
+  addLogTab,
+  createInitialLogTabs,
+  deleteLogTab,
+  extractTabLabelFromUrl,
+  loadNewLogTabFromUrl,
+  loadLogTabFromUrl,
+  updateLogTab,
+} from "./log-tabs-state"
+
+// --- Entry point: what report-view re-exports to the page ---
+
+/** createLogTabsInput builds the Observable input node that owns log-tab state.
  *
- * The render helpers are handed this rather than the state setter alone, because several of them
- * dispatch a state change derived from the state at click time, not at render time. */
-type ReportActions = {
-  getState: () => ReportTabsState
-  setState: (next: ReportTabsState) => void
-  updateDraftUrl: (draftUrl: string) => void
-  loadNewTab: () => void | Promise<void>
+ * It is a `viewof` element: its `value` is the current LogTabsState, and it emits an `input` event
+ * whenever that value changes, which is what makes the markdown's dependent cells recompute. Every
+ * decision it makes is delegated to the pure reducers in log-tabs-state.ts. */
+export function createLogTabsInput(
+  {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
+): LogTabsInput {
+  let state = createInitialLogTabs();
+  const root = createReportWorkspaceRoot(() => state);
+
+  const dispatchInput = (): void => {
+    root.dispatchEvent(new Event("input", {bubbles: true}));
+  };
+
+  const setState = (nextState: LogTabsState): void => {
+    state = nextState;
+    dispatchInput();
+    renderReportWorkspace(root, state, actions);
+  };
+
+  const updateDraftUrl = (draftUrl: string): void => {
+    state = {...state, draftUrl, draftStatus: "empty", draftError: undefined};
+    dispatchInput();
+  };
+
+  // Declared here rather than above the handlers that close over it: every one of those references
+  // runs from an event, long after this line, so the binding they capture is always initialised.
+  const actions: LogTabActions = {
+    getState: () => state,
+    setState,
+    updateDraftUrl,
+    loadNewTab: () => loadDraftLogTab({getState: () => state, setState, fetchText}),
+    retryTab: (tabId: string) => retryLogTab(tabId, {getState: () => state, setState, fetchText})
+  };
+
+  renderReportWorkspace(root, state, actions);
+  void restoreSharedReport({getState: () => state, setState, fetchText});
+  return root;
 }
 
-/** The three things every async workspace action needs: the current state, a way to replace it, and
- * the fetcher tests substitute. */
-type WorkspaceIo = {
-  getState: () => ReportTabsState
-  setState: (next: ReportTabsState) => void
-  fetchText?: (url: string) => Promise<string>
-}
-
+// --- The controls the page renders ---
 
 // A chain, inline rather than a font or an image request: the page loads no third-party asset, and
 // an icon that fails to load beside its label would look like a broken control. A chain says "link"
@@ -90,22 +134,20 @@ function createShareControl(url: string): HTMLElement {
 }
 
 // Owns the Observable-compatible value surface while keeping the DOM shell independent of state.
-function createReportWorkspaceRoot(readState: () => ReportTabsState): ReportTabsInput {
+function createReportWorkspaceRoot(readState: () => LogTabsState): LogTabsInput {
   const root = document.createElement("section");
   root.className = "report-workspace";
-  Object.defineProperty(root, "value", {
-    get: readState,
-  });
+  Object.defineProperty(root, "value", { get: readState });
   // defineProperty cannot widen the element's type, so the cast states the contract the property
   // just established: this node carries the current state as `value`, which is what Observable's
   // view() reads.
-  return root as ReportTabsInput;
+  return root as LogTabsInput;
 }
 
 // Keeps the address bar carrying the active report, so a reload or a bookmark reopens what is on
 // screen. replaceState rather than assigning location.hash: assigning pushes an entry, and loading
 // three reports would otherwise mean three presses of Back to leave the page.
-function rememberActiveReport(nextState: ReportTabsState): void {
+function rememberActiveReport(nextState: LogTabsState): void {
   const location = globalThis.location;
   if (!location || !globalThis.history?.replaceState) {
     return;
@@ -125,21 +167,42 @@ function rememberActiveReport(nextState: ReportTabsState): void {
 }
 
 // Loads the URL currently typed into the add-report form and ignores stale async completions.
-async function loadDraftReportTab({getState, setState, fetchText}: WorkspaceIo): Promise<void> {
+async function loadDraftLogTab({getState, setState, fetchText}: WorkspaceSync): Promise<void> {
   const requestedUrl = getState().draftUrl;
   setState({...getState(), draftStatus: "loading", draftError: undefined});
-  const loadedState = await loadNewReportTabFromUrl(getState(), fetchText);
+  const loadedState = await loadNewLogTabFromUrl(getState(), fetchText);
   if (getState().draftUrl !== requestedUrl) return;
   setState(loadedState);
   rememberActiveReport(loadedState);
 }
 
+// Reloads one tab from the address it already holds.
+//
+// The address is the tab's, not the draft field's, so a reader whose load failed retries without
+// retyping it - the case this exists for is a host that was briefly unreachable, where the URL was
+// never the problem. Routed through loadLogTabFromUrl, which builds its fields with the same
+// loadLogTabFields the add path uses, so a report that arrives by retry is the report that would have
+// arrived first time.
+//
+// Stale completions are dropped the way the draft loader drops them: if the tab is gone by the time
+// the fetch returns, its result belongs to nothing and writing it back would resurrect the tab.
+async function retryLogTab(tabId: string, {getState, setState, fetchText}: WorkspaceSync): Promise<void> {
+  const before = getState().tabs.find((tab) => tab.id === tabId);
+  if (!before) return;
+
+  setState(updateLogTab(getState(), tabId, {status: "empty", error: undefined}));
+  const loadedState = await loadLogTabFromUrl(getState(), tabId, fetchText);
+  const after = getState().tabs.find((tab) => tab.id === tabId);
+  if (!after || after.url !== before.url) return;
+  setState(loadedState);
+}
+
 // Opens the report a shared link names, with no input from the reader.
 //
-// Routed through the same loadNewReportTabFromUrl the form uses, so the fetch, the log-contract
+// Routed through the same loadNewLogTabFromUrl the form uses, so the fetch, the log-contract
 // validation, the warnings and every error path are the ones already covered - a second loader for
 // shared links would be a second place for them to diverge.
-async function restoreSharedReport({getState, setState, fetchText}: WorkspaceIo): Promise<void> {
+async function restoreSharedReport({getState, setState, fetchText}: WorkspaceSync): Promise<void> {
   const location = globalThis.location;
   // Path first - that is the form people are handed. The fragment is only the hop 404.md uses to
   // get the token into an app the host could not serve at that path directly.
@@ -180,7 +243,7 @@ async function restoreSharedReport({getState, setState, fetchText}: WorkspaceIo)
     sharedLinkError: undefined,
     sharedLinkBroken: undefined
   });
-  const loadedState = await loadNewReportTabFromUrl({...getState(), draftUrl: decoded.url}, fetchText);
+  const loadedState = await loadNewLogTabFromUrl({...getState(), draftUrl: decoded.url}, fetchText);
   setState({...loadedState, draftUrl: "", sharedLinkLoading: false});
   // Puts /r/<token> back in the address bar. The fragment is an implementation detail of the hop
   // through 404.md, and leaving it on screen would mean the link someone opened is not the link
@@ -189,44 +252,44 @@ async function restoreSharedReport({getState, setState, fetchText}: WorkspaceIo)
 }
 
 // Replaces the workspace in one pass so navigation and active-panel markup stay in sync.
-function renderReportWorkspace(root: HTMLElement, state: ReportTabsState, actions: ReportActions): void {
+function renderReportWorkspace(root: HTMLElement, state: LogTabsState, actions: LogTabActions): void {
   root.replaceChildren();
   root.append(createReportNavigator(state, actions), createReportActivePanel(state, actions));
 }
 
 // Builds the left-hand report picker and wires tab selection/deletion to the shared state actions.
-function createReportNavigator(state: ReportTabsState, actions: ReportActions): HTMLElement {
+function createReportNavigator(state: LogTabsState, actions: LogTabActions): HTMLElement {
   const navigator = document.createElement("section");
-  navigator.className = "report-navigator";
-  navigator.setAttribute("aria-label", "Loaded reports");
+  navigator.className = "log-tab-strip";
+  navigator.setAttribute("aria-label", "Loaded logs");
 
   const addButton = document.createElement("button");
   addButton.type = "button";
-  addButton.className = "report-add";
-  addButton.textContent = "+ Add Report";
-  addButton.addEventListener("click", () => actions.setState(addReportTab(actions.getState())));
+  addButton.className = "log-tab-add";
+  addButton.textContent = "+ Add Log";
+  addButton.addEventListener("click", () => actions.setState(addLogTab(actions.getState())));
   navigator.append(addButton);
 
   const tabList = document.createElement("div");
-  tabList.className = "report-list";
+  tabList.className = "log-tab-list";
   tabList.setAttribute("role", "tablist");
 
   for (const tab of state.tabs) {
-    tabList.append(createReportListItem(tab, state, actions));
+    tabList.append(createLogTabItem(tab, state, actions));
   }
 
   navigator.append(tabList);
   return navigator;
 }
 
-// Builds one report tab row, including the active styling and per-tab removal control.
-function createReportListItem(tab: ReportTab, state: ReportTabsState, actions: ReportActions): HTMLElement {
+// Builds one log tab row, including the active styling and per-tab removal control.
+function createLogTabItem(tab: LogTab, state: LogTabsState, actions: LogTabActions): HTMLElement {
   const item = document.createElement("div");
-  item.className = `report-list-item${tab.id === state.activeTabId ? " report-list-item-active" : ""}`;
+  item.className = `log-tab${tab.id === state.activeTabId ? " log-tab-active" : ""}`;
 
   const button = document.createElement("button");
   button.type = "button";
-  button.className = "report-list-button";
+  button.className = "log-tab-button";
   button.textContent = tab.label;
   // The label, not the URL. A title carrying the address puts it back in the DOM for any reader,
   // screenshot or copy-paste - the thing the share token exists to avoid.
@@ -243,21 +306,37 @@ function createReportListItem(tab: ReportTab, state: ReportTabsState, actions: R
 
   const removeButton = document.createElement("button");
   removeButton.type = "button";
-  removeButton.className = "report-delete";
+  removeButton.className = "log-tab-delete";
   removeButton.setAttribute("aria-label", `Delete ${tab.label}`);
   removeButton.textContent = "x";
   removeButton.addEventListener("click", () => {
-    const nextState = deleteReportTab(actions.getState(), tab.id);
+    const nextState = deleteLogTab(actions.getState(), tab.id);
     actions.setState(nextState);
     rememberActiveReport(nextState);
   });
+
+  // Only on a tab that failed, and beside that tab rather than in the notice below it. The address it
+  // would retry belongs to this tab, and when several are open the notice describes whichever is
+  // active - a retry there would be one control with a moving target.
+  if (tab.status === "error") {
+    item.classList.add("log-tab-error");
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "log-tab-retry";
+    retryButton.setAttribute("aria-label", `Retry ${tab.label}`);
+    retryButton.title = "Load this report again";
+    retryButton.textContent = "\u21bb";
+    retryButton.addEventListener("click", () => void actions.retryTab(tab.id));
+    item.append(button, retryButton, removeButton);
+    return item;
+  }
 
   item.append(button, removeButton);
   return item;
 }
 
 // Chooses between shared-link status, the active report sharing panel, and the add-report form.
-function createReportActivePanel(state: ReportTabsState, actions: ReportActions): HTMLElement {
+function createReportActivePanel(state: LogTabsState, actions: LogTabActions): HTMLElement {
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0];
   const content = document.createElement("section");
   content.className = "report-active-panel";
@@ -329,7 +408,7 @@ function createReportActivePanel(state: ReportTabsState, actions: ReportActions)
 }
 
 // Builds the online-log URL form used when the reader adds another report.
-function createReportUrlForm(state: ReportTabsState, actions: ReportActions): HTMLElement {
+function createReportUrlForm(state: LogTabsState, actions: LogTabActions): HTMLElement {
   const form = document.createElement("form");
   form.className = "report-url-form";
   form.addEventListener("submit", (event) => {
@@ -365,40 +444,4 @@ function createReportUrlForm(state: ReportTabsState, actions: ReportActions): HT
   }
 
   return form;
-}
-
-// Creates the Observable input node that owns report-tab state and emits input events on changes.
-export function createReportTabsInput(
-  {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
-): ReportTabsInput {
-  let state = createInitialReportTabs();
-  const root = createReportWorkspaceRoot(() => state);
-
-  const dispatchInput = (): void => {
-    root.dispatchEvent(new Event("input", {bubbles: true}));
-  };
-
-  const setState = (nextState: ReportTabsState): void => {
-    state = nextState;
-    dispatchInput();
-    renderReportWorkspace(root, state, actions);
-  };
-
-  const updateDraftUrl = (draftUrl: string): void => {
-    state = {...state, draftUrl, draftStatus: "empty", draftError: undefined};
-    dispatchInput();
-  };
-
-  // Declared here rather than above the handlers that close over it: every one of those references
-  // runs from an event, long after this line, so the binding they capture is always initialised.
-  const actions: ReportActions = {
-    getState: () => state,
-    setState,
-    updateDraftUrl,
-    loadNewTab: () => loadDraftReportTab({getState: () => state, setState, fetchText})
-  };
-
-  renderReportWorkspace(root, state, actions);
-  void restoreSharedReport({getState: () => state, setState, fetchText});
-  return root;
 }

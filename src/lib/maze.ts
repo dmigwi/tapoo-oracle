@@ -11,9 +11,51 @@
 //
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
-import {MOVES, cellKey, isMove, stepFrom} from "./geometry";
+import {MOVES, getCellKey, isMove, stepFrom} from "./geometry";
 import {fnv1a64Checksum} from "./utils";
-import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} from "./types";
+import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, OpenCellExits, Result} from "./types";
+
+// --- Entry point: what log-contract and maze-model call ---
+
+/** mazeFromEncoded is the one call a consumer needs: encoded field in, wall graph and stats out. */
+export function mazeFromEncoded(
+  encoded: EncodedMaze | null | undefined,
+  {startCell, destinationCell}: {startCell?: CellKey | null; destinationCell?: CellKey | null} = {},
+): MazeResult {
+  const decoded = decodeEncodedMaze(encoded);
+  if (!decoded.ok) {
+    return decoded;
+  }
+
+  const built = mazeFromDecodedGrid(decoded.grid, encoded?.dimensions);
+  if (!built.ok) {
+    return built;
+  }
+
+  const stats = mazeStats(built.maze, {startCell, destinationCell});
+
+  // Validate the two structural invariants that hold for any perfect maze (a spanning tree).
+  //
+  // edges == cells - 1: a connected acyclic graph on N nodes has exactly N-1 edges. More or fewer
+  // means the maze has a cycle or a disconnected region - either breaks the guarantee that every
+  // cell is reachable and that there is exactly one path between any two cells.
+  //
+  // deadEnds == deg3 + 2·deg4 + 2: follows from the handshaking lemma on a tree. Summing degrees
+  // gives 2·edges = 2·(cells-1). Expanding by degree class and eliminating corridors (deg2) yields
+  // this identity. A violation means the cell-classification counts are internally inconsistent.
+  if (stats.edges !== stats.cells - 1) {
+    return {ok: false, error: `Maze has cycles or disconnected regions: expected ${stats.cells - 1} edges for ${stats.cells} cells but found ${stats.edges}.`};
+  }
+  if (stats.deadEnds !== stats.deg3 + 2 * stats.deg4 + 2) {
+    return {ok: false, error: `Maze failed dead-end invariant: expected ${stats.deg3 + 2 * stats.deg4 + 2} dead ends (deg3=${stats.deg3}, deg4=${stats.deg4}) but found ${stats.deadEnds}.`};
+  }
+
+  if (startCell && destinationCell && stats.successPathCells === null) {
+    return {ok: false, error: "Maze has no navigable path from start to destination. The experiment is invalid."};
+  }
+
+  return {ok: true, maze: built.maze, grid: decoded.grid, stats};
+}
 
 // --- Rendered grid geometry ---
 
@@ -22,11 +64,11 @@ import type {CellKey, EncodedMaze, Maze, MazeResult, MazeStats, Move, Result} fr
 // logical cell (r, c) sits at [2r+1][2c+1].
 const RENDER_CELL_STEP = 2;
 
-// cellFromGridPoint converts a logged {x, y} render-grid point to a "row,col" cell key.
-//
-// Positions in the level-started and round-end entries are render-grid points, not cells - the same
-// inverse Tapoo applies in cellCoordinateFromGridPoint. Without this the start and finishing cells read
-// as coordinates twice their real value and land outside the maze.
+/** cellFromGridPoint converts a logged {x, y} render-grid point to a "row,col" cell key.
+ *
+ * Positions in the level-started and round-end entries are render-grid points, not cells - the same
+ * inverse Tapoo applies in cellCoordinateFromGridPoint. Without this the start and finishing cells read
+ * as coordinates twice their real value and land outside the maze. */
 export function cellFromGridPoint(point: {x?: number; y?: number} | null | undefined): CellKey | null {
   const x = Number(point?.x);
   const y = Number(point?.y);
@@ -34,7 +76,10 @@ export function cellFromGridPoint(point: {x?: number; y?: number} | null | undef
     return null;
   }
 
-  return cellKey(Math.floor((y - 1) / RENDER_CELL_STEP), Math.floor((x - 1) / RENDER_CELL_STEP));
+  return getCellKey({
+    row: Math.floor((y - 1) / RENDER_CELL_STEP),
+    col: Math.floor((x - 1) / RENDER_CELL_STEP),
+  });
 }
 
 // isOpen reports whether a rendered token is a gap rather than a wall.
@@ -47,11 +92,11 @@ const isOpen = (token: string | undefined): boolean =>
 
 // --- Decoding the logged maze ---
 
-// decodeEncodedMaze expands the compact structure string back into the exact token grid Tapoo rendered.
-//
-// Returns a discriminated result rather than throwing, matching parseTapooLogExport: every failure here
-// is something a reader has to be told about, not an exceptional condition. A corrupt maze must not
-// degrade into a plausible-looking grid - a maze drawn from damaged bytes would be read as evidence.
+/** decodeEncodedMaze expands the compact structure string back into the exact token grid Tapoo rendered.
+ *
+ * Returns a discriminated result rather than throwing, matching parseTapooLogText: every failure here
+ * is something a reader has to be told about, not an exceptional condition. A corrupt maze must not
+ * degrade into a plausible-looking grid - a maze drawn from damaged bytes would be read as evidence. */
 export function decodeEncodedMaze(encoded: EncodedMaze | null | undefined): Result<{grid: string[][]}> {
   if (!encoded || typeof encoded !== "object") {
     return {ok: false, error: "This level carries no encoded maze."};
@@ -91,9 +136,9 @@ export function decodeEncodedMaze(encoded: EncodedMaze | null | undefined): Resu
 
 // mazeFromDecodedGrid reduces the rendered token grid to the logical wall graph the report reasons about.
 //
-// The result is deliberately the same shape as buildContext's context.exits - Map of "row,col" to a Set
-// of move names - so a cell's true exits and the exits the agent was actually shown can be compared
-// directly, which is the whole point of drawing the maze beside the profile.
+// The result is OpenCellExits, the same type buildContext's context.exits carries, so a cell's true
+// exits and the exits the agent was actually shown can be compared directly - which is the whole point
+// of drawing the maze beside the profile.
 function mazeFromDecodedGrid(
   grid: string[][],
   dimensions: EncodedMaze["dimensions"],
@@ -112,7 +157,7 @@ function mazeFromDecodedGrid(
     return {ok: false, error: `Encoded maze does not match its ${rows}x${cols} dimensions.`};
   }
 
-  const exits = new Map<CellKey, Set<Move>>();
+  const exits: OpenCellExits = new Map();
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
       const y = RENDER_CELL_STEP * row + 1;
@@ -123,7 +168,7 @@ function mazeFromDecodedGrid(
           open.add(move);
         }
       }
-      exits.set(cellKey(row, col), open);
+      exits.set(getCellKey({row, col}), open);
     }
   }
 
@@ -132,9 +177,11 @@ function mazeFromDecodedGrid(
 
 // --- Reading the maze ---
 
-// successPathLength walks the maze breadth-first and returns the fewest moves between two cells, or
-// null when no route exists. This is the success path length — the number of cells a player must
-// walk from start to finish without making any mistakes.
+/** successPathLength walks the maze breadth-first and returns the fewest **moves** between two cells,
+ * or null when no route exists - the shortest run a player could make without a wasted step.
+ *
+ * Moves, not cells: the start cell is distance 0, so a route of N moves passes through N + 1 cells.
+ * A caller presenting this beside a cell count has to add one or say "moves". */
 export function successPathLength(
   maze: Maze,
   fromCell: CellKey | null | undefined,
@@ -202,48 +249,12 @@ function mazeStats(
     deg3,
     deg4,
     edges: edgeSum / 2,
-    successPath: successPathLength(maze, startCell, destinationCell),
+    // Moves out, cells in. The row this feeds reads "N of 120", counted against the maze's cell
+    // count, so a move count there is one short in both the figure and its percentage. Converted here
+    // rather than at the view, so every reader of the stat gets the same unit.
+    successPathCells: (() => {
+      const moves = successPathLength(maze, startCell, destinationCell);
+      return moves === null ? null : moves + 1;
+    })(),
   };
-}
-
-// --- Entry point ---
-
-// mazeFromEncoded is the one call a consumer needs: encoded field in, wall graph and stats out.
-export function mazeFromEncoded(
-  encoded: EncodedMaze | null | undefined,
-  {startCell, destinationCell}: {startCell?: CellKey | null; destinationCell?: CellKey | null} = {},
-): MazeResult {
-  const decoded = decodeEncodedMaze(encoded);
-  if (!decoded.ok) {
-    return decoded;
-  }
-
-  const built = mazeFromDecodedGrid(decoded.grid, encoded?.dimensions);
-  if (!built.ok) {
-    return built;
-  }
-
-  const stats = mazeStats(built.maze, {startCell, destinationCell});
-
-  // Validate the two structural invariants that hold for any perfect maze (a spanning tree).
-  //
-  // edges == cells - 1: a connected acyclic graph on N nodes has exactly N-1 edges. More or fewer
-  // means the maze has a cycle or a disconnected region - either breaks the guarantee that every
-  // cell is reachable and that there is exactly one path between any two cells.
-  //
-  // deadEnds == deg3 + 2·deg4 + 2: follows from the handshaking lemma on a tree. Summing degrees
-  // gives 2·edges = 2·(cells-1). Expanding by degree class and eliminating corridors (deg2) yields
-  // this identity. A violation means the cell-classification counts are internally inconsistent.
-  if (stats.edges !== stats.cells - 1) {
-    return {ok: false, error: `Maze has cycles or disconnected regions: expected ${stats.cells - 1} edges for ${stats.cells} cells but found ${stats.edges}.`};
-  }
-  if (stats.deadEnds !== stats.deg3 + 2 * stats.deg4 + 2) {
-    return {ok: false, error: `Maze failed dead-end invariant: expected ${stats.deg3 + 2 * stats.deg4 + 2} dead ends (deg3=${stats.deg3}, deg4=${stats.deg4}) but found ${stats.deadEnds}.`};
-  }
-
-  if (startCell && destinationCell && stats.successPath === null) {
-    return {ok: false, error: "Maze has no navigable path from start to destination. The experiment is invalid."};
-  }
-
-  return {ok: true, maze: built.maze, grid: decoded.grid, stats};
 }

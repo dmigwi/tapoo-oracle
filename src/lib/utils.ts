@@ -4,14 +4,15 @@
 // that imports nothing can be imported by anything, so a helper living here is reachable from every
 // other module in the graph without the question of direction ever arising.
 //
-// The rule is not decoration. `log-contract.ts` needed the record coercion that `rubric-engine.ts`
+// The rule is not decoration. `log-contract.ts` needed the record coercion that `rubric-context.ts`
 // already exported, could not have it - the rubric engine imports the log contract - and so wrote its
 // own, twice over, in shapes that disagreed about whether an array is a record. That is what a helper
 // with nowhere to live costs.
 //
 // What belongs here: pure, document-free, and either genuinely generic or already wanted by two
 // modules. A helper only one module uses stays with that module; this is not a drawer for anything
-// small. The import rule is checked by module-graph.test.ts, because nothing in the linter checks it.
+// small. Nothing enforces the import rule - not the linter, not a test - so it holds only as long as
+// each new helper is added with it in mind; the first import here is what makes this module ordinary.
 
 // --- Reading values that arrived from outside the app ---
 //
@@ -64,7 +65,7 @@ export const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? va
 /** Capitalises the first character and leaves the rest of the string exactly as it was.
  *
  * Deliberately not a CSS `text-transform`: that would leave the DOM holding one string while the screen
- * showed another, so a test could no longer assert on what a reader actually sees. And deliberately not
+ * showed another, leaving a test unable to assert on what a reader actually sees. And deliberately not
  * a title-caser - the callers are single words whose remainder is already correct, and a helper that
  * rewrote the tail would quietly mangle any value that had a capital of its own.
  */

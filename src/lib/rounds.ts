@@ -1,109 +1,166 @@
-// Rounds: what happened in each played level, as the maze replay needs it.
+// Rounds: which rounds a log holds, and what happened in each of them.
+//
+// Three parts of one question. sliceLogIntoRounds cuts a parsed log into one slice per round,
+// agentsFromRound reads a round into one record per seat, and buildPlayedRounds derives what the
+// replay draws from a round's entries.
 //
 // Separate from the rubric engine because this derives evidence rather than answering a question - it
 // is the replay's input, not a verdict. It reads the same context the engine builds, one round at a
 // time, because a retry of a level is a different maze and merging the two would draw a path crossing
 // walls that exist in neither.
 
-import { LOG_EVENTS, cellFromLogged, isMove, stepFrom } from "./log-contract"
+import { LOG_EVENTS, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
-import { buildContext } from "./rubric-engine"
-import { asArray, asRecord } from "./utils"
-import type { CellKey, EncodedMaze, Level, LogEntry, Replay, Turn } from "./types"
+import { gameIdentityKey } from "./geometry"
+import { asRecord, asTrimmedText } from "./utils"
 
+// Re-exported: a caller naming a round reaches for this file, and that is still where it looks.
+export { gameIdentityKey } from "./geometry"
+import type {
+  AgentSummary,
+  CellKey,
+  Context,
+  EncodedMaze,
+  GameIdentity,
+  PlayedRound,
+  LogEntry,
+  Move,
+  Outcome,
+  ParsedLog,
+  RawTurnSetup,
+  Replay,
+  RoundSlice,
+  SlicedLogResult,
+  TurnSummary
+} from "./types"
 
-// answerRubric is the engine's public entry point: it returns the complete rubric result for one
-// log as plain data, with each group's per-question answers preserved alongside its verdict.
-//
-// The group fractions are carried rather than reduced to the verdict because the rubric requires
-// partial evidence to stay visible - "2/3" and "0/3" are both a `no`, and collapsing them would hide
-// the difference the contract exists to preserve.
-// resolveActingAgents maps each turn number to the raw playerName that acted on it.
-//
-// "Agent request." records the acting seat as a decorated label - "Katara the Trailblazer - Default" -
-// not a bare name, so the name is recovered by matching against the names the log states outright:
-// every filteredTraversalHistory entry and every round-end agent record. Matching rather than splitting
-// on " the " matters because a player may name themselves anything, including something containing that
-// phrase; an unmatched label is left unattributed rather than guessed at.
-function resolveActingAgents(entries: LogEntry[]): Map<number, string> {
-  const known = new Set<string>()
-  for (const entry of entries) {
-    const details = asRecord(entry.details)
-    const agentName = asRecord(details.agent).playerName
-    if (typeof agentName === "string" && agentName) {
-      known.add(agentName)
-    }
+// --- Entry point: what log-tabs-state calls ---
 
-    for (const message of asArray(details.messages).map(asRecord)) {
-      if (message.role !== "tool") {
-        continue
-      }
-      try {
-        const payload = asRecord(JSON.parse(typeof message.content === "string" ? message.content : ""))
-        for (const record of asArray(payload.filteredTraversalHistory).map(asRecord)) {
-          if (typeof record.playerName === "string" && record.playerName) {
-            known.add(record.playerName)
-          }
-        }
-      } catch {
-        // Not a JSON tool result; nothing to learn from it here.
-      }
-    }
+/** sliceLogIntoRounds cuts a parsed log into one slice per round, passing the log's warnings and checks
+ * through untouched.
+ *
+ * A round is the unit every verdict is about: each is an independent game with its own maze, start cell
+ * and decay budget.
+ *
+ * A slice is entries and an identity, so this costs no rubric pass - that is roundReportFor's, run for
+ * the round a reader opens. */
+export function sliceLogIntoRounds({source, warnings, checks}: ParsedLog, label: string): SlicedLogResult {
+  const [first, ...rest]: RoundSlice[] = groupEntriesByRound(source.entries).map(({identity, entries}) => ({
+    identity,
+    reportLabel: `${label} - ${roundLabel(identity)}`,
+    entries,
+  }));
+
+  // Unreachable: parseTapooLogText refuses a log with no readable entries, and groupEntriesByRound
+  // groups any non-empty list - a log naming no round still gets one holding everything. Stated once
+  // here, so no render has to guard the empty case.
+  if (!first) {
+    return {ok: false, error: "This log analyzed to no rounds, so there is nothing to report."};
   }
 
-  // Longest first, so a name that is a prefix of another cannot claim the other's turns.
-  const names = [...known].sort((first, second) => second.length - first.length)
+  return {
+    ok: true,
+    source,
+    warnings,
+    checks,
+    rounds: [first, ...rest],
+  };
+}
+
+// --- Reading one round ---
+
+/** The decorated label a request carries, and the player's name inside it.
+ *
+ * Tapoo writes "<player> the <Persona> - <speed>": "Katara the Trailblazer - Default",
+ * "Momo the Backtracker - 0.4360x". Three personas, and a name of 3 to 8 characters.
+ *
+ * The name is whatever precedes " the <Persona> - ", which is a different rule from splitting on " the ":
+ * a name may itself contain that phrase and still fit in eight characters, and a split hands back "A"
+ * where the player is "A the B".
+ *
+ * Both bounds and the persona set are stated rather than assumed, and together they leave one reading of
+ * any label. A name of 11 characters in that position is not a player, so a string of this shape reports
+ * nobody rather than inventing one; the quantifier's greediness does no work here, because within three to
+ * eight characters no label admits two parses.
+ *
+ * The cost of naming the personas is that a fourth stops resolving until it is added - visible as a seat
+ * missing from the round, which is the failure to watch for if Tapoo adds one. */
+const PLAYER_LABEL = /^(.{3,8}) the (?:Backtracker|Navigator|Trailblazer) - .+$/
+
+/** resolveActiveAgentNames maps each turn number to the name of the agent that was active on it.
+ *
+ * Active is the whole of what a turn records about a seat: only an active agent may predict, so a request
+ * is a turn taken by exactly one of them, and the name on it is that agent's.
+ *
+ * Exported for its own tests rather than for a caller: nothing outside this file needs it, and everything
+ * per-seat is joined by the name it returns - a turn it leaves unattributed is a turn whose charge, cells
+ * and setup belong to nobody, and a seat that acted goes unreported. A failure here is silent by
+ * construction, so it is checked directly.
+ *
+ * Two sources, and the request carries both. `details.playerName` is the name stated outright, which needs
+ * no recovery at all; `details.player` is the decorated label, which PLAYER_LABEL reads. Nothing else in
+ * the log is consulted - a round-end record names only whoever finished, and reading it here would
+ * attribute every turn of a two-seat round to one of them.
+ *
+ * This is the only thing that attributes a turn. */
+export function resolveActiveAgentNames(entries: LogEntry[]): Map<number, string> {
   const byTurn = new Map<number, string>()
+
   for (const entry of entries) {
-    if (entry.payload !== LOG_EVENTS.request || typeof entry.turn !== "number") {
+    if (entry.payload !== LOG_EVENTS.request || typeof entry.turn !== "number") continue
+    // One turn, one seat. A retry of a turn is that seat asking again, so the first request answers for it.
+    if (byTurn.has(entry.turn)) continue
+
+    const details = asRecord(entry.details)
+    if (typeof details.playerName === "string" && details.playerName !== "") {
+      byTurn.set(entry.turn, details.playerName)
       continue
     }
 
-    const label = asRecord(entry.details).player
-    if (typeof label !== "string") {
-      continue
-    }
-
-    const name = names.find((candidate) => label === candidate || label.startsWith(`${candidate} `))
-    if (name && !byTurn.has(entry.turn)) {
-      byTurn.set(entry.turn, name)
-    }
+    const name = typeof details.player === "string" ? PLAYER_LABEL.exec(details.player)?.[1] : undefined
+    if (name) byTurn.set(entry.turn, name)
   }
 
   return byTurn
 }
 
-// buildLevels groups the log into one record per played round and derives the path walked in each.
-//
-// Rounds are keyed by (game, level) rather than level alone: a retry of the same level is a different
-// round with a brand-new maze, so keying on level would merge two mazes into one and draw a path
-// crossing walls that exist in neither. buildContext runs per round for the same reason - positions and
-// exits from one maze must never leak into another.
-// reportedMoves reads the move list out of a replay record, or null when it holds none.
-//
-// The names are stripped of any "player:" prefix the way annotateApplied strips them - some producer
-// writes them that way, and the real logs to hand do not, so both must read the same.
-function reportedMoves(record: Replay | null): string[] | null {
-  if (!record) return null
-  const moves = asArray(record.lastSubmittedMoves)
-    .filter((move): move is string => typeof move === "string")
-    .map((move) => move.split(":").at(-1) ?? move)
+/** What a replay record says the turn submitted: how many commands, and the prefix of them the maze can
+ * apply. Null when the record states no list at all, which is the only "no evidence" case.
+ *
+ * Tapoo writes lastSubmittedMoves as the move commands themselves - "MoveLeft", "MoveDown" - the same
+ * vocabulary the model submitted, so the two compare directly.
+ *
+ * Narrowed the way parseTurnPrediction narrows a prediction: the prefix ends at the first command the
+ * maze has no move for. Both sides of the comparison below are then the same shape of the same list,
+ * which is what makes "does this record describe this turn?" a question about the record rather than
+ * about how each side was read.
+ *
+ * The count travels with the prefix because the prefix alone cannot tell two predictions apart: a turn
+ * that submitted "MoveUp" and one that submitted "MoveUp" then a command the maze cannot read share a
+ * prefix and differ in what they asked for. An empty prefix is not nothing either - a prediction whose
+ * every command was unreadable has one, and the record describing it is still that turn's. */
+function reportedMoves(record: Replay | null): {moves: Move[]; count: number} | null {
+  if (!record || !Array.isArray(record.lastSubmittedMoves)) return null
 
-  return moves.length > 0 ? moves : null
+  const moves: Move[] = []
+  for (const move of record.lastSubmittedMoves) {
+    if (!isMove(move)) break
+    moves.push(move)
+  }
+
+  return {moves, count: record.lastSubmittedMoves.length}
 }
 
 /** One played round's entries, with the identity the log stamped on them. */
 export type RoundGroup = {
-  /** `game/level`, the identity used everywhere a round is addressed. */
-  key: string;
-  game: number | null;
-  level: number | null;
+  /** Which round these entries belong to. */
+  identity: GameIdentity;
   entries: LogEntry[];
 };
 
-// roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
-// "2/1" beside a filename reads as a fraction or a date before it reads as a round.
-export function roundLabel({game, level}: {game: number | null; level: number | null}): string {
+/** roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
+ * "2/1" beside a filename reads as a fraction or a date before it reads as a round. */
+export function roundLabel({game, level}: GameIdentity): string {
   const parts = [
     typeof game === "number" ? `Game ${game}` : null,
     typeof level === "number" ? `Level ${level}` : null,
@@ -112,253 +169,471 @@ export function roundLabel({game, level}: {game: number | null; level: number | 
   return parts.length > 0 ? parts.join(" \u00b7 ") : "Whole log";
 }
 
-// groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
-//
-// The one definition of what a round is. The replay reads it to build a maze per round, and the report
-// reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
-// tab whose maze came from somewhere else.
+
+/** groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
+ *
+ * The one definition of what a round is. The replay reads it to build a maze per round, and the report
+ * reads it to answer the rubric per round; two partitions that could disagree would put a verdict on a
+ * tab whose maze came from somewhere else. */
 export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
-  // An entry that does not name its round belongs to the round in progress.
-  //
-  // Reading `entry.game ?? 0` per entry instead filed every such entry under a fabricated round "0/0".
-  // On a log that stamps game and level only on its round boundaries, that split one real round in two:
-  // a round holding the encoded maze and no turns, and a phantom round holding all the turns and no
-  // maze. The reader saw a replay whose scrubber ran 0 to 0 and a Turns column reading zero, on a log
-  // with hundreds of them.
-  //
-  // Entries are in recorded order, so the round in progress is whatever the last entry to name one
-  // said. Anything before the first such entry is held back and joins the round that opens after it -
-  // it cannot belong to an earlier one, because there is none.
-  const groups = new Map<string, RoundGroup>()
-  const beforeFirstRound: LogEntry[] = []
-  let game: number | null = null
-  let level: number | null = null
+  const groupedRounds: RoundGroup[] = []
+  let roundEntries: LogEntry[] = []
+  
+  // The key every entry recorded before the log names its first round carries.
+  const UNNAMED_ROUND_KEY = gameIdentityKey({game: null, level: null});
+
+  // The round the entry in hand belongs to. Carried forward rather than read off the entry, because an
+  // entry that names no round belongs to the round in progress - and game and level advance
+  // independently, so a log that stamps one without the other still names a round, "2/?".
+  let currentRound: GameIdentity = {game: null, level: null}
+
+  // The same two values one entry back, which is the round every entry gathered so far belongs to.
+  let prevRound: GameIdentity = currentRound
+  let prevRoundKey = UNNAMED_ROUND_KEY
 
   for (const entry of entries) {
-    if (typeof entry.game === "number") game = entry.game
-    if (typeof entry.level === "number") level = entry.level
+    currentRound = {
+      game: typeof entry.game === "number" ? entry.game : currentRound.game,
+      level: typeof entry.level === "number" ? entry.level : currentRound.level,
+    }
 
-    if (game === null && level === null) {
-      beforeFirstRound.push(entry)
+    // Nothing is closed while the previous round is still the unnamed one: those entries were recorded
+    // before the log named any round, so they join the round about to open rather than forming one of
+    // their own.
+    const currentRoundKey = gameIdentityKey(currentRound)
+    if (prevRoundKey !== UNNAMED_ROUND_KEY && currentRoundKey !== prevRoundKey) {
+      groupedRounds.push({identity: prevRound, entries: roundEntries})
+      roundEntries = [] // clear old entries.
+    }
+
+    roundEntries.push(entry)
+    prevRound = currentRound
+    prevRoundKey = currentRoundKey
+  }
+
+  // The round still being gathered has no successor to close it, and a log that named no round at all
+  // is gathered entirely here - one round, holding everything.
+  if (roundEntries.length > 0) {
+    groupedRounds.push({identity: prevRound, entries: roundEntries})
+  }
+
+  return groupedRounds
+}
+
+// --- The agents that played a round ---
+
+/** agentsFromRound reads one round into one record per seat: what each was running, and what it did.
+ *
+ * A single pass, deliberately. The setup half and the performance half were once gathered in two places,
+ * one of them a set of parallel arrays whose rows held together only by shared index, and neither could
+ * answer "what was seat 2 running". One record per seat cannot come apart that way.
+ *
+ * Here rather than in log-contract, which validates a round's payloads: this asks who played and under
+ * what, which is evidence about the round rather than a check on it - the same thing buildPlayedRounds
+ * below derives, and its only production caller.
+ *
+ * Takes the setup map rather than the whole Context: it reads one field, and a caller with turns and an
+ * outcome should not have to build a rubric context to name the seats that played them.
+ *
+ * Seats are ordered by the seat the log stated, and by who acted first where it stated none. */
+export function agentsFromRound(
+  rawSetupByTurn: ReadonlyMap<number, RawTurnSetup>,
+  turns: readonly TurnSummary[],
+  outcome: Outcome | null,
+): AgentSummary[] {
+  const seats: AgentSummary[] = []
+
+  // Two side tables keyed by the record itself, never by anything read off it. seatInfoAt below is the one
+  // answer to which seat a turn belongs to, and a derived key would be a second - free to disagree with it,
+  // and wrong in three ways:
+  //
+  //   By name, two seats that state their numbers and no player both answer to "".
+  //   By seat number, every seat on a log that numbers no turn answers to null.
+  //   By the two joined, a seat whose number arrives on a later turn changes key mid-pass, and everything
+  //   filed under the old one is orphaned - half a walk, half its echoes.
+  //
+  // A Map keyed by an object matches on the reference and never reads what is inside, so the arrays these
+  // records carry cost nothing to key on, and filling them in while the record is a key is safe. Which is
+  // just as well: the fold does exactly that.
+  //
+  // The echoes are held apart from what was declared. An echo drops the ":provider" suffix that says
+  // where the model was served from - "gemma4" for a declared "gemma4:cloud", and on Hugging Face
+  // "moonshotai/Kimi-K3" for "moonshotai/Kimi-K3:baseten" - so the declared name is the fuller of the two
+  // and the one to report. This list is only consulted for a seat nothing declared a model for.
+  const echoes = new Map<AgentSummary, string[]>()
+  const entered = new Map<AgentSummary, Set<CellKey>>()
+
+  const emptySummary = (name: string, seatId: number | null): AgentSummary => {
+    const seat: AgentSummary = {
+      name,
+      seatId,
+      models: [],
+      apis: [],
+      endpoints: [],
+      reasoningEfforts: [],
+      uniqueCells: null,
+      decayCharged: null,
+      traversalSpeed: null,
+    }
+    seats.push(seat)
+    return seat
+  }
+  const add = (list: string[], value: string | null): void => {
+    if (value !== null && !list.includes(value)) list.push(value)
+  }
+
+  /** The seat a turn belongs to, by the stated seat where there is one and by name otherwise.
+   *
+   * Tapoo gives each seat one player and one id, so either identifies a seat on its own. The stated seat
+   * is preferred because it is stated: it arrives on the request as a number, where the name arrives only
+   * after resolveActiveAgentNames has recovered it from a decorated label, which can fail - and a turn whose
+   * recovery failed still says outright which seat played it.
+   *
+   * Falls back to the name because a log that states no seat is still the common case, and to null: a
+   * turn with neither cannot be attributed, and guessing which seat it was is worse than saying nothing. */
+  const seatInfoAt = (seatId: number | null, name: string): AgentSummary | null => {
+    if (seatId !== null) {
+      const stated = seats.find((seat) => seat.seatId === seatId)
+      // A record can be made before its name is known - a turn that states its seat and no name - so the
+      // first turn to state one fills it in.
+      if (stated) {
+        if (stated.name === "" && name !== "") stated.name = name
+        return stated
+      }
+
+      // The same seat, met earlier on a turn that named it without numbering it. Adopting the record
+      // rather than opening a second one keeps a mixed round - some turns stating a seat, some not - as
+      // one seat rather than two halves of one.
+      const unnumbered = name === ""
+        ? undefined
+        : seats.find((seat) => seat.seatId === null && seat.name === name)
+      if (unnumbered) {
+        unnumbered.seatId = seatId
+        return unnumbered
+      }
+
+      return emptySummary(name, seatId)
+    }
+
+    if (name === "") return null
+    return seats.find((seat) => seat.name === name) ?? emptySummary(name, null)
+  }
+
+  // Every turn is played by exactly one seat, so a turn's setup, its charge and its cells are that
+  // seat's. One pass for all three: they are joined by the same identity, and computing them apart is
+  // what let a row be assembled out of two lists that agreed only by index.
+  //
+  // Unique cells *entered*, which is cells.slice(1) and not the whole walk. TurnSummary.cells opens with
+  // `before`, the cell the seat was already standing on, so the whole array is "where I was, then
+  // everywhere I went". Counting all of it credits a seat with a cell it never moved into, and for turn 0
+  // that cell is the start square - which Tapoo does not treat as the player's at all: its traversal
+  // history labels the start "Self" on every reading, and its outcome record counts 17 unique cells where
+  // the walk touches 18. For later turns the slice changes nothing, cells[0] already being in the set
+  // from the turn before, so this is precisely the start-square correction and it is what makes the count
+  // reconcile with playerUniqueCellsVisited.
+  for (const turn of turns) {
+    const setup = rawSetupByTurn.get(turn.turn)
+    // The seat off the turn, not off the setup map beside it. Both carry it - buildPlayedRounds fills one from
+    // the other - but the replay reads the turn, and one authority is what keeps a trail's colour and
+    // the row above it naming the same seat.
+    const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
+    if (!seat) continue
+
+    if (setup) {
+      add(seat.models, setup.model)
+      if (setup.echoedModel !== null) {
+        const echoed = echoes.get(seat) ?? []
+        add(echoed, setup.echoedModel)
+        echoes.set(seat, echoed)
+      }
+      add(seat.apis, setup.api)
+      add(seat.endpoints, setup.endpoint)
+      add(seat.reasoningEfforts, setup.reasoning)
+    }
+
+    if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged
+
+    const seen = entered.get(seat) ?? new Set<CellKey>()
+    for (const cell of turn.cells.slice(1)) seen.add(cell)
+    entered.set(seat, seen)
+  }
+
+  for (const [seat, seen] of entered) seat.uniqueCells = seen.size
+
+  // The outcome names one seat - whoever made the final dash - and carries its speed and, in v2.5.1, the
+  // only seatId the log states anywhere. Matched by that seat first, since that is the identity, and by
+  // name only for the logs that state no seat on a turn. Older logs name nobody, and a round with a
+  // single seat still has exactly one owner, so that case is attributed rather than dropped.
+  const record = asRecord(outcome?.agent)
+  const owner = asTrimmedText(record.playerName)
+  const ownerSeatId = typeof record.seatId === "number" ? record.seatId : null
+
+  /** Which seat the outcome is about, or undefined where the round cannot say.
+   *
+   * Four cases in order, each a different question about the same record. Ordered, not combined: the
+   * later ones are only right once the earlier ones have found nothing, and the last has a side effect. */
+  const resolveFinisher = (): AgentSummary | undefined => {
+    // The seat it states. That is the log's own answer, and it holds even for a seat whose name no turn
+    // resolved.
+    if (ownerSeatId !== null) {
+      const stated = seats.find((seat) => seat.seatId === ownerSeatId)
+      if (stated) return stated
+    }
+
+    // The name it states, which is all a log that numbers no turn has to offer.
+    if (owner !== "") {
+      const named = seats.find((seat) => seat.name === owner)
+      if (named) return named
+    }
+
+    // It names nobody, so there is nothing to match on. One seat played means one seat owns the outcome;
+    // with several, attributing it would be guessing, and the guess would credit whoever acted first.
+    if (owner === "" && ownerSeatId === null) return seats.length === 1 ? seats[0] : undefined
+
+    // It names a seat no turn produced - which happens when a log's requests carry nothing to attribute
+    // turns by. That seat played and the outcome is the log saying so, so it joins the roster here:
+    // dropping it reports a round as having no agents at all while the log plainly names one.
+    return emptySummary(owner, ownerSeatId)
+  }
+
+  const finisher = resolveFinisher()
+
+  if (finisher) {
+    const speed = Number(outcome?.traversalSpeed)
+    if (Number.isFinite(speed)) finisher.traversalSpeed = speed
+    // Only where the turns did not already state one: a request that names its own seat is the better
+    // source, being per turn rather than per round.
+    if (ownerSeatId !== null) finisher.seatId ??= ownerSeatId
+    // The record declares a model the same way a request does, so it joins the declared list rather than
+    // standing in for it.
+    add(finisher.models, asTrimmedText(record.model) || null)
+  }
+
+  // The echo, only where nothing declared a model - better than reporting no model at all, and it names
+  // the same model, just without the provider. Never alongside a declared name: the two are one model
+  // named twice, and listing both would read as a seat that ran two models, which is exactly what
+  // agentSettingsCheck reports as a finding.
+  for (const seat of seats) {
+    if (seat.models.length === 0) seat.models.push(...(echoes.get(seat) ?? []))
+  }
+
+  // A stated seat is the log's answer and beats the order they happened to act in.
+  return seats.sort((first, second) =>
+    first.seatId !== null && second.seatId !== null ? first.seatId - second.seatId : 0,
+  )
+}
+
+/** buildPlayedRound derives what the replay draws for one round: its maze, the path walked through it,
+ * its turns and the seats that played them. Null for entries holding no round at all.
+ *
+ * The context is required, and is the caller's. buildContext is the most expensive read the app makes,
+ * the caller has already done it over exactly these entries, and a second one cannot succeed where the
+ * first failed - it would be the same walk over the same log.
+ *
+ * One round, because a context describes one round. Positions and exits from one maze must never reach
+ * another: a retry of a level is a brand-new maze, so a context spanning two rounds would draw a path
+ * crossing walls that exist in neither. A caller holding a whole log groups it first - see
+ * groupEntriesByRound - and answers one group at a time, with that group's own context. */
+export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedRound | null {
+  const [group, ...rest] = groupEntriesByRound(entries)
+  if (!group) return null
+  if (rest.length > 0) {
+    throw new Error(
+      `buildPlayedRound was handed ${rest.length + 1} rounds; a context describes one, so group first`,
+    )
+  }
+
+  const {identity, entries: groupEntries} = group
+  const initLevelLog = asRecord(
+    groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
+  )
+  const activeAgentNames = resolveActiveAgentNames(groupEntries)
+
+  // Keyed by the turn it covers, so this is a plain lookup. The offset behind that - Tapoo reports a
+  // prediction's outcome on the request that follows it - belongs to the store holding these records,
+  // not to its callers. A later record must never be substituted: repeated move sequences could make
+  // one look compatible while attributing another turn's position, charge and applied count to this.
+  const recordFor = (turn: number): Replay | null => context.replayByTurn.get(turn) ?? null
+
+  const turns = context.predictions.map((prediction) => {
+    // What Tapoo said about this turn, if the next turn reported it. Preferred over the derivation
+    // below because it states where replay began and which move was the last to land, rather than
+    // inferring both from positions - and because inferring them was wrong on 13.6% of the turns of
+    // a real log, always on a multi-move batch.
+    const record = recordFor(prediction.turn)
+    const reported = reportedMoves(record)
+
+    // Only trusted when it describes this turn's prediction: the same commands, and as many of them as
+    // the turn submitted. A record that disagrees describes another turn, and a wrong path drawn
+    // confidently is worse than a derived one - so it falls through to the derivation instead.
+    //
+    // The count is compared as well as the moves because a prefix is not an identity: a turn that sent
+    // "MoveUp" and one that sent "MoveUp" then a command the maze cannot read share theirs.
+    const trusted = record !== null && reported !== null &&
+      reported.count === prediction.submittedCount &&
+      reported.moves.length === prediction.moves.length &&
+      reported.moves.every((move, index) => move === prediction.moves[index])
+
+    const startCell = trusted ? cellKeyFromLogged(record.lastReplayStartCell) : null
+    const appliedIndex = record?.lastAppliedMoveIndex
+    const applied = trusted
+      ? typeof appliedIndex === "number"
+        ? appliedIndex + 1
+        : 0
+      : prediction.applied ?? null
+
+    const before = (trusted ? startCell : null) ?? prediction.before ?? null
+
+    // applied is how many of the submitted moves landed; null means the log did not settle it, which
+    // is not the same as zero and must not be drawn as a completed step.
+    const landed = applied ?? 0
+    const cells: CellKey[] = before ? [before] : []
+    let cell = before
+    for (const move of prediction.moves.slice(0, landed)) {
+      if (!cell) {
+        break
+      }
+      cell = stepFrom(cell, move)
+      cells.push(cell)
+    }
+
+    const turn: TurnSummary = {
+      turn: prediction.turn,
+      seatId: context.rawSetupByTurn.get(prediction.turn)?.seatId ?? null,
+      playerName: activeAgentNames.get(prediction.turn) ?? null,
+      before,
+      moves: prediction.moves,
+      submittedCount: prediction.submittedCount,
+      applied,
+      cells,
+      decayCharged: trusted && typeof record.chargedMovesCount === "number" ? record.chargedMovesCount : null,
+      // The move that was refused, when one was: the first move past those that landed. This is the
+      // wall the agent walked into, and it is the single most useful thing to draw on the grid.
+      rejectedMove: typeof applied === "number" && applied < prediction.moves.length
+          ? prediction.moves[applied] ?? null
+          : null,
+    }
+
+    return turn
+  })
+
+  // A turn that produced no prediction is a turn all the same.
+  //
+  // When a response is malformed, exhausts the token cap, or fails on the wire, there are no moves to
+  // replay - nothing becomes a prediction, so without this the turn is absent from the replay.
+  // Tapoo counted it and charged for it regardless, three units, its heaviest penalty. So the report
+  // showed fewer turns than the round had (464 against Tapoo's own 473 in one log), and the decay
+  // strip could never add up to the round total because its most expensive turns were missing.
+  //
+  // `empty-prediction` is Tapoo's own marker for exactly this, so it is read rather than inferred.
+  const predicted = new Set(turns.map((turn) => turn.turn))
+  for (const [turn, replay] of context.replayByTurn.ascending()) {
+    // turn -1 is the payload logged on turn 0, which covers no turn.
+    if (replay.predictionStatus !== "empty-prediction" || turn < 0 || predicted.has(turn)) {
       continue
     }
 
-    const key = `${game ?? 0}/${level ?? 0}`
-    // Identity comes from the running cursor, not from the group's first entry: on a log that stamps
-    // game and level only on round boundaries, the first entry of a group often carries neither, and a
-    // tab labelled from it would read "Whole log" beside fourteen properly named siblings.
-    const group = groups.get(key) ?? {key, game, level, entries: []}
-    if (group.entries.length === 0 && groups.size === 0 && beforeFirstRound.length > 0) {
-      group.entries.push(...beforeFirstRound.splice(0))
-    }
-    group.entries.push(entry)
-    groups.set(key, group)
-  }
-
-  // A log that never names a round at all: one round, everything in it, as before.
-  if (beforeFirstRound.length > 0) {
-    groups.set("0/0", {key: "0/0", game: null, level: null, entries: beforeFirstRound})
-  }
-
-  return [...groups.values()]
-}
-
-export function buildLevels(entries: LogEntry[]): Level[] {
-  return groupEntriesByRound(entries).map(({key, entries: groupEntries}) => {
-    const context = buildContext(groupEntries, { label: key })
-    const started = asRecord(
-      groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
-    )
-    const actingAgents = resolveActingAgents(groupEntries)
-    const first = groupEntries[0]
-
-    // Keyed by the turn it covers, so this is a plain lookup. The offset that used to live here - Tapoo
-    // reports a prediction's outcome on the request that follows it - now belongs to the store that
-    // holds these records. A later record must never be substituted: repeated move sequences could make
-    // one look compatible while attributing another turn's position, charge and applied count to this.
-    const recordFor = (turn: number): Replay | null => context.replayByTurn.get(turn) ?? null
-
-    const turns = context.submissions.map((submission) => {
-      // What Tapoo said about this turn, if the next turn reported it. Preferred over the derivation
-      // below because it states where replay began and which move was the last to land, rather than
-      // inferring both from positions - and because inferring them was wrong on 13.6% of the turns of
-      // a real log, always on a multi-move batch.
-      const record = recordFor(submission.turn)
-      const reported = reportedMoves(record)
-
-      // Only trusted when it describes this turn's prediction. If the two disagree the cursor has
-      // landed on someone else's record, and a wrong path drawn confidently is worse than a derived
-      // one - so it falls through to the derivation instead.
-      const trusted =
-        record !== null &&
-        reported !== null &&
-        reported.length === submission.moves.length &&
-        reported.every((move, index) => move === submission.moves[index])
-
-      const startCell = trusted ? cellFromLogged(record.lastReplayStartCell) : null
-      const appliedIndex = record?.lastAppliedMoveIndex
-      const applied = trusted
-        ? typeof appliedIndex === "number"
-          ? appliedIndex + 1
-          : 0
-        : submission.applied ?? null
-
-      const before = (trusted ? startCell : null) ?? submission.before ?? null
-
-      // applied is how many of the submitted moves landed; null means the log did not settle it, which
-      // is not the same as zero and must not be drawn as a completed step.
-      const landed = applied ?? 0
-      const cells: CellKey[] = before ? [before] : []
-      let cell = before
-      for (const move of submission.moves.slice(0, landed)) {
-        if (!cell || !isMove(move)) {
-          break
-        }
-        cell = stepFrom(cell, move)
-        cells.push(cell)
-      }
-
-      const turn: Turn = {
-        turn: submission.turn,
-        playerName: actingAgents.get(submission.turn) ?? null,
-        before,
-        moves: submission.moves,
-        applied,
-        cells,
-        decayCharged:
-          trusted && typeof record.chargedMovesCount === "number" ? record.chargedMovesCount : null,
-        // The move that was refused, when one was: the first move past those that landed. This is the
-        // wall the agent walked into, and it is the single most useful thing to draw on the grid.
-        rejectedMove:
-          typeof applied === "number" && applied < submission.moves.length
-            ? (submission.moves[applied] as string | undefined) ?? null
-            : null,
-      }
-
-      return turn
+    turns.push({
+      turn,
+      seatId: context.rawSetupByTurn.get(turn)?.seatId ?? null,
+      playerName: activeAgentNames.get(turn) ?? null,
+      before: null,
+      moves: [],
+      submittedCount: 0,
+      applied: 0,
+      cells: [],
+      rejectedMove: null,
+      decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
     })
+  }
+  turns.sort((left, right) => left.turn - right.turn)
 
-    // A turn that produced no prediction is a turn all the same.
-    //
-    // When a response is malformed, exhausts the token cap, or fails on the wire, there are no moves to
-    // replay - nothing becomes a submission, and the turn used to vanish from the replay entirely.
-    // Tapoo counted it and charged for it regardless, three units, its heaviest penalty. So the report
-    // showed fewer turns than the round had (464 against Tapoo's own 473 in one log), and the decay
-    // strip could never add up to the round total because its most expensive turns were missing.
-    //
-    // `empty-prediction` is Tapoo's own marker for exactly this, so it is read rather than inferred.
-    const predicted = new Set(turns.map((turn) => turn.turn))
-    for (const [turn, replay] of context.replayByTurn.ascending()) {
-      // turn -1 is the payload logged on turn 0, which covers no turn.
-      if (replay.predictionStatus !== "empty-prediction" || turn < 0 || predicted.has(turn)) {
-        continue
-      }
-
-      turns.push({
-        turn,
-        playerName: actingAgents.get(turn) ?? null,
-        before: null,
-        moves: [],
-        applied: 0,
-        cells: [],
-        rejectedMove: null,
-        decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
-      })
-    }
-    turns.sort((left, right) => left.turn - right.turn)
-
-    // A turn that submitted nothing did not move, so it stands where the turn before it ended. Without
-    // this the scrubber would jump the agent back to the start on every empty turn.
-    let standing: CellKey | null = null
-    for (const turn of turns) {
-      if (turn.cells.length > 0) {
-        standing = turn.cells.at(-1) ?? standing
-        continue
-      }
-
-      turn.before = standing
-      turn.cells = standing ? [standing] : []
+  // A turn that submitted nothing did not move, so it stands where the turn before it ended. Without
+  // this the scrubber would jump the agent back to the start on every empty turn.
+  let standing: CellKey | null = null
+  for (const turn of turns) {
+    if (turn.cells.length > 0) {
+      standing = turn.cells.at(-1) ?? standing
+      continue
     }
 
-    const outcome = context.outcomes.at(-1) ?? null
+    turn.before = standing
+    turn.cells = standing ? [standing] : []
+  }
 
-    // The closing turn's charge is the only one no reading can carry, because no turn follows it to
-    // report it. The round total settles it by subtraction.
-    //
-    // Subtract every reported charge, not just the ones that reached a turn above. A turn that made no
-    // prediction still reports one, and glm-5.1 has 473 log turns against 464 predictions - summing
-    // only the attributed charges handed those nine turns' cost to the closing turn and made it 28
-    // instead of 1.
-    //
-    // Guarded on the readings covering every turn the round says it had. Without that, a turn that
-    // never called the tool leaves a hole the remainder would absorb just as silently.
-    const closing = turns.at(-1)
-    const roundCharge = outcome ? Number(outcome.decayUnitsCharged) : Number.NaN
-    const roundTurns = outcome ? Number(outcome.turnCount) : Number.NaN
-    const everyTurnReported =
-      Number.isFinite(roundTurns) && context.replayByTurn.size === roundTurns
+  const outcome = context.outcomes.at(-1) ?? null
 
-    if (closing && closing.decayCharged === null && everyTurnReported && Number.isFinite(roundCharge)) {
-      let reportedTotal = 0
-      for (const replay of context.replayByTurn.values()) {
-        reportedTotal += typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : 0
-      }
+  // The closing turn's charge is the only one no reading can carry, because no turn follows it to
+  // report it. The round total settles it by subtraction.
+  //
+  // Subtract every reported charge, not just the ones that reached a turn above. A turn that made no
+  // prediction still reports one, and glm-5.1 has 473 log turns against 464 predictions - summing
+  // only the attributed charges handed those nine turns' cost to the closing turn and made it 28
+  // instead of 1.
+  //
+  // Guarded on the readings covering every turn the round says it had. Without that, a turn that
+  // never called the tool leaves a hole the remainder would absorb just as silently.
+  const closing = turns.at(-1)
+  const roundCharge = outcome ? Number(outcome.decayUnitsCharged) : Number.NaN
+  const roundTurns = outcome ? Number(outcome.turnCount) : Number.NaN
+  const everyTurnReported =
+    Number.isFinite(roundTurns) && context.replayByTurn.size === roundTurns
 
-      const remainder = roundCharge - reportedTotal
-      if (remainder >= 0) {
-        closing.decayCharged = remainder
+  if (closing && closing.decayCharged === null && everyTurnReported && Number.isFinite(roundCharge)) {
+    let reportedTotal = 0
+    for (const replay of context.replayByTurn.values()) {
+      reportedTotal += typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : 0
+    }
+
+    const remainder = roundCharge - reportedTotal
+    if (remainder >= 0) {
+      closing.decayCharged = remainder
+    }
+  }
+
+  // The winning turn is the one turn no later reading can settle: the round ends, so no next request
+  // reports a position, and this log's round-end entry carries no lastActionResult either. Its final
+  // position is recorded though, so the closing turn is settled the way settlePredictions settles every
+  // other one - by finding the prefix of submitted moves that lands on the observed cell.
+  const endCell = outcome ? cellFromGridPoint(outcome.playerPosition) : null
+  const last = turns.at(-1)
+  if (last && last.applied === null && endCell && last.before) {
+    let cell = last.before
+    for (const [step, move] of last.moves.entries()) {
+      cell = stepFrom(cell, move)
+      last.cells.push(cell)
+      if (cell === endCell) {
+        last.applied = step + 1
+        break
       }
     }
 
-    // The winning turn is the one turn no later reading can settle: the round ends, so no next request
-    // reports a position, and this log's round-end entry carries no lastActionResult either. Its final
-    // position is recorded though, so the closing turn is resolved the way annotateApplied resolves
-    // every other one - by finding the prefix of submitted moves that lands on the observed cell.
-    const endCell = outcome ? cellFromGridPoint(outcome.playerPosition) : null
-    const last = turns.at(-1)
-    if (last && last.applied === null && endCell && last.before) {
-      let cell = last.before
-      for (const [step, move] of last.moves.entries()) {
-        if (!isMove(move)) {
-          break
-        }
-        cell = stepFrom(cell, move)
-        last.cells.push(cell)
-        if (cell === endCell) {
-          last.applied = step + 1
-          break
-        }
-      }
-
-      if (last.applied === null) {
-        // Nothing lands on the recorded finish, so the walk above proved nothing and its cells are
-        // speculation. Drop them rather than draw a path the log does not support.
-        last.cells = last.before ? [last.before] : []
-      }
+    if (last.applied === null) {
+      // Nothing lands on the recorded finish, so the walk above proved nothing and its cells are
+      // speculation. Drop them rather than draw a path the log does not support.
+      last.cells = last.before ? [last.before] : []
     }
+  }
 
-    const startPosition = (started.startPosition ?? null)
-    const level: Level = {
-      key,
-      game: first?.game ?? null,
-      level: first?.level ?? null,
-      encodedMaze: (started.maze ?? null) as EncodedMaze | null,
-      startPosition,
-      startCell: cellFromGridPoint(startPosition),
-      // Read through the contract's reader rather than assumed to be {row, col}: the same field
-      // arrives compacted as [row, col] in a downloaded log, and reading it directly is what left the
-      // destination undrawn and the shortest route reported as "no route found".
-      destinationCell: cellFromLogged(started.destinationCell),
-      historyWindowRadius:
-        typeof started.historyWindowRadius === "number" ? started.historyWindowRadius : null,
-      endCell,
-      observedExits: context.exits,
-      visitStatusAfterTurn: context.visitStatusAfterTurn,
-      positions: context.positions,
-      turns,
-      outcome,
-    }
+  const startPosition = (initLevelLog.startPosition ?? null)
+  const round: PlayedRound = {
+    identity,
+    encodedMaze: (initLevelLog.maze ?? null) as EncodedMaze | null,
+    startPosition,
+    startCell: cellFromGridPoint(startPosition),
+    // Read through the contract's reader rather than assumed to be {row, col}: the same field
+    // arrives compacted as [row, col] in a downloaded log, and reading it directly is what left the
+    // destination undrawn and the shortest route reported as "no route found".
+    destinationCell: cellKeyFromLogged(initLevelLog.destinationCell),
+    historyWindowRadius: typeof initLevelLog.historyWindowRadius === "number" ? initLevelLog.historyWindowRadius : null,
+    endCell,
+    observedExits: context.exits,
+    visitStatusAfterTurn: context.visitStatusAfterTurn,
+    positions: context.positions,
+    turns,
+    outcome,
+    agents: agentsFromRound(context.rawSetupByTurn, turns, outcome),
+  }
 
-    return level
-  })
+  return round
 }

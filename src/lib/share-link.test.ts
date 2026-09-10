@@ -34,6 +34,20 @@ describe("fetchOnlineJsonText", () => {
       .rejects.toThrow("exceeds the 5 byte")
   })
 
+  // The deadline is the fetch's own, so a request that never answers is abandoned rather than left
+  // spinning. Asserted through an injected timeout, not the default: a test that waited out the real
+  // one would take two minutes to prove a millisecond's worth of behaviour.
+  it("gives up on a host that stops answering", async () => {
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation timed out.", "TimeoutError"))
+      })
+    })))
+
+    await expect(fetchOnlineJsonText("https://example.com/log.json", {timeoutMs: 5}))
+      .rejects.toThrow(/timed out/)
+  })
+
   it("stops a streamed report once it exceeds the configured limit", async () => {
     const body = new ReadableStream({
       start(controller) {
@@ -148,7 +162,7 @@ describe("decodeReportPayload", () => {
 
   // The two sentences are asserted literally here and nowhere else. Every other case below compares
   // against these instead of repeating the prose, so rewording a message is a one-line change rather
-  // than a sweep through the file - which it was, three times over, before this was pulled out.
+  // than a sweep through the file for every spelling of the same mistake.
   const UNNAMED = "This link does not name a report."
   const ALTERED = "This link has been truncated, altered or damaged. Ask for a fresh link."
 

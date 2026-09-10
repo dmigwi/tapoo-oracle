@@ -200,7 +200,7 @@ a[href] {
   margin: 0 0 1.5rem;
 }
 
-.report-navigator {
+.log-tab-strip {
   display: flex;
   gap: 0.55rem;
   align-items: stretch;
@@ -210,20 +210,20 @@ a[href] {
   background: var(--oracle-footer);
 }
 
-.report-add {
+.log-tab-add {
   flex: 0 0 auto;
   min-height: 2.35rem;
   font-weight: 700;
   text-align: left;
 }
 
-.report-list {
+.log-tab-list {
   display: flex;
   gap: 0.45rem;
   min-width: 0;
 }
 
-.report-list-item {
+.log-tab {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 2.2rem;
   flex: 0 0 auto;
@@ -233,18 +233,18 @@ a[href] {
   background: var(--oracle-surface);
 }
 
-.report-list-item-active {
+.log-tab-active {
   border-color: var(--oracle-sage);
   background: var(--oracle-selected);
 }
 
-.report-list-item button {
+.log-tab button {
   border: 0;
   border-radius: 0;
   background: transparent;
 }
 
-.report-list-button {
+.log-tab-button {
   overflow: hidden;
   direction: rtl;
   min-width: 0;
@@ -253,9 +253,28 @@ a[href] {
   white-space: nowrap;
 }
 
-.report-delete {
+.log-tab-delete {
   border-left: 1px solid var(--oracle-line) !important;
   color: var(--oracle-muted);
+}
+
+/* A third column, only on a tab that failed. The grid is declared here rather than widened for every
+   tab, so a healthy strip keeps the two-column layout it has always had and nothing shifts when one
+   tab errors - only that tab grows a control. */
+.log-tab-error {
+  grid-template-columns: minmax(0, 1fr) 2.2rem 2.2rem;
+  border-color: var(--oracle-rose);
+}
+
+.log-tab-retry {
+  border-left: 1px solid var(--oracle-line) !important;
+  color: var(--oracle-rose);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.log-tab-retry:hover {
+  color: var(--oracle-ink);
 }
 
 /* No justify-items: start here. It was added so the share button would not stretch, but it sizes
@@ -379,6 +398,22 @@ a[href] {
    pasted onto a page. They are separated by space and a hairline instead, the way sections of a
    document are. */
 .metric,
+/* A round's own caveats, sitting under the round tabs rather than with the log's at the top of the
+   page. Tighter than a page-level notice because it is inside a section that already has its own
+   padding, and it belongs to the tabs directly above it. */
+.notice-round {
+  margin: 0.8rem 0 0;
+  padding: 0.9rem 1.1rem;
+}
+
+/* Which round these belong to. The tabs are directly above, so this confirms rather than explains. */
+.notice-round-label {
+  margin: 0.2rem 0 0.4rem;
+  font-size: var(--fs-nano);
+  font-weight: 600;
+  color: var(--oracle-muted);
+}
+
 .notice {
   border: 1px solid var(--oracle-line);
   background: var(--oracle-surface);
@@ -488,13 +523,56 @@ a[href] {
   white-space: nowrap;
 }
 
+/* What one seat was running, in the Agents table.
+ *
+ * The three values a reader compares between two seats - the model, the provider, the effort - carry the
+ * weight, and the words joining them into a sentence do not: "through" and "at" are the same words on
+ * every row, so a row where they read as loudly as the values costs a reader a pass over each one to
+ * find the three that differ.
+ *
+ * Bold rather than tinted, and untinted unlike .rubric-code above. That chip means "defined elsewhere on
+ * this page, go look", and nothing on the page defines a model name. */
+.agent-value {
+  font-weight: 700;
+}
+
+/* Mono only for the model: it is a literal string copied out of the log, where "Ollama" and "max" are
+   this page's own wording for what the log spelled differently. */
+.agent-model {
+  font-family: var(--oracle-mono);
+  font-size: 0.92em;
+}
+
+.agent-joiner {
+  color: var(--oracle-muted);
+}
+
+/* A setting the seat changed mid-round, in the page's caveat colour - the same amber .notice-warn uses,
+   and deliberately neither of the verdict colours: this says the report is harder to reproduce, not that
+   the agent did something wrong.
+ *
+ * The values are joined by an arrow rather than a comma, which the view does; this only has to make the
+ * row findable without reading it, since the row it marks is the one the Agent settings check names. */
+.agent-changed {
+  color: var(--oracle-amber);
+}
+
+/* Its own line, and breakable anywhere: a URL has no spaces to wrap at, so inline it either forced the
+   column wide or split mid-host wherever the cell happened to end. */
+.agent-endpoint {
+  display: block;
+  font-family: var(--oracle-mono);
+  font-size: 0.85em;
+  color: var(--oracle-muted);
+  overflow-wrap: anywhere;
+}
+
 /* One group per line, so the codes stack into a column down the left edge - the same reading order the
    rubric table below opens with, and the reason the code leads the name in the first place.
  *
- * Run together on wrapped lines the codes started wherever the previous name happened to end, which
- * looked like a column that had failed rather than a sentence. The cost is a line per group: five
- * lines where three ran on. A separator is no longer needed to say where an item ends - the line
- * break does it - so the middot is gone with it. */
+ * Run together on wrapped lines, the codes start wherever the previous name happens to end, which reads
+ * as a column that has failed rather than as a sentence. The cost is a line per group: five lines where
+ * three would run on. No separator is needed to say where an item ends - the line break does it. */
 .metric-group {
   display: block;
 }
@@ -1086,20 +1164,6 @@ td {
   margin: 0 0 0.75rem;
   font-size: var(--fs-h2);
   text-align: center;
-}
-
-.maze-controls:not(:empty) {
-  margin-bottom: 0.85rem;
-}
-
-.maze-level-select {
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--oracle-line);
-  border-radius: 0.25rem;
-  background: var(--oracle-paper);
-  color: var(--oracle-ink);
-  font: inherit;
-  font-size: var(--fs-small);
 }
 
 /* The grid is capped rather than stretched: a 6-column maze blown across a wide screen turns 32px

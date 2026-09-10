@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
-import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, provenanceRows, provenanceTableData, rubricQuestionRows, warningHeadline} from "./report-adapters"
-import {addReportTab, analyzeLogText, createInitialReportTabs, deleteReportTab, loadNewReportTabFromUrl, loadReportTabFromUrl, reportTabLabelFromUrl, trimReportTabLabel} from "./report-tabs"
+import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
+import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs-view"
 import {validateOnlineJsonUrl} from "./share-link"
-import type {Report, ReportTabsState, TapooLog} from "./types"
-import {at, expectErr, expectOk, firstRound, messagesOf, must} from "./test-support";
+import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
+import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
 // local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
@@ -18,7 +18,7 @@ beforeAll(() => {
   fixtureText = JSON.stringify(fixtureData)
   fixture = JSON.parse(fixtureText) as Record<string, unknown>
 
-  const result = analyzeLogText(fixtureText, {label: "fixture"})
+  const result = sliceLogText(fixtureText, {label: "fixture"})
   if (!result.ok) {
     throw new Error(`Remote test fixture is not analyzable: ${result.error}`)
   }
@@ -27,29 +27,31 @@ beforeAll(() => {
   fixtureSource = result.source
 })
 
-describe("analyzeLogText", () => {
+describe("sliceLogText", () => {
   it("analyzes a real Tapoo export", () => {
-    const result = analyzeLogText(fixtureText, { label: "fixture" })
+    const result = sliceLogText(fixtureText, { label: "fixture" })
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
     // One report per round, each carrying the full rubric. The fixture is a single-round log, so the
     // count is 1 - a multi-round log is what the round tabs exist for.
     expect(expectOk(result).rounds).toHaveLength(1)
-    expect(firstRound(result).model).toBe("gemma4")
+    // The declared name, not the "gemma4" the provider echoed back: an echo drops the ":cloud" saying
+    // where the model was served from, and that is the half a reader comparing two runs needs.
+    expect(firstRound(result).agents.map((agent) => agent.models)).toEqual([["gemma4:cloud"]])
     expect(firstRound(result).capabilities).toHaveLength(9)
     expect(firstRound(result).violations).toHaveLength(6)
   })
 
   it("explains an empty input rather than failing silently", () => {
-    expect(analyzeLogText("   ")).toEqual({
+    expect(sliceLogText("   ")).toEqual({
       ok: false,
       error: "Load a Tapoo agent-api log from an online JSON URL to begin.",
     })
   })
 
   it("reports malformed JSON", () => {
-    const result = analyzeLogText("{not json")
+    const result = sliceLogText("{not json")
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(/^Not valid JSON:/)
   })
@@ -58,19 +60,19 @@ describe("analyzeLogText", () => {
   // unrelated payload produced a confident-looking profile of nothing. Rejecting non-Tapoo input is
   // the behavior that replaced it, and it is worth a test of its own.
   it("rejects JSON that is not a Tapoo export", () => {
-    const result = analyzeLogText(JSON.stringify({ turns: [{ action: "move", status: "applied" }] }))
+    const result = sliceLogText(JSON.stringify({ turns: [{ action: "move", status: "applied" }] }))
     expect(result.ok).toBe(false)
     expect(expectErr(result).error).toMatch(/Not a Tapoo log export/)
   })
 
   it("surfaces contract warnings without refusing the log", () => {
-    const result = analyzeLogText(JSON.stringify({ ...fixture, mode: "human" }))
+    const result = sliceLogText(JSON.stringify({ ...fixture, mode: "human" }))
     expect(result.ok).toBe(true)
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/not "agent-api"/)
   })
 
   it("retains the source URL when one is provided", () => {
-    const result = analyzeLogText(fixtureText, {
+    const result = sliceLogText(fixtureText, {
       label: "sample-agent-api-log.json",
       sourceUrl: "https://example.com/logs/sample-agent-api-log.json",
     })
@@ -93,18 +95,26 @@ describe("report URL tabs", () => {
   })
 
   it("derives readable report labels from URLs", () => {
-    expect(reportTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
-    expect(reportTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
-    expect(reportTabLabelFromUrl("not a url", 2)).toBe("Report 3")
+    expect(extractTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
+    expect(extractTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
+    expect(extractTabLabelFromUrl("not a url", 2)).toBe("Report 3")
   })
 
-  it("trims long report labels from the beginning", () => {
-    expect(trimReportTabLabel("very-long-prefix-tapoo-agent-api-log.json", 27)).toBe("...tapoo-agent-api-log.json")
+  // A URL with neither a path segment nor a host still has to name its tab: every arm of this falls
+  // back, because naming a tab must not fail the load that produced it.
+  it("names a tab a URL gives nothing to name", () => {
+    expect(extractTabLabelFromUrl("file:///", 4)).toBe("Report 5")
+  })
+
+  // From the beginning, so the file name a reader tells two tabs apart by survives.
+  it("trims a long label from the beginning", () => {
+    expect(extractTabLabelFromUrl("https://example.com/logs/very-long-prefix-tapoo-agent-api-log.json", 0, 27))
+      .toBe("...tapoo-agent-api-log.json")
   })
 
   it("opens the add-report form without creating a report entry", () => {
-    const state = createInitialReportTabs()
-    const next = addReportTab(state, "report-fixed")
+    const state = createInitialLogTabs()
+    const next = addLogTab(state, "report-fixed")
 
     expect(next.tabs).toHaveLength(0)
     expect(next.activeTabId).toBeNull()
@@ -112,8 +122,8 @@ describe("report URL tabs", () => {
   })
 
   it("deletes the active tab and selects the nearest remaining tab", () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "loaded"},
         {id: "second", url: "https://example.com/second.json", label: "second.json", status: "loaded"},
@@ -122,28 +132,43 @@ describe("report URL tabs", () => {
       activeTabId: "second",
     }
 
-    const next = deleteReportTab(state, "second")
+    const next = deleteLogTab(state, "second")
     expect(next.tabs.map((tab) => tab.id)).toEqual(["first", "third"])
     expect(next.activeTabId).toBe("third")
   })
 
   it("returns to an empty report list after the last tab is deleted", () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [{id: "only", url: "https://example.com/only.json", label: "Only", status: "loaded"}],
       activeTabId: "only",
     }
-    const next = deleteReportTab(state, "only", () => "replacement")
+    const next = deleteLogTab(state, "only", () => "replacement")
 
     expect(next).toMatchObject({tabs: [], activeTabId: null, isAdding: true})
     expect(next.pendingTabId).toBe("replacement")
   })
 
-  it("loads a draft URL into a new report tab", async () => {
-    let state = addReportTab(createInitialReportTabs(), "first")
+  // The invariant the type now states: a parsed log always yields at least one round, so nothing
+  // downstream has to render around "loaded, but no rounds". A log that names no round at all still
+  // gets one holding everything.
+  it("always yields at least one round", () => {
+    const result = sliceLogText(fixtureText, {label: "fixture"})
+
+    expect(expectOk(result).rounds.length).toBeGreaterThan(0)
+    expect(expectOk(sliceLogText(JSON.stringify({
+      name: "tapoo",
+      version: "2.5.1",
+      mode: "agent-api",
+      entries: [{epochMs: 1, time: "t", log: "info", payload: "Agent request.", details: {}}],
+    }))).rounds).toHaveLength(1)
+  })
+
+  it("loads a draft URL into a new log tab", async () => {
+    let state = addLogTab(createInitialLogTabs(), "first")
     state = {...state, draftUrl: "https://example.com/first.json"}
 
-    const next = await loadNewReportTabFromUrl(state, async () => fixtureText)
+    const next = await loadNewLogTabFromUrl(state, async () => fixtureText)
     const first = next.tabs.find((tab) => tab.id === "first")
 
     expect(first).toMatchObject({
@@ -156,8 +181,8 @@ describe("report URL tabs", () => {
   })
 
   it("loads one existing tab without mutating other tabs", async () => {
-    const state: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const state: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [
         {id: "first", url: "https://example.com/first.json", label: "first.json", status: "empty"},
         {id: "second", url: "https://example.com/second.json", label: "second.json", status: "empty"},
@@ -165,7 +190,7 @@ describe("report URL tabs", () => {
       activeTabId: "first",
     }
 
-    const next = await loadReportTabFromUrl(state, "first", async () => fixtureText)
+    const next = await loadLogTabFromUrl(state, "first", async () => fixtureText)
     const first = next.tabs.find((tab) => tab.id === "first")
     const second = next.tabs.find((tab) => tab.id === "second")
 
@@ -175,13 +200,13 @@ describe("report URL tabs", () => {
   })
 
   it("stores load failures on the owning tab", async () => {
-    const tabState: ReportTabsState = {
-      ...createInitialReportTabs(),
+    const tabState: LogTabsState = {
+      ...createInitialLogTabs(),
       tabs: [{id: "missing", url: "notaurl", label: "New report", status: "empty"}],
       activeTabId: "missing",
     }
 
-    const next = await loadReportTabFromUrl(tabState, "missing", async () => fixtureText)
+    const next = await loadLogTabFromUrl(tabState, "missing", async () => fixtureText)
     expect(at(next.tabs, 0)).toMatchObject({
       status: "error",
       error: "Enter a valid URL.",
@@ -189,9 +214,9 @@ describe("report URL tabs", () => {
   })
 
   it("stores draft load failures without creating a report entry", async () => {
-    const state = {...addReportTab(createInitialReportTabs(), "missing"), draftUrl: "notaurl"}
+    const state = {...addLogTab(createInitialLogTabs(), "missing"), draftUrl: "notaurl"}
 
-    const next = await loadNewReportTabFromUrl(state, async () => fixtureText)
+    const next = await loadNewLogTabFromUrl(state, async () => fixtureText)
     expect(next).toMatchObject({
       tabs: [],
       isAdding: true,
@@ -252,25 +277,28 @@ describe("presentation", () => {
     // Null rather than the word "no": nothing scores an endpoint failure, and the table decides how to
     // print that. A display string here would put "no" and "V2.Q2" in one field, leaving the view to
     // tell a code from a word by looking at its characters.
-    expect(find("Endpoint failures").scoredBy).toBeNull()
-    expect(find("Empty responses").scoredBy).toBe("V2.Q2")
+    expect(find("Failed requests").scoredBy).toBeNull()
+    expect(find("Empty answers").scoredBy).toBe("V2.Q2")
   })
 
   it("pivots diagnostics into count and scoring rows", () => {
     const table = diagnosticTableData(fixtureReport)
     expect(table.columns).toEqual([
       "measure",
-      "Endpoint failures",
-      "Empty responses",
-      "Unparseable responses",
-      "Token cap exhaustions",
+      "Failed requests",
+      "Harness faults",
+      "Empty answers",
+      "Malformed predictions",
+      "Token cap hits",
+      "Times disabled",
     ])
-    expect(table.rows[0]).toMatchObject({measure: "Count", "Endpoint failures": 0})
-    expect(table.rows[1]).toMatchObject({measure: "Scored as", "Endpoint failures": "no"})
+    expect(table.rows[0]).toMatchObject({measure: "Count", "Failed requests": 0})
+    // "-" and not "no": nothing scores an endpoint failure, and "no" would read as a question answered.
+    expect(table.rows[1]).toMatchObject({measure: "Scored as", "Failed requests": "-"})
   })
 
   it("keeps the log address out of provenance", () => {
-    const rows = provenanceRows(fixtureSource, fixtureReport)
+    const rows = provenanceRows(fixtureSource)
 
     // The one field here that the log does not vouch for, and a table cell is the most screenshotted
     // place on the page to print an address the rest of this change keeps out of it. The share link
@@ -280,35 +308,27 @@ describe("presentation", () => {
   })
 
   it("describes provenance without inventing missing fields", () => {
-    const rows = provenanceRows(fixtureSource, fixtureReport)
+    const rows = provenanceRows(fixtureSource)
     expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.1")
 
-    const withoutVersion = analyzeLogText(JSON.stringify({ ...fixture, version: undefined }))
+    const withoutVersion = sliceLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
-    const missing = provenanceRows(withoutVersionOk.source, firstRound(withoutVersionOk))
+    const missing = provenanceRows(withoutVersionOk.source)
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
-  it("pivots provenance into one complete row", () => {
-    const table = provenanceTableData(fixtureSource, fixtureReport)
-    expect(table.rows).toHaveLength(1)
-    expect(table.rows[0]).toMatchObject({
-      "Tapoo version": "2.5.1",
-      Model: "gemma4",
-      Player: "Katara",
-    })
-  })
 
-  it("states the profile as a finding, leaving the method to the methodology", () => {
+  it("says only what no card and no table already says", () => {
     const summary = narrativeSummary(fixtureReport)
-    expect(summary).toMatch(/5 of 9 capabilities/)
+
+    expect(summary).toMatch(/predictions?\./)
     expect(summary).toMatch(/Navigator/)
-    // Which groups were met now lives on the cards. Repeating the ids here made the reader parse a
-    // sentence to learn what a number beside it already counted.
+    // The fraction is on the cards directly beneath, and the setup is on the Agents table - which can
+    // say which seat ran which, where a single sentence had to pick one.
+    expect(summary).not.toMatch(/of 9 capabilities/)
+    expect(summary).not.toMatch(/reasoning effort/)
     expect(summary).not.toMatch(/\(C\d/)
-    expect(summary).not.toMatch(/Confirmed violations/)
-    // What a NO means is explained once, in "How this report is generated". A summary that repeated
-    // it here would be the third copy on the page.
+    // What a NO means is explained once, in "How this report is generated".
     expect(summary).not.toMatch(/not that the model is incapable/)
   })
 })
@@ -342,10 +362,10 @@ describe("groupResultTone", () => {
 })
 
 describe("warningHeadline", () => {
-  // A warning is only shown when it costs the reader something, so the banner names that cost instead
-  // of asking them to infer it. The old heading was "Read with care", which is a tone rather than a
-  // finding - a reader could not tell from it whether a verdict below was wrong or whether the report
-  // was merely missing its provenance.
+  // A warning is only shown when it costs the reader something, so the banner names that cost instead of
+  // asking them to infer it. A heading like "Read with care" sets a tone rather than stating a finding, and
+  // leaves a reader unable to tell whether a verdict below is wrong or the report is merely missing its
+  // provenance.
   const inaccurate = {impact: "inaccurate", message: "x"} as const
   const incomplete = {impact: "incomplete", message: "y"} as const
 
@@ -369,12 +389,12 @@ describe("warningHeadline", () => {
   it("classifies the caveats a real log produces", () => {
     // A non-agent-api round is answered by questions written for a different mode, so the verdicts may
     // be wrong; a missing build version leaves every verdict standing but unattributable.
-    const wrongMode = analyzeLogText(JSON.stringify({...fixture, mode: "human"}))
+    const wrongMode = sliceLogText(JSON.stringify({...fixture, mode: "human"}))
     expect(expectOk(wrongMode).warnings.map((w) => w.impact)).toContain("inaccurate")
     expect(warningHeadline(expectOk(wrongMode).warnings))
       .toBe("This report may be inaccurate.")
 
-    const noVersion = analyzeLogText(JSON.stringify({...fixture, version: undefined}))
+    const noVersion = sliceLogText(JSON.stringify({...fixture, version: undefined}))
     expect(expectOk(noVersion).warnings.every((w) => w.impact === "incomplete")).toBe(true)
     expect(warningHeadline(expectOk(noVersion).warnings)).toBe("This report is missing important parts.")
   })
@@ -384,7 +404,7 @@ describe("modelOutputRows", () => {
   // What the provider said about its own work, normalized across two API shapes that report
   // overlapping but different things. Not scored - it is context for reading the verdicts.
   const reportWithOutput = (output: Partial<Report["output"]>): Report => ({
-    ...firstRound(analyzeLogText(fixtureText, {label: "fixture"})),
+    ...firstRound(sliceLogText(fixtureText, {label: "fixture"})),
     output: {responses: 0, promptTokens: null, completionTokens: null, reasoningTokens: null,
       cachedPromptTokens: null, finishReasons: [], ...output},
   })
@@ -430,13 +450,126 @@ describe("modelOutputRows", () => {
   })
 })
 
-describe("provenance names the setup a verdict depends on", () => {
-  it("reports the API provider and the reasoning effort", () => {
-    const result = expectOk(analyzeLogText(fixtureText, {label: "fixture"}))
-    const value = (field: string) =>
-      provenanceRows(result.source, firstRound(result)).find((row) => row.field === field)?.value
+// The table reads in a declared order, not in whatever order three separate construction sites appended
+// their checks. Asserted on the adapter rather than on the page, because this is where the order is decided.
+// The counts reach the table, which nothing asserted end to end: the real capture is a clean run, so every
+// column reads zero and a count that never arrived would look exactly the same.
+describe("the diagnostics a round actually reports", () => {
+  it("carries a failed request and a harness fault through to the table", () => {
+    const analysis = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
+    const table = diagnosticTableData(firstRound(analysis))
 
-    expect(value("API provider")).toBe("ollama")
-    expect(value("Reasoning effort")).toBe("max")
+    expect(table.rows[0]).toMatchObject({
+      measure: "Count",
+      // One of each, and the two are counted apart: a request that never came back is somebody else's
+      // outage, a tool handler that threw is the harness breaking.
+      "Failed requests": 1,
+      "Harness faults": 1,
+      // The model itself answered every turn, so nothing it did is counted here.
+      "Empty answers": 0,
+      "Malformed predictions": 0,
+      "Token cap hits": 0,
+      // The round ran to its end - a failed request is not a disabling.
+      "Times disabled": 0,
+    })
+    // Neither is scored: the violation profile is about the model's reasoning.
+    expect(table.rows[1]).toMatchObject({"Failed requests": "-", "Harness faults": "-"})
+  })
+})
+
+describe("the order the validation table reads in", () => {
+  const check = (name: string, scope: "log" | "round" = "round"): ValidationCheck =>
+    ({name, scope, outcome: "passed", detail: "x"})
+
+  it("puts the file first, then the maze, then what the agent was shown, then who played", () => {
+    // Built in the order the code happens to produce them, which is not the order to read them in.
+    const rows = validationRows([
+      check("Agent settings"),
+      check("User warnings"),
+      check("Encoded maze"),
+      check("Model responses", "log"),
+      check("Seat roster"),
+      check("Trimmed checksummed repeats"),
+      check("Traversal payloads"),
+      check("Log entry fields", "log"),
+      check("Agent personas"),
+      check("Tool descriptions"),
+      check("Prompts and tool descriptions"),
+    ])
+
+    expect(rows.map((row) => row.field)).toEqual([
+      "Log entry fields*",
+      "Model responses*",
+      "Encoded maze",
+      "Traversal payloads",
+      "Prompts and tool descriptions",
+      "Trimmed checksummed repeats",
+      "Tool descriptions",
+      "Agent personas",
+      "User warnings",
+      "Seat roster",
+      "Agent settings",
+    ])
+  })
+
+  // A check nobody has placed yet is still a check a reader should see. Sorting it out of the table would
+  // hide a finding; sorting it last says there is one more thing, and where it belongs is undecided.
+  it("shows a check missing from the order, at the end", () => {
+    const rows = validationRows([check("Something new"), check("Encoded maze")])
+
+    expect(rows.map((row) => row.field)).toEqual(["Encoded maze", "Something new"])
+  })
+})
+
+describe("provenance names the setup a verdict depends on", () => {
+  // The endpoint is an address, and this file already keeps one out of the DOM. This one is wanted - a
+  // reader cannot compare two runs without knowing where each was answered - but credentials in it are
+  // not, and validateOnlineJsonUrl already refuses them on the way in.
+  it("prints an endpoint without its credentials", () => {
+    expect(withoutCredentials("http://user:pass@host:11434/api/chat")).toBe("http://host:11434/api/chat")
+    expect(withoutCredentials("http://localhost:11434/api/chat")).toBe("http://localhost:11434/api/chat")
+    // Not a URL the constructor accepts: there is no userinfo to strip, so it passes through.
+    expect(withoutCredentials("not an address")).toBe("not an address")
+  })
+
+  it("keeps credentials out of the rendered agent row", () => {
+    const rows = agentRows([{
+      name: "Katara", seatId: 1, models: ["gemma4"], apis: ["ollama"],
+      endpoints: ["http://user:pass@host/api"], reasoningEfforts: ["max"],
+      uniqueCells: null, decayCharged: null, traversalSpeed: null,
+    }])
+
+    expect(rows[0]?.value).not.toMatch(/user:pass/)
+    expect(rows[0]?.value).toMatch(/http:\/\/host\/api/)
+  })
+
+  // Provenance carries only what belongs to the file and the round. The provider and the effort moved
+  // to the Agents table, where they belong to a seat: a round can seat two agents on two providers, and
+  // one row could only ever name one of them.
+  it("names each seat's provider and effort on the seat, not on the round", () => {
+    const result = expectOk(sliceLogText(fixtureText, {label: "fixture"}))
+    const fields = provenanceRows(result.source).map((row) => row.field)
+
+    expect(fields).toEqual(["Tapoo version", "Control mode", "Downloaded at", "Log entries"])
+    // Seat 1 because the log says so, on the round-end record - the only place v2.5.1 states a seat.
+    // Without reading it the label would fall back to acting order, which happens to agree here and so
+    // would hide the field being ignored.
+    expect(firstRound(result).agents.map((agent) => agent.seatId)).toEqual([1])
+    expect(agentRows(firstRound(result).agents)).toEqual([
+      {
+        field: "Katara \u00b7 Agent at Seat 1",
+        value: "gemma4:cloud on the Ollama API (http://localhost:11434/api/chat) at max reasoning effort",
+        // The same four values unjoined, which is what the table actually renders - the sentence is the
+        // fallback for anything that cannot weight them.
+        // Lists, not joined strings: the cell marks a setting the seat did not hold still, and it can
+        // only know one changed by being handed more than one value.
+        running: {
+          models: ["gemma4:cloud"],
+          api: ["Ollama"],
+          endpoint: ["http://localhost:11434/api/chat"],
+          effort: ["max"],
+        },
+      },
+    ])
   })
 })

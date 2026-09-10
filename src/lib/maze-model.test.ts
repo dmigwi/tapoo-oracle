@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {turnReports} from "./log-contract"
-import {analyzeLogText} from "./report-tabs"
-import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeLevelAgentStats, mazeStructureRows} from "./maze-model"
-import type {CellKey, EncodedMaze, Level, Outcome, Turn, VisitStatus, VisitStatusByTurn} from "./types"
-import {firstRound, must, reportWith} from "./test-support";
+
+import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
+import {agentsFromRound} from "./rounds"
+import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, SummaryRow, TurnSummary, VisitStatus, VisitStatusByTurn} from "./types"
+import {sliceLogText, firstRound, must} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -16,55 +17,66 @@ const REAL_MAZE: EncodedMaze = {
 }
 
 // A three-turn round through the real maze: two clean turns, then one whose second move hits a wall.
-type LevelOverrides = {encodedMaze?: EncodedMaze | null; turns?: Turn[]; outcome?: Outcome | null;
+type RoundOverrides = {encodedMaze?: EncodedMaze | null; turns?: TurnSummary[]; outcome?: Outcome | null;
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
-const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
-  historyWindowRadius = null}: LevelOverrides = {}): Level => ({
-  key: "2/1",
-  game: 2,
-  level: 1,
-  encodedMaze,
-  startCell: "0,0",
-  startPosition: null,
-  historyWindowRadius,
-  // A resolved cell key: buildLevels reads the logged shape - which may be {row, col} or
-  // [row, col] - through the contract, so a level model never carries the raw form.
-  destinationCell: "0,5",
-  endCell: "2,0",
-  observedExits: new Map(),
-  visitStatusAfterTurn: visitStatusAfterTurn ?? turnReports<Map<CellKey, VisitStatus>>(),
-  positions: [],
-  turns: turns ?? [
-    { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-    { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
-    {
-      turn: 2,
-      playerName: "Katara",
-      before: "2,0",
-      moves: ["MoveRight", "MoveUp"],
-      applied: 1,
-      cells: ["2,0", "2,1"],
-      rejectedMove: "MoveUp", decayCharged: null,
-    },
-  ],
-  outcome: outcome ?? {
-    outcome: "won",
-    traversalSpeed: "1.0000",
-    playerUniqueCellsVisited: 17,
-    decayUnitsCharged: 17,
+const DEFAULT_TURNS: TurnSummary[] = [
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  {
+    turn: 2,
+    seatId: null,
+    playerName: "Katara",
+    before: "2,0",
+    moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
+    applied: 1,
+    cells: ["2,0", "2,1"],
+    rejectedMove: "MoveUp", decayCharged: null,
   },
-})
+]
+
+const DEFAULT_OUTCOME: Outcome = {
+  outcome: "won",
+  traversalSpeed: "1.0000",
+  playerUniqueCellsVisited: 17,
+  decayUnitsCharged: 17,
+}
+
+const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
+  historyWindowRadius = null}: RoundOverrides = {}): PlayedRound => {
+  const played = turns ?? DEFAULT_TURNS
+  const ended = outcome === undefined ? DEFAULT_OUTCOME : outcome
+
+  return {
+    identity: {game: 2, level: 1},
+    encodedMaze,
+    startCell: "0,0",
+    startPosition: null,
+    historyWindowRadius,
+    // A resolved cell key: buildPlayedRounds reads the logged shape - which may be {row, col} or
+    // [row, col] - through the contract, so a level model never carries the raw form.
+    destinationCell: "0,5",
+    endCell: "2,0",
+    observedExits: new Map(),
+    visitStatusAfterTurn: visitStatusAfterTurn ?? turnReports<Map<CellKey, VisitStatus>>(),
+    positions: [],
+    turns: played,
+    outcome: ended,
+    // Derived the way buildPlayedRounds derives it, so these fixtures exercise the real parser rather than a
+    // hand-written stand-in. No setup map: these turns come from nothing that logged a request.
+    agents: agentsFromRound(new Map(), played, ended),
+  }
+}
 
 // A round of n turns whose only interesting property is what each was charged.
-const charged = (charges: Array<number | null>): Turn[] =>
+const charged = (charges: Array<number | null>): TurnSummary[] =>
   charges.map((decayCharged, turn) => ({
-    turn, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1,
+    turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
     cells: ["0,0", "1,0"], rejectedMove: null, decayCharged,
   }))
 
-const modelFor = (overrides: LevelOverrides = {}) =>
-  must(mazeReplayModel(reportWith(level(overrides)))[0], "a model for the round")
+const modelFor = (overrides: RoundOverrides = {}) =>
+  must(mazeReplayModel(level(overrides)), "a model for the round")
 
 describe("mazeReplayModel", () => {
   it("decodes the maze and lists the seats that acted", () => {
@@ -72,7 +84,7 @@ describe("mazeReplayModel", () => {
 
     expect(model.error).toBeNull()
     expect(must(model.maze, "a decoded maze").exits.size).toBe(24)
-    expect(model.agents).toEqual(["Katara"])
+    expect(model.agents.map((agent) => agent.name)).toEqual(["Katara"])
     expect(model.destinationCell).toBe("0,5")
   })
 
@@ -105,7 +117,8 @@ describe("mazeFrameAt", () => {
   it("accumulates the path as turns are played", () => {
     expect([...mazeFrameAt(model, 1).visited.keys()]).toEqual(["0,0", "1,0"])
     expect(mazeFrameAt(model, 2).currentCell).toBe("2,0")
-    expect(mazeFrameAt(model, 2).positions.get("Katara")).toBe("2,0")
+    // Keyed by seat, and Katara is the round's only one.
+    expect(mazeFrameAt(model, 2).positions.get(0)).toBe("2,0")
   })
 
   it("surfaces the refused move only on the turn that produced it", () => {
@@ -120,22 +133,41 @@ describe("mazeFrameAt", () => {
     expect(mazeFrameAt(model, 99).turnIndex).toBe(3)
   })
 
+  // Keyed by the player's name, trails, markers and colours collapse here: a seat that states its number
+  // and no player answers to "", so two of them share one key - one trail walking both paths, one marker,
+  // one colour, drawn as a single agent in two places.
+  it("keeps two seats apart when neither states a player", () => {
+    const nameless = modelFor({
+      turns: [
+        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+      ],
+      outcome: null,
+    })
+
+    expect(nameless.agents.map((agent) => [agent.seatId, agent.name])).toEqual([[1, ""], [2, ""]])
+
+    const frame = mazeFrameAt(nameless, 2)
+    expect(frame.positions.get(0)).toBe("1,0")
+    expect(frame.positions.get(1)).toBe("2,0")
+  })
+
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
       ],
     })
 
     const frame = mazeFrameAt(shared, 2)
-    expect(shared.agents).toEqual(["Katara", "Bumi"])
-    expect(frame.positions.get("Katara")).toBe("1,0")
-    expect(frame.positions.get("Bumi")).toBe("2,0")
+    expect(shared.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
+    expect(frame.positions.get(0)).toBe("1,0")
+    expect(frame.positions.get(1)).toBe("2,0")
   })
 })
 
-const value = (rows: {field: string; value: string}[], field: string) =>
+const value = (rows: SummaryRow[], field: string) =>
   rows.find((row) => row.field === field)?.value
 
 // Statuses are reported per turn, and only for the cells inside that turn's history window - so a cell
@@ -198,9 +230,9 @@ describe("visit statuses across a scrub", () => {
     expect(mazeFrameAt(model, 2).visited.get("1,0")?.status).toBe("backtracking")
   })
 
-  // Frame 0 has played nothing, so it may read only the opening payload - the one logged on turn 0,
-  // stored under -1. Bounded by `undefined` it used to fall through the guard and swallow every report
-  // in the round, showing the end state before a single move had been drawn.
+  // Frame 0 has played nothing, so it may read only the opening payload - the one logged on turn 0, stored
+  // under -1. A bound of `undefined` falls through the guard and swallows every report in the round,
+  // showing the end state before a single move is drawn.
   it("shows only the opening payload before any turn is played", () => {
     const model = withStatuses([
       [0, [["0,0", "backtracking"]]],
@@ -241,8 +273,10 @@ describe("mazeLevelRows", () => {
 
     expect(value(rows, "Outcome")).toBe("won")
     expect(value(rows, "Turns")).toBe("3")
-    expect(value(rows, "Success path")).toBe("17 of 24 (71%)")
-    // Agent-specific rows are no longer in mazeLevelRows.
+    // Cells, not moves: the 17-move route passes through 18 cells, and the row compares it against
+    // the maze's 24 cells. Counting moves here read "17 of 24 (71%)" - one short in both halves.
+    expect(value(rows, "Success path")).toBe("18 of 24 (75%)")
+    // Agent-specific rows belong to the per-seat cards, not to this table.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
   })
@@ -305,58 +339,60 @@ describe("decayTally", () => {
   })
 })
 
-describe("mazeLevelAgentStats", () => {
+// The per-seat figures, gathered by agentsFromRound as one record each. Formatting - "3 of 24 (13%)" -
+// belongs to the replay panel, which has the maze's cell count; these assert the numbers, and
+// maze-view.test.ts asserts what a reader sees.
+describe("agentsFromRound", () => {
+  const seatsOf = (over: Parameters<typeof level>[0] = {}) => level(over).agents
+
   it("reports traversal speed and cells entered for the single agent", () => {
     // outcome.agent is absent in the test fixture, so the sole agent inherits the outcome.
-    const stats = mazeLevelAgentStats(modelFor())!
+    const [katara] = seatsOf()
 
-    expect(stats.agents).toEqual(["Katara"])
-    expect(stats.traversalSpeeds).toEqual(["Navigator (1.0000)"])
+    expect(katara?.name).toBe("Katara")
+    expect(katara?.traversalSpeed).toBe(1)
     // Entered, not occupied. Katara's turns walk "0,0","1,0","2,0","2,1", but "0,0" is the square she
     // was placed on - Tapoo labels it "Self" in its own history and leaves it out of the count.
-    expect(stats.cellsEntered).toEqual(["3 of 24 (13%)"])
+    expect(katara?.uniqueCells).toBe(3)
   })
 
   // The check that settles the semantics rather than asserting our own arithmetic back at us: Tapoo
   // states its own figure in the outcome record, and ours has to equal it. Counting the start square
   // made this 18 against Tapoo's 17.
   it("reconciles with the unique-cell count Tapoo reports for the round", () => {
-    const result = analyzeLogText(JSON.stringify(fixtureData), {label: "gemma4"})
+    const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
     const round = firstRound(result)
-    const level = must(round.levels[0], "the fixture's only round")
-    const model = must(mazeReplayModel(round)[0], "a model for the round")
-    const stats = must(mazeLevelAgentStats(model), "the round's agent stats")
+    const played = must(round.playedRound, "the fixture's only round")
 
-    const reported = level.outcome?.playerUniqueCellsVisited
-    expect(reported).toBe(17)
-    expect(stats.cellsEntered[0]).toBe(`${String(reported)} of 24 (71%)`)
+    expect(played.outcome?.playerUniqueCellsVisited).toBe(17)
+    expect(must(played.agents[0], "the round's only seat").uniqueCells).toBe(17)
 
     // And the radius the round was actually configured with, read from the same export.
+    const model = must(mazeReplayModel(round.playedRound), "a model for the round")
     expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
   })
 
-  it("reports not-recorded decay when turns carry no charge", () => {
+  it("reports no decay when turns carry no charge", () => {
     // The test fixture has decayCharged: null on every turn.
-    const stats = mazeLevelAgentStats(modelFor())!
-    expect(stats.decayCharged).toEqual(["not recorded"])
+    expect(seatsOf()[0]?.decayCharged).toBeNull()
   })
 
   it("accumulates per-turn decay per agent", () => {
-    const stats = mazeLevelAgentStats(modelFor({
+    const seats = seatsOf({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, playerName: "Katara", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
       ],
-    }))!
+    })
 
-    expect(stats.decayCharged).toEqual(["3"])
+    expect(seats[0]?.decayCharged).toBe(3)
   })
 
   it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
-    const stats = mazeLevelAgentStats(modelFor({
+    const seats = seatsOf({
       turns: [
-        { turn: 0, playerName: "Katara", before: "0,0", moves: ["MoveDown"], applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, playerName: "Bumi", before: "1,0", moves: ["MoveDown"], applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
       ],
       outcome: {
         outcome: "won",
@@ -366,21 +402,24 @@ describe("mazeLevelAgentStats", () => {
         playerUniqueCellsVisited: 3,
         decayUnitsCharged: 3,
       },
-    }))!
+    })
 
-    expect(stats.agents).toEqual(["Katara", "Bumi"])
+    expect(seats.map((seat) => seat.name)).toEqual(["Katara", "Bumi"])
     // Katara owns the outcome; Bumi does not.
-    expect(stats.traversalSpeeds[0]).toMatch(/0\.9634/)
-    expect(stats.traversalSpeeds[1]).toBe("not recorded")
-    expect(stats.decayCharged).toEqual(["1", "2"])
+    expect(seats[0]?.traversalSpeed).toBe(0.9634)
+    expect(seats[1]?.traversalSpeed).toBeNull()
+    expect(seats.map((seat) => seat.decayCharged)).toEqual([1, 2])
     // Each seat is credited only with what it moved into: Katara entered "1,0", Bumi entered "2,0".
     // The cell each was standing on when its turn opened belongs to whoever moved there.
-    expect(stats.cellsEntered[0]).toMatch(/^1 of/)
-    expect(stats.cellsEntered[1]).toMatch(/^1 of/)
+    expect(seats.map((seat) => seat.uniqueCells)).toEqual([1, 1])
   })
 
-  it("is null when there is no maze to describe", () => {
-    expect(mazeLevelAgentStats(modelFor({ encodedMaze: null }))).toBeNull()
+  it("names no seat for a round whose turns name no player", () => {
+    const anonymous = [
+      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+    ]
+
+    expect(seatsOf({turns: anonymous})).toEqual([])
   })
 })
 

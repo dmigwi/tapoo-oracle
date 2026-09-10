@@ -13,14 +13,14 @@
 // between the two - a build-only bundle would leave `make dev` resolving a graph the build never
 // exercises, and the failure has no diagnostic.
 //
-// Bundling also subsumes the old per-file strip. These modules are heavily commented on purpose - the
-// rubric semantics are only defensible with the reasoning next to the code - but that reasoning is for
-// readers of the repository, not for browsers. A bundle drops it along with the module boundaries,
-// and unlike a per-file strip it can tree-shake and rename across them.
+// Bundling also does the stripping. These modules are heavily commented on purpose - the rubric semantics
+// are only defensible with the reasoning next to the code - but that reasoning is for readers of the
+// repository, not for browsers. A bundle drops it along with the module boundaries, and unlike a per-file
+// strip it can tree-shake and rename across them.
 //
 // Staging before Observable runs (rather than minifying its output) matters for more than tidiness:
 // Observable fingerprints each emitted module by content hash. Minifying afterwards would leave every
-// filename describing bytes that are no longer served.
+// filename describing bytes other than the ones served.
 //
 // src/ is never modified.
 
