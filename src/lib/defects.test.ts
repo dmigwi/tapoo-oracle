@@ -2,7 +2,7 @@ import {describe, expect, it} from "vitest"
 
 import {cellFromKey, cellFromLogged, cellKeyFromLogged, getCellKey, openMovesFromLogged} from "./log-contract"
 import {mazeReplayModel} from "./maze-model"
-import {createInitialLogTabs, deleteLogTab, extractTabLabelFromUrl} from "./log-tabs"
+import {createInitialLogTabs, deleteLogTab, extractTabLabelFromUrl} from "./log-tabs-view"
 import {buildLevels} from "./rounds"
 import {VIOLATIONS, buildContext, parsePrediction} from "./rubric-engine"
 import {decodeReportPayload, validateOnlineJsonUrl} from "./share-link"

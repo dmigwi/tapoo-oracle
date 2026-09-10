@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
-import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs"
+import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs-view"
 import {validateOnlineJsonUrl} from "./share-link"
 import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
 import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";

@@ -25,7 +25,8 @@ import {
 } from "./report-adapters";
 import type { AgentRow } from "./report-adapters";
 import { CHANGED_JOIN } from "./report-adapters";
-import { createInitialLogTabs, roundReportFor } from "./log-tabs";
+import { createInitialLogTabs } from "./log-tabs-view";
+import { roundReportFor } from "./rubric-report";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
@@ -35,11 +36,11 @@ import type { SlicedLogResult, GroupKind, RegionView, Report, LogTab, LogTabsSta
 // --- Entry points: what index.md calls ---
 //
 // All three of the page's calls arrive here, so index.md names one module and the view layer decides
-// what else the page reaches. The control itself is built in log-tabs-control.ts - it owns a DOM node
+// what else the page reaches. The tabs view itself is built in log-tabs-view.ts - it owns a DOM node
 // and its own state, which this module's render functions deliberately do not - and is re-exported
 // rather than reimplemented.
 
-export { createLogTabsInput } from "./log-tabs-control";
+export { createLogTabsInput } from "./log-tabs-view";
 
 
 /** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */

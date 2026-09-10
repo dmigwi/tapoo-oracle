@@ -4,7 +4,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import {createLogTabsInput} from "./log-tabs-control"
+import {createLogTabsInput} from "./log-tabs-view"
 import {appBasePath, reportPayloadFromHash, reportPayloadFromPath, shareLinkFor} from "./share-link"
 import {encodeReportPayload, fetchFailureMessage} from "./share-link"
 import {at, expectOk, must, query, queryAll} from "./test-support";

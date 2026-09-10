@@ -1,4 +1,7 @@
-// Rounds: what happened in each played level, as the maze replay needs it.
+// Rounds: which rounds a log holds, and what happened in each of them.
+//
+// Both halves of the same question. sliceLogIntoRounds cuts a parsed log into one slice per round, and
+// buildLevels derives what the replay draws from a round's entries.
 //
 // Separate from the rubric engine because this derives evidence rather than answering a question - it
 // is the replay's input, not a verdict. It reads the same context the engine builds, one round at a
@@ -13,7 +16,54 @@ import { asArray, asRecord } from "./utils"
 
 // Re-exported: a caller naming a round reaches for this file, and that is still where it looks.
 export { gameIdentityKey } from "./geometry"
-import type { CellKey, Context, EncodedMaze, GameIdentity, Level, LogEntry, Replay, Turn } from "./types"
+import type {
+  CellKey,
+  Context,
+  EncodedMaze,
+  GameIdentity,
+  Level,
+  LogEntry,
+  ParsedLog,
+  Replay,
+  RoundSlice,
+  SlicedLogResult,
+  Turn
+} from "./types"
+
+// --- Entry point: what log-tabs-state calls ---
+
+/** sliceLogIntoRounds cuts a parsed log into one slice per round, passing the log's warnings and checks
+ * through untouched.
+ *
+ * A round is the unit every verdict is about: each is an independent game with its own maze, start cell
+ * and decay budget.
+ *
+ * A slice is entries and an identity, so this costs no rubric pass - that is roundReportFor's, run for
+ * the round a reader opens. */
+export function sliceLogIntoRounds({source, warnings, checks}: ParsedLog, label: string): SlicedLogResult {
+  const [first, ...rest]: RoundSlice[] = groupEntriesByRound(source.entries).map(({identity, entries}) => ({
+    identity,
+    reportLabel: `${label} - ${roundLabel(identity)}`,
+    entries,
+  }));
+
+  // Unreachable: parseTapooLogText refuses a log with no readable entries, and groupEntriesByRound
+  // groups any non-empty list - a log naming no round still gets one holding everything. Stated once
+  // here, so no render has to guard the empty case.
+  if (!first) {
+    return {ok: false, error: "This log analyzed to no rounds, so there is nothing to report."};
+  }
+
+  return {
+    ok: true,
+    source,
+    warnings,
+    checks,
+    rounds: [first, ...rest],
+  };
+}
+
+// --- Reading one round ---
 
 /** The decorated label a request carries, and the player's name inside it.
  *

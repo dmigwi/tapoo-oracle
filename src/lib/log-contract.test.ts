@@ -6,7 +6,7 @@ import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENV
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
 import type {AgentSummary, LogEntry, TurnSetup, ValidationCheck} from "./types"
 import {buildLevels, groupEntriesByRound, roundLabel} from "./rounds"
-import {roundReportFor} from "./log-tabs"
+import {roundReportFor} from "./rubric-report"
 import {fnv1a64Checksum} from "./utils"
 import {sliceLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
 

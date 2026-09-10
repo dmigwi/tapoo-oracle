@@ -1,7 +1,9 @@
-// The log tabs control: the one Observable view the page binds to.
+// The log tabs view: the one Observable view the page binds to.
 //
-// Built imperatively because it owns its own state and repaints in place. Everything it decides is
-// delegated to the pure reducers in log-tabs.ts, so the logic stays testable without a document.
+// Built imperatively because it owns a DOM node, its own state and repaints in place - the parts of
+// the workspace that need a document. Everything it decides is delegated to the pure reducers in
+// log-tabs-state.ts, which also declares the two contracts these components are handed: LogTabActions
+// and WorkspaceSync.
 
 import {
   addLogTab,
@@ -10,7 +12,7 @@ import {
   loadNewLogTabFromUrl,
   loadLogTabFromUrl,
   updateLogTab,
-  } from "./log-tabs"
+  } from "./log-tabs-state"
 import {
   appRootFor,
   decodeReportPayload,
@@ -18,7 +20,22 @@ import {
   reportPayloadFromPath,
   shareLinkFor,
 } from "./share-link"
+import type { LogTabActions, WorkspaceSync } from "./log-tabs-state"
 import type { LogTab, LogTabsInput, LogTabsState } from "./types"
+
+// The tab state reaches the rest of the app through here, and through nowhere else - the lint rule in
+// eslint.config.mjs says so. A reducer is only ever right beside the view that repaints from what it
+// returns, so a second caller mutating tab state without repainting is a bug this makes unwritable.
+// Re-exported rather than wrapped: the reducers are already the whole contract.
+export {
+  addLogTab,
+  createInitialLogTabs,
+  deleteLogTab,
+  extractTabLabelFromUrl,
+  loadNewLogTabFromUrl,
+  loadLogTabFromUrl,
+  updateLogTab,
+} from "./log-tabs-state"
 
 // --- Entry point: what report-view re-exports to the page ---
 
@@ -26,7 +43,7 @@ import type { LogTab, LogTabsInput, LogTabsState } from "./types"
  *
  * It is a `viewof` element: its `value` is the current LogTabsState, and it emits an `input` event
  * whenever that value changes, which is what makes the markdown's dependent cells recompute. Every
- * decision it makes is delegated to the pure reducers in log-tabs.ts. */
+ * decision it makes is delegated to the pure reducers in log-tabs-state.ts. */
 export function createLogTabsInput(
   {fetchText}: {fetchText?: (url: string) => Promise<string>} = {},
 ): LogTabsInput {
@@ -63,28 +80,7 @@ export function createLogTabsInput(
   return root;
 }
 
-// --- The state the controls act on ---
-
-/** What the rendered controls may ask the workspace to do.
- *
- * The render helpers are handed this rather than the state setter alone, because several of them
- * dispatch a state change derived from the state at click time, not at render time. */
-type LogTabActions = {
-  getState: () => LogTabsState
-  setState: (next: LogTabsState) => void
-  updateDraftUrl: (draftUrl: string) => void
-  loadNewTab: () => void | Promise<void>
-  retryTab: (tabId: string) => void | Promise<void>
-}
-
-/** The three things every async workspace action needs: the current state, a way to replace it, and
- * the fetcher tests substitute. */
-type WorkspaceSync = {
-  getState: () => LogTabsState
-  setState: (next: LogTabsState) => void
-  fetchText?: (url: string) => Promise<string>
-}
-
+// --- The controls the page renders ---
 
 // A chain, inline rather than a font or an image request: the page loads no third-party asset, and
 // an icon that fails to load beside its label would look like a broken control. A chain says "link"
@@ -141,9 +137,7 @@ function createShareControl(url: string): HTMLElement {
 function createReportWorkspaceRoot(readState: () => LogTabsState): LogTabsInput {
   const root = document.createElement("section");
   root.className = "report-workspace";
-  Object.defineProperty(root, "value", {
-    get: readState,
-  });
+  Object.defineProperty(root, "value", { get: readState });
   // defineProperty cannot widen the element's type, so the cast states the contract the property
   // just established: this node carries the current state as `value`, which is what Observable's
   // view() reads.

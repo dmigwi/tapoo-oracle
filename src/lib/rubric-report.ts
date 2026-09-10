@@ -1,4 +1,5 @@
-// One round's report: what buildReport composes, and the rubric answers it is composed from.
+// One round's report: the answered round a reader opens, what buildReport composes it from, and the
+// rubric answers underneath.
 //
 // Named for the rubric rather than the report, like rubric-engine beneath it: this is the bottom of
 // the report path, not the top. report-view and report-adapters are the two files above it, and a
@@ -8,17 +9,65 @@
 // the round's replay record - and having the engine import the rounds would make the two mutually
 // dependent for no reason other than where the composition happened to sit.
 //
-// buildReport first, then the rubric pass it calls: the file reads in the order the work happens.
+// roundReportFor is the entry - it is what report-view asks for - and beneath it buildReport, then the
+// rubric pass buildReport calls: the file reads in the order the work happens.
 
-import { classifyTraversalSpeed } from "./log-contract"
+import { agentSettingsCheck, classifyTraversalSpeed, parseGameRound, seatRosterCheck } from "./log-contract"
 import { buildLevels } from "./rounds"
 import { CAPABILITIES, VIOLATIONS, aggregate, buildContext } from "./rubric-engine"
-import type { Context, GroupKind, GroupResult, LogEntry, Report, RubricGroup } from "./types"
+import type { Context, GroupKind, GroupResult, LogEntry, Report, RoundReport, RoundSlice, RubricGroup } from "./types"
 
-// --- Entry point: what log-tabs calls ---
+
+
+// --- Entry point: what report-view calls ---
+
+// Answered rounds, keyed by the slice they were answered from.
+//
+// A WeakMap rather than a field on the slice: the slices live inside a log tab's state, which the
+// reducers replace wholesale on every change, and a cache written into that state would either be
+// copied around or mutated in place. Keyed by object identity instead, so it survives a re-render -
+// updateLogTab keeps `result` by reference - and is collected with the tab when it closes.
+const answered = new WeakMap<RoundSlice, RoundReport>();
+
+/** roundReportFor answers one round, once: its rubric verdicts and its own caveats.
+ *
+ * This is where a log stops being cheap. Opening a file reads its envelope and slices it into rounds;
+ * everything expensive - the rubric pass, the maze decode, the checksum reconstruction - happens here,
+ * for the round a reader actually opened, rather than all fourteen of a fourteen-round file up front.
+ *
+ * Memoized, so returning to a round is free and the object identity of what the view holds is stable
+ * across renders. */
+export function roundReportFor(slice: RoundSlice): RoundReport {
+  const cached = answered.get(slice);
+  if (cached) return cached;
+
+  const report = buildReport(slice.entries, {label: slice.reportLabel});
+  const round = parseGameRound(slice.entries);
+  const resolved: RoundReport = {
+    ...slice,
+    report,
+    // Composed here because the check needs both halves: parseGameRound reads the round's payloads and
+    // knows nothing of seats, while the summaries come from the answered report. Neither should have to
+    // reach for the other to say whether a seat's setup held for the whole round.
+    round: {
+      ...round,
+      checks: [
+        ...round.checks,
+        // Over the round's turns, which is where a seat and a player are stated together. A round that
+        // decoded no maze still has turns to check, so this reads the turns and not the maze.
+        seatRosterCheck(report.level?.turns ?? []),
+        agentSettingsCheck(report.agents),
+      ],
+    },
+  };
+  answered.set(slice, resolved);
+  return resolved;
+}
+
+// --- Building one round's report ---
 
 /** buildReport reads one round's entries once and returns everything the page shows about that round,
- * as plain data. Called by log-tabs.roundReportFor, which memoizes what comes back.
+ * as plain data. Called by roundReportFor above, which memoizes what comes back.
  *
  * Three steps, each owned elsewhere:
  *

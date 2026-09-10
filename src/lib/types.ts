@@ -659,7 +659,7 @@ export type LogTabStatus = "empty" | "loaded" | "error";
 export type DraftStatus = "empty" | "loading" | "error";
 
 /** One loaded log and its report. `loadedUrl` is what actually produced `result`, which is not always
- * `url` - the field can be edited after a load, and comparing the two is what tells the control the
+ * `url` - the field can be edited after a load, and comparing the two is what tells the view the
  * displayed report is stale. */
 export type LogTab = {
   id: string;
@@ -671,7 +671,7 @@ export type LogTab = {
   error?: string;
 };
 
-/** The whole control's state, replaced wholesale on every change rather than mutated in place. */
+/** The whole tabs view's state, replaced wholesale on every change rather than mutated in place. */
 export type LogTabsState = {
   tabs: LogTab[];
   activeTabId: string | null;

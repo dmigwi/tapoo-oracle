@@ -1,6 +1,7 @@
 import {LOG_EVENTS, parseTapooLogText} from "./log-contract";
 import {fnv1a64Checksum} from "./utils";
-import {sliceLogIntoRounds, roundReportFor} from "./log-tabs";
+import {sliceLogIntoRounds} from "./rounds";
+import {roundReportFor} from "./rubric-report";
 import type {GroupResult, Level, LogEntry, LogLevel, SlicedLogResult, LogWarning, RegionView, Report} from "./types";
 
 // Helpers shared by the suites.
