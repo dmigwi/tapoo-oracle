@@ -1003,3 +1003,43 @@ describe("a replay reporting a command the maze cannot read", () => {
     expect(only?.moves).toEqual(["MoveDown"])
   })
 })
+
+// A charge the log states plainly must reach the report. Three things stand between the field and the
+// turn - the payload being stored, being filed under this turn, and the record being trusted - and the
+// last of those is a comparison, so it is the one that can quietly drop a figure that exists.
+describe("the charge a replay record states", () => {
+  const roundOf = (submitted: string[], reported: string[]) => playedRound([
+    logEntry({turn: 0, payload: LOG_EVENTS.request, details: {tools: [], messages: [
+      toolMessage({currentCell: {row: 0, col: 0}}),
+    ]}}),
+    logEntry({turn: 0, payload: LOG_EVENTS.response, details: {
+      payload: {message: {content: JSON.stringify({moves: submitted})}},
+    }}),
+    logEntry({turn: 1, payload: LOG_EVENTS.request, details: {tools: [], messages: [toolMessage({
+      lastMoveStatus: "invalid-move",
+      lastSubmittedMoves: reported,
+      lastAppliedMoveIndex: -1,
+      lastReplayStartCell: {row: 0, col: 0},
+      chargedMovesCount: 3,
+    })]}}),
+  ]).turns[0]
+
+  // A prediction whose every command the maze cannot read has an empty applicable prefix - and so does
+  // the record describing it. Empty on both sides is a match, not an absence: reading it as "no moves
+  // reported" discards a charge the log stated, and Tapoo charges its most for exactly this turn.
+  it("is read for a prediction the maze could read none of", () => {
+    expect(roundOf(["Up", "Down"], ["Up", "Down"])?.decayCharged).toBe(3)
+  })
+
+  it("is read when the prefix and the count both match", () => {
+    expect(roundOf(["MoveUp"], ["MoveUp"])?.decayCharged).toBe(3)
+    expect(roundOf(["MoveUp", "Teleport"], ["MoveUp", "Teleport"])?.decayCharged).toBe(3)
+  })
+
+  // Two predictions can share a prefix and differ in what they asked for, so the count is compared as
+  // well: without it the shorter turn would borrow the longer one's start cell, applied count and charge.
+  it("is refused when the records describe a different prediction", () => {
+    expect(roundOf(["MoveUp"], ["MoveUp", "Teleport"])?.decayCharged).toBeNull()
+    expect(roundOf(["MoveUp"], ["MoveDown"])?.decayCharged).toBeNull()
+  })
+})

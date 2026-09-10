@@ -331,9 +331,14 @@ export function buildContext(
           // sequences, 30 of which were seen with different lastAppliedMoveIndex values. Last write
           // wins, so 63 turns ended up with another turn's path, applied count and refused move.
           //
-          // A turn re-reads the same result on each of its requests, so writing it repeatedly is
-          // idempotent - no turn was ever observed reporting two different values.
-          context.replayByTurn.record(currentTurn, payload)
+          // The first reading of a turn is kept, not the last. A turn usually re-reads the same result
+          // on each of its requests, but not always: when a request fails mid-turn - a provider 402
+          // that disabled the agent, in the log this rule comes from - the turn runs again and the tool
+          // now answers about *its own* failed attempt, "empty-prediction" charged nothing. Recorded
+          // last, that answer replaces the previous turn's real result and its charge disappears from
+          // the strip. Recorded first, the reading that describes turn N - 1 is the one that survives,
+          // and a turn that genuinely made no prediction is still reported by the turn after it.
+          context.replayByTurn.record(currentTurn, payload, (existing) => existing)
 
           if (payload.lastMoveStatus !== null) {
             const key = JSON.stringify([

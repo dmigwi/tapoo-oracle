@@ -12,7 +12,7 @@
 import { LOG_EVENTS, cellKeyFromLogged, isMove, stepFrom } from "./log-contract"
 import { cellFromGridPoint } from "./maze"
 import { gameIdentityKey } from "./geometry"
-import { asArray, asRecord, asTrimmedText } from "./utils"
+import { asRecord, asTrimmedText } from "./utils"
 
 // Re-exported: a caller naming a round reaches for this file, and that is still where it looks.
 export { gameIdentityKey } from "./geometry"
@@ -124,25 +124,31 @@ export function resolveActiveAgentNames(entries: LogEntry[]): Map<number, string
   return byTurn
 }
 
-// reportedMoves reads the move list out of a replay record, or null when it holds none.
-//
-// Tapoo writes lastSubmittedMoves as the move commands themselves - "MoveLeft", "MoveDown" - the same
-// vocabulary the model submitted, so the two compare directly.
-//
-// Narrowed the way parseTurnPrediction narrows a prediction: the applicable prefix, ending at the first
-// command the maze has no move for. Both sides of the comparison below are then the same shape of the
-// same list, which is what makes "does this record describe this turn?" a question about the record
-// rather than about how each side was read.
-function reportedMoves(record: Replay | null): Move[] | null {
-  if (!record) return null
+/** What a replay record says the turn submitted: how many commands, and the prefix of them the maze can
+ * apply. Null when the record states no list at all, which is the only "no evidence" case.
+ *
+ * Tapoo writes lastSubmittedMoves as the move commands themselves - "MoveLeft", "MoveDown" - the same
+ * vocabulary the model submitted, so the two compare directly.
+ *
+ * Narrowed the way parseTurnPrediction narrows a prediction: the prefix ends at the first command the
+ * maze has no move for. Both sides of the comparison below are then the same shape of the same list,
+ * which is what makes "does this record describe this turn?" a question about the record rather than
+ * about how each side was read.
+ *
+ * The count travels with the prefix because the prefix alone cannot tell two predictions apart: a turn
+ * that submitted "MoveUp" and one that submitted "MoveUp" then a command the maze cannot read share a
+ * prefix and differ in what they asked for. An empty prefix is not nothing either - a prediction whose
+ * every command was unreadable has one, and the record describing it is still that turn's. */
+function reportedMoves(record: Replay | null): {moves: Move[]; count: number} | null {
+  if (!record || !Array.isArray(record.lastSubmittedMoves)) return null
 
   const moves: Move[] = []
-  for (const move of asArray(record.lastSubmittedMoves)) {
+  for (const move of record.lastSubmittedMoves) {
     if (!isMove(move)) break
     moves.push(move)
   }
 
-  return moves.length > 0 ? moves : null
+  return {moves, count: record.lastSubmittedMoves.length}
 }
 
 /** One played round's entries, with the identity the log stamped on them. */
@@ -461,8 +467,9 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
     // landed on someone else's record, and a wrong path drawn confidently is worse than a derived
     // one - so it falls through to the derivation instead.
     const trusted = record !== null && reported !== null &&
-      reported.length === prediction.moves.length &&
-      reported.every((move, index) => move === prediction.moves[index])
+      reported.count === prediction.submittedCount &&
+      reported.moves.length === prediction.moves.length &&
+      reported.moves.every((move, index) => move === prediction.moves[index])
 
     const startCell = trusted ? cellKeyFromLogged(record.lastReplayStartCell) : null
     const appliedIndex = record?.lastAppliedMoveIndex

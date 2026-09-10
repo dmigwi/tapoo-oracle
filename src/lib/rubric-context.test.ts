@@ -718,3 +718,51 @@ describe("a prediction carrying fields beyond its moves", () => {
     expect(answer('{"moves":["MoveUp"],"reasoning":"heading south"}')).toBe(false)
   })
 })
+
+// A turn that runs twice reads the outcome tool twice, and the second answer is not about the same
+// turn: after a failed request takes the agent out and it comes back, the tool describes that failure
+// rather than the prediction before it. Keeping the first reading is what stops a real charge being
+// replaced by one describing nothing.
+describe("a turn that read the outcome tool twice", () => {
+  const tool = (content: unknown) => ({role: "tool", content: JSON.stringify(content)})
+  const outcomeOf = (over: Record<string, unknown>) => tool({
+    status: "running", lastMoveStatus: "applied", predictionStatus: "all-applied", lastReplayStartIndex: 0, ...over,
+  })
+
+  // Turn 88 predicted two moves and was charged one; turn 89 read that, then failed on the wire and
+  // read again, the tool now answering "empty-prediction" about turn 89's own attempt.
+  const disabledMidTurn = (): LogEntry[] => [
+    entry(LOG_EVENTS.request, {tools: [], messages: [tool({currentCell: {row: 11, col: 21}})]}, {turn: 88}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveUp","MoveRight"]}'}}}, {turn: 88}),
+
+    entry(LOG_EVENTS.request, {tools: [], messages: [outcomeOf({
+      lastReplayStartCell: {row: 11, col: 21}, lastSubmittedMoves: ["MoveUp", "MoveRight"],
+      lastAppliedMoveIndex: 1, chargedMovesCount: 1,
+    })]}, {turn: 89}),
+    entry(LOG_EVENTS.providerHttpFailure, {status: 402}, {log: "error", turn: 89}),
+    entry(LOG_EVENTS.agentDisabled, {seatId: 4, playerName: "Aang"}, {log: "error", turn: 89}),
+
+    entry(LOG_EVENTS.request, {tools: [], messages: [outcomeOf({
+      lastMoveStatus: "network-error", predictionStatus: "empty-prediction", lastReplayStartIndex: null,
+      lastReplayStartCell: null, lastSubmittedMoves: [], lastAppliedMoveIndex: null, chargedMovesCount: 0,
+    })]}, {turn: 89}),
+    entry(LOG_EVENTS.response, {payload: {message: {content: '{"moves":["MoveLeft"]}'}}}, {turn: 89}),
+  ]
+
+  it("keeps the reading that describes the turn before, not the one about its own failure", () => {
+    const covering88 = buildContext(disabledMidTurn()).replayByTurn.get(88)
+
+    expect(covering88?.chargedMovesCount).toBe(1)
+    expect(covering88?.lastSubmittedMoves).toEqual(["MoveUp", "MoveRight"])
+    expect(covering88?.predictionStatus).toBe("all-applied")
+  })
+
+  // The failure itself is still counted where it belongs - as an endpoint failure and a disabling -
+  // so nothing about the round being cut short is lost by keeping the earlier reading.
+  it("still counts the failure that interrupted the turn", () => {
+    const context = buildContext(disabledMidTurn())
+
+    expect(context.endpointFailures).toBe(1)
+    expect(context.agentDisablings).toBe(1)
+  })
+})
