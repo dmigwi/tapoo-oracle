@@ -133,6 +133,10 @@ export type TapooLog = {
   version: string | null;
   mode: string | null;
   downloadedAt: string | null;
+  /** Tapoo runtime URL recorded when the exported session started. */
+  platform: string | null;
+  /** Browser and operating-system label recorded when the exported session started. */
+  device: string | null;
   entries: LogEntry[];
   sourceUrl?: string;
 };

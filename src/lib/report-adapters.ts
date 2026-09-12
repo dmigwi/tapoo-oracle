@@ -221,9 +221,11 @@ export function provenanceRows(source: TapooLog): SummaryRow[] {
     // most screenshotted place on the page to put an address that the rest of this change exists to
     // keep out of it. What remains is provenance the log vouches for.
     {field: "Tapoo version", value: source.version ?? "not recorded"},
-    {field: "Control mode", value: source.mode ?? "not recorded"},
+    {field: "Platform", value: source.platform ?? "not recorded"},
+    {field: "Device", value: source.device ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
     {field: "Log entries", value: formatCount(source.entries.length)},
+    {field: "Control mode", value: source.mode ?? "not recorded"},
   ];
 }
 

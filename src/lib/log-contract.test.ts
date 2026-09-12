@@ -135,6 +135,42 @@ describe("parseTapooLogText", () => {
     expect(expectOk(result).source.entries).toHaveLength(1)
   })
 
+  it("reads v2.6.1 device and platform provenance from the export envelope", () => {
+    const result = parse(envelope({
+      version: "2.6.1",
+      platform: "http://0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+      entries: [entry({
+        payload: LOG_EVENTS.levelStarted,
+        details: {
+          platform: "ignored legacy platform",
+          device: "ignored legacy device",
+        },
+      })],
+    }))
+
+    expect(expectOk(result).source).toMatchObject({
+      platform: "http://0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+    })
+  })
+
+  it("rejects malformed provenance but preserves blank strings exactly", () => {
+    const malformed = expectOk(parse(envelope({
+      version: "2.6.1",
+      platform: 5500,
+      device: {browser: "Chrome"},
+    }))).source
+    const blank = expectOk(parse(envelope({
+      version: "2.6.1",
+      platform: "  ",
+      device: "",
+    }))).source
+
+    expect(malformed).toMatchObject({platform: null, device: null})
+    expect(blank).toMatchObject({platform: "  ", device: ""})
+  })
+
   it.each([
     ["a non-object", 42, /object at the top level/],
     ["null", null, /object at the top level/],

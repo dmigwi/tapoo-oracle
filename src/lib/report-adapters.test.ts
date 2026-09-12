@@ -317,6 +317,17 @@ describe("presentation", () => {
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
   })
 
+  it("shows device and platform provenance exactly as logged", () => {
+    const rows = provenanceRows({
+      ...fixtureSource,
+      platform: "http://reader:secret@0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+    })
+
+    expect(rows).toContainEqual({field: "Platform", value: "http://reader:secret@0.0.0.0:5500/agents"})
+    expect(rows).toContainEqual({field: "Device", value: "Chrome/152.0.0.0 on macOS"})
+  })
+
 
   it("says only what no card and no table already says", () => {
     const summary = narrativeSummary(fixtureReport)
@@ -550,7 +561,14 @@ describe("provenance names the setup a verdict depends on", () => {
     const result = expectOk(sliceLogText(fixtureText, {label: "fixture"}))
     const fields = provenanceRows(result.source).map((row) => row.field)
 
-    expect(fields).toEqual(["Tapoo version", "Control mode", "Downloaded at", "Log entries"])
+    expect(fields).toEqual([
+      "Tapoo version",
+      "Platform",
+      "Device",
+      "Downloaded at",
+      "Log entries",
+      "Control mode",
+    ])
     // Seat 1 because the log says so, on the round-end record - the only place v2.5.1 states a seat.
     // Without reading it the label would fall back to acting order, which happens to agree here and so
     // would hide the field being ignored.
