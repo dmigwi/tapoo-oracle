@@ -687,7 +687,7 @@ describe("a log whose seat changed model mid-round", () => {
 describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
     turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null,
   })
 
   it("passes a round where each seat kept one player", () => {
@@ -734,7 +734,7 @@ describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
     reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
-    uniqueCells: null, decayCharged: null, traversalSpeed: null, ...over,
+    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
   })
 
   it("passes a round whose seats each held one setup throughout", () => {

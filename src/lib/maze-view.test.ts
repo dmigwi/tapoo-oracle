@@ -8,7 +8,7 @@ import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
 import {agentsFromRound} from "./rounds"
 import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, TurnSummary, VisitStatus} from "./types"
-import {at, query, queryAll} from "./test-support";
+import {at, must, query, queryAll} from "./test-support";
 
 const REAL_MAZE = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -21,8 +21,8 @@ const REAL_MAZE = {
 type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
   {
     turn: 2,
     seatId: null,
@@ -31,7 +31,7 @@ const TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", decayCharged: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null,
   },
 ]
 
@@ -267,8 +267,10 @@ describe("the bars beside the scrubber", () => {
   })
 
   it("distinguishes an unreported applied count from zero", () => {
-    const unknown = level()
-    unknown.turns[0]!.applied = null
+    const base = level()
+    // Replaced, not assigned into: level() hands out the shared TURNS objects, so mutating one leaks the
+    // null into every test that runs after this one.
+    const unknown = {...base, turns: base.turns.map((turn, index) => (index === 0 ? {...turn, applied: null} : turn))}
     const bar = at(bars(build(unknown), "moves"), 0)
 
     expect(bar.classList.contains("is-unknown")).toBe(true)
@@ -782,5 +784,204 @@ describe("the decay legend", () => {
 
     expect(legend(node)).toEqual([])
     expect(query(node, ".maze-decay-legend").hidden).toBe(true)
+  })
+})
+
+// Speed is two facts, so the card gives it two columns: the figure the log states, and the rubric class
+// that figure falls in. Asserted through the rendered table, header beside value, because the pairing is
+// the whole change - a value under the wrong header is the failure mode a read of the metric list alone
+// would not catch.
+describe("the per-seat metrics card", () => {
+  // The fixture's turns with a charge on each, so the factors have their third denominator. Re-derived
+  // rather than patched onto the round: the seats are parsed from the turns.
+  const chargedRound = (): PlayedRound => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: index + 1}))
+    return {...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}
+  }
+
+  const metrics = (node: ParentNode): Record<string, string> => {
+    const labels = queryAll<HTMLElement>(node, ".maze-agent-table th").map((cell) => cell.textContent ?? "")
+    const values = queryAll<HTMLElement>(node, ".maze-agent-table td").map((cell) => cell.textContent ?? "")
+    return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? ""]))
+  }
+
+  // 1.0000x, not "Navigator (1.0000)": the suffix is Tapoo's own notation for the figure - its labels
+  // write "Katara the Navigator - 1.0000x" - and the class is a different fact, so it gets its own column.
+  // This fixture states no charge, so there is nothing to decompose and the cell is the figure alone.
+  it("states the speed as a rate and its class as its own column", () => {
+    const card = metrics(build(level()))
+
+    expect(card["Decomposed Traversal speed"]).toBe("1.0000x")
+    expect(card["Speed class"]).toBe("Navigator")
+  })
+
+  it("keeps the counts the speed is made of beside it", () => {
+    const card = metrics(build(level()))
+
+    // One seat, so its share of what the seats entered is all of it.
+    expect(card["All cells"]).toBe("3 (100%)")
+    expect(card["Unique cells"]).toBeUndefined()
+    expect(card["Decay charged"]).toBe("not recorded")
+  })
+
+  // The share is of the ground the seats covered between them - the sum of their own counts, so the shares on
+  // the cards add up to the whole. Two seats, three cells each, and each reads half.
+  it("gives each seat its share of what the seats covered between them", () => {
+    const base = level()
+    const mine = base.turns.map((turn) => ({...turn, playerName: "Katara"}))
+    const theirs = base.turns.map((turn, index) => ({
+      ...turn, turn: index + 3, playerName: "Bumi",
+      before: "3,0", cells: [`${index + 3},0`, `${index + 4},0`] as CellKey[],
+    }))
+    const turns = [...mine, ...theirs]
+    const node = build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)})
+    const share = (column: number) =>
+      queryAll<HTMLElement>(node, `.maze-agent-table tbody td:nth-child(${column})`).map((cell) => cell.textContent)
+
+    // The share, not the whole it is of: that is stated once in the key below rather than on every card. The
+    // shares total 100%.
+    expect(share(1)).toEqual(["3 (50%)", "3 (50%)"])
+  })
+
+  // Every entry, so a seat that walked back into a cell it had already entered counts it twice: four entries
+  // over the fixture's three cells. The unique count is not on the card - it is this figure times route
+  // efficiency - and the count that is here is the one the factors divide.
+  it("counts a re-entered cell again", () => {
+    const base = level()
+    const turns = [...base.turns, {...must(base.turns[0], "the first turn"), turn: 3, before: "2,1", cells: ["2,1", "2,0"] as CellKey[]}]
+    const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
+
+    expect(card["All cells"]).toBe("4 (100%)")
+  })
+
+  // The speed written as the equation it is, to the precision a speed is stated to. No x on any factor: a
+  // factor is a share of moves, a count per turn and a share of turns, and only their product is a speed.
+  //
+  // The sign is what keeps the cell from asserting an equation the printed numbers do not make. Here the
+  // three turns enter 3 cells on 3 applied moves and are charged 6, so the factors give 0.5000 where the
+  // outcome record - the capture's, describing a 17-cell round - states 1.0000x. A real log read
+  // "1.0000x = (y1.0000 * b1.0000 * a1.0213)" before this.
+  it("approximates where the factors do not reach the figure the log states", () => {
+    const card = metrics(build(chargedRound()))
+
+    expect(card["Decomposed Traversal speed"]).toBe("1.0000x \u2248 (y1.0000 * b1.0000 * a0.5000)")
+  })
+
+  // Rounding alone is enough: these factors multiply to exactly the 1.0000x the log states - one cell over
+  // one charge - but what the page shows is 0.3333 * 3.0000 * 1.0000, which is 0.9999. One turn that applied
+  // three moves to enter one new cell, which is what retracing looks like.
+  it("approximates where the printed factors are rounded", () => {
+    const base = level()
+    const turns = [{...must(base.turns[0], "the fixture's first turn"), applied: 3, decayCharged: 1}]
+    const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
+
+    expect(card["Decomposed Traversal speed"]).toBe("1.0000x \u2248 (y0.3333 * b3.0000 * a1.0000)")
+  })
+
+  // The equals sign needs both halves to hold: the printed factors multiply out exactly, and to the figure
+  // the log states. One new cell per applied move and one charge per turn is that round.
+  it("keeps the equals sign where the printed figures multiply out exactly", () => {
+    const base = chargedRound()
+    // One cell per applied move and one charge per turn, so the product is 1.0000x - the figure the
+    // fixture's outcome states.
+    const turns = base.turns.map((turn) => ({...turn, decayCharged: 1}))
+    const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
+
+    expect(card["Decomposed Traversal speed"]).toBe("1.0000x = (y1.0000 * b1.0000 * a1.0000)")
+  })
+
+  // Each symbol is its own element rather than a character in the string, so it reads as the token the key
+  // explains and not as part of the number beside it.
+  it("tags each factor with the symbol the key names", () => {
+    const node = build(chargedRound())
+
+    expect(queryAll<HTMLElement>(node, ".maze-agent-table .maze-agent-symbol").map((tag) => tag.textContent))
+      .toEqual(["y", "b", "a"])
+  })
+
+  // The letters are meaningless on their own, so the key is what makes the columns readable - and it is
+  // one key under the stack, not one per card: five seats would repeat the same four lines five times.
+  it("names each symbol once, under every card", () => {
+    const base = level()
+    const twoSeats = {
+      ...base,
+      turns: base.turns.map((turn, index) => (index === 2 ? {...turn, playerName: "Bumi"} : turn)),
+    }
+    const node = build({...twoSeats, agents: agentsFromRound(new Map(), twoSeats.turns, OUTCOME)})
+
+    expect(queryAll(node, ".maze-agent-panel")).toHaveLength(2)
+    // Two cards, one key.
+    expect(queryAll(node, ".maze-agent-key")).toHaveLength(1)
+    expect(queryAll<HTMLElement>(node, ".maze-agent-key .maze-agent-key-item").map((item) => item.textContent))
+      .toEqual([
+        // The whole the shares are of, once for the stack.
+        "traversal speed = (y * b * a)exactly, before the figures above are rounded",
+        "=the factors on a card multiply to its speed exactly",
+        "\u2248they do not: rounded to four decimals, or the log stated a speed these turns do not compute",
+        "yroute efficiency - unique cells per applied move, lost to retracing. always <= 1",
+        "bbatching - applied moves per turn, the only factor that can exceed 1",
+        "aaccuracy - turns per decay unit, lost to penalties. always <= 1",
+        "%a share of the 3 cell entries the seats traversed between them",
+      ])
+  })
+
+  // The metrics table scrolls on a narrow viewport rather than compressing, which is two rules that only
+  // work together: the floor is on the table and the scrolling is on the wrapper around it, so a table that
+  // lost its wrapper would silently compress instead - squeezing a factor out of the equation. Asserted as
+  // the DOM half of that pairing, the widths themselves living in oracle.css.
+  //
+  // And the table alone: the seat's name and the key are outside the scroller, so neither moves when a
+  // reader swipes the metrics.
+  it("scrolls the metrics table and nothing else on the card", () => {
+    const node = build(chargedRound())
+    const scroller = query(node, ".maze-agent-scroll")
+
+    expect(queryAll(scroller, ".maze-agent-table")).toHaveLength(1)
+    expect(scroller.children).toHaveLength(1)
+    expect(query(node, ".maze-agent-name").closest(".maze-agent-scroll")).toBeNull()
+    expect(query(node, ".maze-agent-key").closest(".maze-agent-scroll")).toBeNull()
+  })
+
+  // A share of nothing is not 0% and not the NaN the division gives: a round whose turns moved nobody has no
+  // ground to divide, so each count stands on its own.
+  it("gives no share where the seats covered nothing between them", () => {
+    const base = level()
+    const turns = base.turns.map((turn) => ({...turn, applied: 0, cells: [] as CellKey[]}))
+    const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
+
+    expect(card["All cells"]).toBe("0")
+  })
+
+  // A key naming columns nobody can see explains the metrics rather than the round, the argument the decay
+  // legend already makes for itself. The whole block goes, cards and key together - there is no card for
+  // the key to sit under.
+  it("draws no cards and no key for a round with no seats", () => {
+    const node = build({...level(), turns: [], agents: []})
+
+    expect(queryAll(node, ".maze-agent-panel")).toHaveLength(0)
+    expect(queryAll(node, ".maze-agent-key")).toHaveLength(0)
+  })
+
+  // No charge, so no accuracy, so no decomposition: the figure stands alone rather than heading an equation
+  // with nothing on its right, which would read as a product that came out empty.
+  it("prints the figure alone for a seat the round did not charge", () => {
+    const node = build(level())
+
+    expect(metrics(node)["Decomposed Traversal speed"]).toBe("1.0000x")
+    expect(queryAll(node, ".maze-agent-table .maze-agent-symbol")).toHaveLength(0)
+  })
+
+  // A seat with no figure is not a Backtracker, which is what classifying an unreadable speed answers.
+  // Both columns say the same absence, each standing on its own for a reader scanning down one of them.
+  it("classifies nothing where no speed was recorded", () => {
+    const base = level()
+    // Re-derived, not patched onto the round: the seats are parsed from the outcome, so a round whose
+    // outcome states no speed has to be parsed as one.
+    const outcome: Outcome = {...OUTCOME, traversalSpeed: undefined}
+    const card = metrics(build({...base, outcome, agents: agentsFromRound(new Map(), TURNS, outcome)}))
+
+    expect(card["Decomposed Traversal speed"]).toBe("not recorded")
+    expect(card["Speed class"]).toBe("not recorded")
   })
 })

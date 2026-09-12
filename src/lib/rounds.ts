@@ -84,13 +84,24 @@ export function sliceLogIntoRounds({source, warnings, checks}: ParsedLog, label:
  * eight characters no label admits two parses.
  *
  * The cost of naming the personas is that a fourth stops resolving until it is added - visible as a seat
- * missing from the round, which is the failure to watch for if Tapoo adds one. */
-const PLAYER_LABEL = /^(.{3,8}) the (?:Backtracker|Navigator|Trailblazer) - .+$/
+ * missing from the round, which is the failure to watch for if Tapoo adds one.
+ *
+ * The tail is the speed the seat was going, and it is a second group rather than a second read: the label
+ * is one string stating two things, and one pattern is what keeps them from disagreeing about where the
+ * name ends. Matched on digits, because the tail is not always a figure - the opening turns of a round
+ * carry "Default", a speed being cells entered per decay unit charged and neither having happened yet. So
+ * the group goes unfilled there, which is no speed rather than the NaN that trimming an `x` and reading
+ * the rest as a number would produce. */
+const PLAYER_LABEL = /^(.{3,8}) the (?:Backtracker|Navigator|Trailblazer) - (?:(\d+(?:\.\d+)?)x|.+)$/
 
-/** resolveActiveAgentNames maps each turn number to the name of the agent that was active on it.
+/** One turn's seat: who was active on it, and how fast they were going as of it. */
+type ActivePlayer = {name: string; traversalSpeed: number | null}
+
+/** resolveActiveAgents maps each turn number to the seat that was active on it: its name, and the speed
+ * it was going as of that turn.
  *
  * Active is the whole of what a turn records about a seat: only an active agent may predict, so a request
- * is a turn taken by exactly one of them, and the name on it is that agent's.
+ * is a turn taken by exactly one of them, and what is on it is that agent's.
  *
  * Exported for its own tests rather than for a caller: nothing outside this file needs it, and everything
  * per-seat is joined by the name it returns - a turn it leaves unattributed is a turn whose charge, cells
@@ -98,13 +109,14 @@ const PLAYER_LABEL = /^(.{3,8}) the (?:Backtracker|Navigator|Trailblazer) - .+$/
  * construction, so it is checked directly.
  *
  * Two sources, and the request carries both. `details.playerName` is the name stated outright, which needs
- * no recovery at all; `details.player` is the decorated label, which PLAYER_LABEL reads. Nothing else in
- * the log is consulted - a round-end record names only whoever finished, and reading it here would
- * attribute every turn of a two-seat round to one of them.
+ * no recovery at all; `details.player` is the decorated label, which PLAYER_LABEL reads. The label is read
+ * even where the name is stated, because the speed is stated nowhere else. Nothing else in the log is
+ * consulted - a round-end record names only whoever finished, and reading it here would attribute every
+ * turn of a two-seat round to one of them.
  *
  * This is the only thing that attributes a turn. */
-export function resolveActiveAgentNames(entries: LogEntry[]): Map<number, string> {
-  const byTurn = new Map<number, string>()
+export function resolveActiveAgents(entries: LogEntry[]): Map<number, ActivePlayer> {
+  const byTurn = new Map<number, ActivePlayer>()
 
   for (const entry of entries) {
     if (entry.payload !== LOG_EVENTS.request || typeof entry.turn !== "number") continue
@@ -112,13 +124,13 @@ export function resolveActiveAgentNames(entries: LogEntry[]): Map<number, string
     if (byTurn.has(entry.turn)) continue
 
     const details = asRecord(entry.details)
-    if (typeof details.playerName === "string" && details.playerName !== "") {
-      byTurn.set(entry.turn, details.playerName)
-      continue
-    }
+    const label = typeof details.player === "string" ? PLAYER_LABEL.exec(details.player) : null
+    const stated = typeof details.playerName === "string" && details.playerName !== "" ? details.playerName : null
+    const name = stated ?? label?.[1] ?? null
+    if (name === null) continue
 
-    const name = typeof details.player === "string" ? PLAYER_LABEL.exec(details.player)?.[1] : undefined
-    if (name) byTurn.set(entry.turn, name)
+    const speed = label?.[2]
+    byTurn.set(entry.turn, {name, traversalSpeed: speed === undefined ? null : Number(speed)})
   }
 
   return byTurn
@@ -262,6 +274,9 @@ export function agentsFromRound(
   // and the one to report. This list is only consulted for a seat nothing declared a model for.
   const echoes = new Map<AgentSummary, string[]>()
   const entered = new Map<AgentSummary, Set<CellKey>>()
+  // Kept apart from `entered`: the decomposition counts cells over its own turns, and the seat's
+  // round-wide count covers every turn it played.
+  const settledCells = new Map<AgentSummary, Set<CellKey>>()
 
   const emptySummary = (name: string, seatId: number | null): AgentSummary => {
     const seat: AgentSummary = {
@@ -276,6 +291,8 @@ export function agentsFromRound(
       uniqueCells: null,
       decayCharged: null,
       traversalSpeed: null,
+      cellsEntered: null,
+      settled: null,
     }
     seats.push(seat)
     return seat
@@ -288,7 +305,7 @@ export function agentsFromRound(
    *
    * Tapoo gives each seat one player and one id, so either identifies a seat on its own. The stated seat
    * is preferred because it is stated: it arrives on the request as a number, where the name arrives only
-   * after resolveActiveAgentNames has recovered it from a decorated label, which can fail - and a turn whose
+   * after resolveActiveAgents has recovered it from a decorated label, which can fail - and a turn whose
    * recovery failed still says outright which seat played it.
    *
    * Falls back to the name because a log that states no seat is still the common case, and to null: a
@@ -361,8 +378,39 @@ export function agentsFromRound(
 
     if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged
 
+    // The decomposition's counts, over the turns that settled both halves of what they need: an applied
+    // move count and a charge. A turn missing either is left out of all three rather than out of one -
+    // counting a turn's moves while its charge is unknown divides two different populations, and that is
+    // what let accuracy exceed 1 on any round whose last turn was never charged, which is most of them.
+    //
+    // Moves that landed, not moves submitted: the middle factor is how far a turn actually carried the
+    // seat, and a move the maze refused carried it nowhere.
+    if (turn.applied !== null && turn.decayCharged !== null) {
+      const cells = settledCells.get(seat) ?? new Set<CellKey>()
+      for (const cell of turn.cells.slice(1)) cells.add(cell)
+      settledCells.set(seat, cells)
+
+      const settled = seat.settled ?? {uniqueCells: 0, movesApplied: 0, turnsTaken: 0}
+      seat.settled = {
+        uniqueCells: cells.size,
+        movesApplied: settled.movesApplied + turn.applied,
+        turnsTaken: settled.turnsTaken + 1,
+      }
+    }
+
+    // The speed this seat's own label stated, last turn winning: the figure is cumulative, so every
+    // earlier reading is the same measure taken part-way through the round. Read here because the round-end
+    // record names a single seat and exists only once a round has ended - taking the speed from there
+    // alone left every other seat, and every unfinished round, reporting none at all.
+    if (turn.traversalSpeed !== null) seat.traversalSpeed = turn.traversalSpeed
+
+    const walked = turn.cells.slice(1)
+    // Counted, not de-duplicated: this is every entry, so a cell the seat came back to is counted again.
+    // Zero for a turn that moved nowhere, which is a measurement - the seat took the turn and stayed put.
+    seat.cellsEntered = (seat.cellsEntered ?? 0) + walked.length
+
     const seen = entered.get(seat) ?? new Set<CellKey>()
-    for (const cell of turn.cells.slice(1)) seen.add(cell)
+    for (const cell of walked) seen.add(cell)
     entered.set(seat, seen)
   }
 
@@ -407,6 +455,8 @@ export function agentsFromRound(
   const finisher = resolveFinisher()
 
   if (finisher) {
+    // Overwriting what the turns stated, for this one seat: the outcome's figure is the settled one, taken
+    // after the final prediction resolved, where the last label was written before it.
     const speed = Number(outcome?.traversalSpeed)
     if (Number.isFinite(speed)) finisher.traversalSpeed = speed
     // Only where the turns did not already state one: a request that names its own seat is the better
@@ -455,7 +505,7 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
   const initLevelLog = asRecord(
     groupEntries.find((entry) => entry.payload === LOG_EVENTS.levelStarted)?.details,
   )
-  const activeAgentNames = resolveActiveAgentNames(groupEntries)
+  const activePlayers = resolveActiveAgents(groupEntries)
 
   // Keyed by the turn it covers, so this is a plain lookup. The offset behind that - Tapoo reports a
   // prediction's outcome on the request that follows it - belongs to the store holding these records,
@@ -508,7 +558,8 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
     const turn: TurnSummary = {
       turn: prediction.turn,
       seatId: context.rawSetupByTurn.get(prediction.turn)?.seatId ?? null,
-      playerName: activeAgentNames.get(prediction.turn) ?? null,
+      playerName: activePlayers.get(prediction.turn)?.name ?? null,
+      traversalSpeed: activePlayers.get(prediction.turn)?.traversalSpeed ?? null,
       before,
       moves: prediction.moves,
       submittedCount: prediction.submittedCount,
@@ -544,7 +595,8 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
     turns.push({
       turn,
       seatId: context.rawSetupByTurn.get(turn)?.seatId ?? null,
-      playerName: activeAgentNames.get(turn) ?? null,
+      playerName: activePlayers.get(turn)?.name ?? null,
+      traversalSpeed: activePlayers.get(turn)?.traversalSpeed ?? null,
       before: null,
       moves: [],
       submittedCount: 0,

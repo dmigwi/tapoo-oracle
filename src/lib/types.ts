@@ -425,6 +425,11 @@ export type TurnSummary = {
   /** Who played the turn: `details.playerName` where a request states one, else the name recovered from
    * the decorated `"Katara the Trailblazer - 0.95x"` label. Resolved here and nowhere else. */
   playerName: string | null;
+  /** How fast the seat was going as of this turn, off the same label: the `0.95x` at its end.
+   *
+   * Null where the label states "Default", which the opening turns of a round carry - a speed is cells
+   * per decay unit, and neither has happened yet. Null too on any log whose requests carry no label. */
+  traversalSpeed: number | null;
   before: CellKey | null;
   /** The moves the maze could apply, narrowed at the parse boundary. */
   moves: Move[];
@@ -533,10 +538,32 @@ export type AgentSummary = {
   echoBackReasoning: string[];
   /** The seconds between requests, as stated. Empty before v2.6.1. */
   requestIntervalSeconds: string[];
+  /** Every cell entry attributed to this seat, counting a cell again each time it was re-entered. Null for a
+   * seat known only from an outcome record, which has no turns to count.
+   *
+   * The count `uniqueCells` is derived from: one applied move enters one cell, so this is the moves that
+   * landed, and the gap between the two is the retracing - the thing route efficiency measures and the one
+   * quantity neither the unique count nor the speed states on its own. */
+  cellsEntered: number | null;
   /** Cells this seat entered, its decay charge, and its speed. Null where the round did not say. */
   uniqueCells: number | null;
   decayCharged: number | null;
   traversalSpeed: number | null;
+  /** The counts the speed decomposes over, gathered across one population: the turns that stated both an
+   * applied move count and a charge. Null where the seat has no such turn.
+   *
+   * Speed is cells over charge, and that ratio is the product of three factors sharing these counts -
+   * U/moves x moves/turns x turns/charge. The middle terms cancel, so these are not a second measurement
+   * of the speed; they are what says which of the three factors a seat lost its margin to.
+   *
+   * One population is the whole reason this is its own record rather than two more fields beside
+   * uniqueCells. Tapoo reports a turn's charge on the turn *after* it, so a round's last turn usually
+   * states none - and counting that turn's moves while leaving its charge out of the total made turns
+   * exceed charges and answered an accuracy above 1, which is not a value accuracy can take. Its
+   * uniqueCells is therefore its own count too, over the same turns, and differs from the seat's
+   * round-wide uniqueCells above - which stays round-wide because it reconciles with the figure Tapoo
+   * states for the round. */
+  settled: {uniqueCells: number; movesApplied: number; turnsTaken: number} | null;
 };
 
 /** One rubric group: its identity, the questions it asks, and the function that answers them. Keeping

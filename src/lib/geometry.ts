@@ -205,6 +205,59 @@ export function classifyTraversalSpeed(speed: unknown): string {
   return value > 1.0 ? TRAVERSAL_SPEED_CLASSES.trailblazer : TRAVERSAL_SPEED_CLASSES.navigator;
 }
 
+/** The three factors a traversal speed is the product of, or null where the round did not state the
+ * counts they need.
+ *
+ * Speed is U/D - unique cells over decay units charged - and that same ratio is:
+ *
+ *     U       U         moves       turns
+ *    --- =  ------- x  ------- x  -------
+ *     D      moves      turns        D
+ *          efficiency  batching   accuracy
+ *
+ * The middle terms cancel, so this is an identity and not a second measurement: the product is the speed
+ * to full precision, and a mismatch is a bug in the counts rather than a finding about the agent.
+ *
+ * What it buys is the thing one figure cannot say - which factor a seat spent its margin on. Two seats
+ * measured at the same speed can be opposites: one batching 1.32 cells per turn and giving a quarter of it
+ * back to penalties, the other barely batching and losing almost nothing. Route efficiency and accuracy
+ * are shares - at most 1 each, and only ever lost - so batching is the only factor that can carry a
+ * product above 1 -
+ * which is why exceeding 1.0000 requires batching forward into cells never visited, and why a perfectly
+ * accurate single-move agent cannot reach Trailblazer however cleanly it plays.
+ *
+ * Batching below 1 is its own signal rather than slow play: a turn that produced no applied move at all -
+ * a malformed response, an exhausted token cap, a first move the maze refused - is still a turn.
+ *
+ * The counts arrive gathered over one population - see AgentSummary.settled - which is what holds the two
+ * ceilings: no turn enters more new cells than it applied moves, and none is charged less than one unit, so
+ * route efficiency and accuracy cannot exceed 1. The product is therefore the speed those same turns
+ * computed, which is not always the speed the log states for the seat: a round-end figure is settled after
+ * the final prediction resolved, and a per-turn label is as of the turn it was written on.
+ *
+ * Null is the answer for a round that did not state the counts, not zeros: a seat with no turns, no
+ * applied moves or no charge has no factors, and zero would read as measured. */
+export function decomposeTraversalSpeed({
+  settled,
+  decayCharged,
+}: {
+  settled: {uniqueCells: number; movesApplied: number; turnsTaken: number} | null;
+  decayCharged: number | null;
+}): {efficiency: number; batching: number; accuracy: number} | null {
+  if (settled === null || decayCharged === null) return null;
+
+  const {uniqueCells, movesApplied, turnsTaken} = settled;
+  // Every denominator, guarded: a round can state a zero for any of them - a seat whose every prediction
+  // was refused has no applied moves - and dividing by it answers Infinity, which formats as a number.
+  if (movesApplied === 0 || turnsTaken === 0 || decayCharged === 0) return null;
+
+  return {
+    efficiency: uniqueCells / movesApplied,
+    batching: movesApplied / turnsTaken,
+    accuracy: turnsTaken / decayCharged,
+  };
+}
+
 // --- What a log states about its own structure ---
 
 /** True when every entry carries a turn number.

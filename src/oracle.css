@@ -1871,6 +1871,17 @@ td {
   letter-spacing: 0.05em;
 }
 
+/* A grid item defaults to min-width: auto, which is its content's min-content width - so a panel holding
+   anything that refuses to shrink widens its column instead, and the grid widens the page. The metrics table
+   carries a 38rem floor for exactly that reason, and without this the floor reached all the way out here:
+   the whole summary grew wide rather than the table scrolling inside its own scroller.
+   
+   On every panel, not just the one holding the cards: any panel is free to hold a wide table later, and the
+   answer is always the same - the panel takes the width it is given and whatever is inside it scrolls. */
+.maze-summary-panel {
+  min-width: 0;
+}
+
 .maze-summary-panel--full {
   grid-column: 1 / -1;
 }
@@ -1912,6 +1923,9 @@ td {
   border-top: 1px solid var(--oracle-line);
 }
 
+/* min-width: 0 so the card may shrink inside the flex column at all - a flex item defaults to its content
+   width, and with a table carrying a floor it would push the whole replay wide instead of scrolling inside
+   it. The scrolling itself is one level in, on .maze-agent-scroll. */
 .maze-agent-panel {
   min-width: 0;
 }
@@ -1923,12 +1937,62 @@ td {
   color: var(--oracle-ink);
 }
 
+/* The metrics table scrolls sideways rather than compressing: its widest cell is an equation, and a column
+   squeezed out of that is a factor a reader cannot get back.
+
+   Only the table. The scroller wraps nothing else, so the seat's name above stays put while the metrics
+   move, and the factor key below - which belongs to every card, not to this one - never moves at all.
+
+   Two rules that only work together: overflow-x does nothing to a table at width: 100%, which by definition
+   has no overflow, and it is the min-width that creates it. The same pairing the wide summary tables use.
+   34rem is the four columns at a legible size, the decomposition being the wide one; above that width the
+   table is still width: 100% and nothing moves. */
+.maze-agent-scroll {
+  overflow-x: auto;
+}
+
+.maze-agent-table {
+  min-width: 34rem;
+}
+
 /* The horizontal metrics table: column headers above, one value row below. Every value cell is
-   monospace — there is no "last" column, the mono rule on td:last-child does not apply here. */
+   monospace — there is no "last" column, the mono rule on td:last-child does not apply here.
+
+   nowrap because the widest cell is an equation: wrapping it mid-product would split "1.0000x = (y …)"
+   across lines and break the one thing it is there to show. The panel scrolls instead. */
 .maze-agent-table td {
   font-family: var(--oracle-mono);
   font-size: var(--fs-micro);
+  white-space: nowrap;
 }
+
+/* The factor key under the per-seat cards. Its own rules rather than .maze-legend's: that class lays out
+   the swatch strips beside the scrubber, as a wrapping row indented by half a thumb to line up with them,
+   and this is a stack of sentences under a card.
+
+   One line per symbol, and no flex: the item is a symbol followed by prose, so its parts should sit inline
+   and the prose should wrap the way prose does. Nothing here scrolls. */
+.maze-agent-key {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-micro);
+  color: var(--oracle-muted);
+}
+
+.maze-agent-key-item {
+  margin-top: 0.15rem;
+}
+
+/* The symbol, in the key and inside the decomposition cell: mono, and spaced off the number it labels so
+   "y 0.7083" does not read as one token. */
+.maze-agent-symbol {
+  font-family: var(--oracle-mono);
+  color: var(--oracle-ink);
+  margin-right: 0.3rem;
+}
+
+
 
 @media (max-width: 860px) {
   .maze-summary {

@@ -539,7 +539,7 @@ describe("provenance names the setup a verdict depends on", () => {
       name: "Katara", seatId: 1, models: ["gemma4"], apis: ["ollama"],
       endpoints: ["http://user:pass@host/api"], reasoningEfforts: ["max"],
       echoBackReasoning: [], requestIntervalSeconds: [],
-      uniqueCells: null, decayCharged: null, traversalSpeed: null,
+      cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null,
     }])
 
     expect(rows[0]?.value).not.toMatch(/user:pass/)
@@ -596,7 +596,7 @@ describe("a seat running under a v2.6.1 harness", () => {
     name: "Bumi", seatId: 3,
     models: ["glm-5.1:cloud"], apis: ["ollama"], endpoints: ["http://localhost:11434/api/chat"],
     reasoningEfforts: ["max"], echoBackReasoning: ["disabled"], requestIntervalSeconds: ["5"],
-    uniqueCells: null, decayCharged: null, traversalSpeed: null, ...over,
+    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
   })
 
   it("carries both settings through to the cell", () => {

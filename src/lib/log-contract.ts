@@ -59,6 +59,7 @@ export {
   cellFromLogged,
   cellKeyFromLogged,
   classifyTraversalSpeed,
+  decomposeTraversalSpeed,
   getCellKey,
   isMove,
   openMovesFromLogged,
