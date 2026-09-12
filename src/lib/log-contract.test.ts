@@ -733,7 +733,8 @@ describe("seatRosterCheck", () => {
 describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
-    reasoningEfforts: ["max"], uniqueCells: null, decayCharged: null, traversalSpeed: null, ...over,
+    reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
+    uniqueCells: null, decayCharged: null, traversalSpeed: null, ...over,
   })
 
   it("passes a round whose seats each held one setup throughout", () => {

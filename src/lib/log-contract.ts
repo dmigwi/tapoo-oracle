@@ -1000,6 +1000,8 @@ const DRIFTABLE: Array<{label: string; values: boolean; of: (agent: AgentSummary
   {label: "models", values: true, of: (agent) => agent.models},
   {label: "APIs", values: true, of: (agent) => agent.apis},
   {label: "reasoning efforts", values: true, of: (agent) => agent.reasoningEfforts},
+  {label: "echo-back settings", values: true, of: (agent) => agent.echoBackReasoning},
+  {label: "request intervals", values: true, of: (agent) => agent.requestIntervalSeconds},
   {label: "endpoints", values: false, of: (agent) => agent.endpoints},
 ];
 

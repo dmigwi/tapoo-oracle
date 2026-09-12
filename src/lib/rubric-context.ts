@@ -117,6 +117,7 @@ export function parseTurnPrediction(content: unknown): Omit<TurnPrediction, "tur
 // --- Building the context ---
 
 const numberOrNull = (value: unknown): number | null => (typeof value === "number" ? value : null)
+const booleanOrNull = (value: unknown): boolean | null => (typeof value === "boolean" ? value : null)
 const textOrNull = (value: unknown): string | null =>  typeof value === "string" && value !== "" ? value : null
 
 /** Merges what one entry said about a turn's seat into what is already known about it.
@@ -128,6 +129,7 @@ const textOrNull = (value: unknown): string | null =>  typeof value === "string"
 function noteSetup(context: Context, turn: number, seen: Partial<RawTurnSetup>): void {
   const known = context.rawSetupByTurn.get(turn) ?? {
     seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+    echoBackReasoning: null, requestIntervalSeconds: null,
   }
   context.rawSetupByTurn.set(turn, {
     seatId: seen.seatId ?? known.seatId,
@@ -136,6 +138,9 @@ function noteSetup(context: Context, turn: number, seen: Partial<RawTurnSetup>):
     api: seen.api ?? known.api,
     endpoint: seen.endpoint ?? known.endpoint,
     reasoning: seen.reasoning ?? known.reasoning,
+    // `??` rather than a truthiness test: false is a stated setting, and it is the interesting one.
+    echoBackReasoning: seen.echoBackReasoning ?? known.echoBackReasoning,
+    requestIntervalSeconds: seen.requestIntervalSeconds ?? known.requestIntervalSeconds,
   })
 }
 
@@ -240,6 +245,8 @@ export function buildContext(
       noteSetup(context, currentTurn, {
         seatId: numberOrNull(details.seatId),
         model: textOrNull(details.model),
+        echoBackReasoning: booleanOrNull(details.echoBackReasoning),
+        requestIntervalSeconds: numberOrNull(details.requestIntervalSeconds),
         api: textOrNull(details.api),
         endpoint: textOrNull(details.endpoint),
         reasoning: textOrNull(details.reasoning),

@@ -504,6 +504,11 @@ export type RawTurnSetup = {
   api: string | null;
   endpoint: string | null;
   reasoning: string | null;
+  /** Whether the harness asked the model to echo its reasoning back. Stated from v2.6.1; null on every
+   * log written before it, which is not the same as false. */
+  echoBackReasoning: boolean | null;
+  /** Seconds the harness waited between requests. Stated from v2.6.1, and null before it. */
+  requestIntervalSeconds: number | null;
 };
 
 /** Everything one seat was running, and everything it did, gathered in one pass over the round.
@@ -523,6 +528,11 @@ export type AgentSummary = {
   apis: string[];
   endpoints: string[];
   reasoningEfforts: string[];
+  /** "enabled" or "disabled", per turn that stated it. Empty on a log written before v2.6.1, which is
+   * why it is a list of words rather than a boolean: absent and false are different answers. */
+  echoBackReasoning: string[];
+  /** The seconds between requests, as stated. Empty before v2.6.1. */
+  requestIntervalSeconds: string[];
   /** Cells this seat entered, its decay charge, and its speed. Null where the round did not say. */
   uniqueCells: number | null;
   decayCharged: number | null;

@@ -616,6 +616,19 @@ describe("detail", () => {
     )
   })
 
+  it("renders operational diagnostics vertically", () => {
+    const host = detail()
+    const heading = queryAll(host, "h2").find((node) => node.textContent === "Operational Diagnostics")
+    const section = heading?.closest("section")
+
+    expect(queryAll(section ?? host, "th").map((node) => node.textContent).filter(Boolean)).toEqual([
+      "Measure",
+      "Count",
+      "Scored as",
+    ])
+    expect(queryAll(section ?? host, "tbody tr")).toHaveLength(6)
+  })
+
   // The formatting is what a reader actually sees, so it is asserted on the DOM rather than on the
   // sentence agentRows also returns - the two could drift, and only one of them is rendered.
   it("weights each seat's values above the words joining them", () => {
@@ -803,5 +816,80 @@ describe("stampBuildAge", () => {
     stampBuildAge(root, NOW)
 
     expect(root.textContent).toBe("whenever")
+  })
+})
+
+// Every summary on the page answers the same shape of question, so they are laid out to one set of
+// column widths - Operational Diagnostics, Model Output, Provenance, Agents and Payload validation.
+// Sizing themselves, each took its widths from its own longest value and the same first column landed
+// somewhere different in every section.
+describe("the summary tables", () => {
+  const detailOf = (tab: LogTab) => rendered(renderReportSections(ui, stateWith(tab)).detail)
+
+  it("are all laid out by the same rule", () => {
+    const detail = detailOf(loadedTab())
+    const headings = queryAll(detail, "section.events-section h2").map((h) => h.textContent?.trim())
+
+    // The five sections that carry one, and no others: the rubric tables above have their own widths.
+    expect(headings).toEqual(expect.arrayContaining([
+      "Operational Diagnostics", "Model Output", "Provenance", "Agents", "Payload validation",
+    ]))
+    expect(queryAll(detail, ".summary-table")).toHaveLength(5)
+  })
+
+  // The widths are read off the header row, which only a fixed layout does - so the class has to land
+  // on a node that actually contains the table rather than beside it.
+  it("carry the class on a node holding the table it lays out", () => {
+    for (const marked of queryAll(detailOf(loadedTab()), ".summary-table")) {
+      expect(marked.querySelector("table")).not.toBeNull()
+    }
+  })
+
+  // Inputs.table opens every table with a selection column - an empty header over a column of
+  // checkboxes - so the column a reader sees first is the second cell, not the first. The widths in
+  // oracle.css are numbered from there, and a table whose measure column moved back to position one
+  // would silently take the selection column's width.
+  it("open with the selection column, so the measure column is the second cell", () => {
+    for (const marked of queryAll(detailOf(loadedTab()), ".summary-table")) {
+      const headers = queryAll(marked, "thead th").map((cell) => cell.textContent?.trim());
+
+      expect(headers[0]).toBe("");
+      expect(headers[1]).toBeTruthy();
+    }
+  })
+
+  // The two summaries whose value is a sentence scroll sideways instead of compressing; the three that
+  // hold their shape at any width do not, because a table that scrolls when it need not is one a reader
+  // has to check for hidden columns.
+  it("let only the two sentence-valued summaries scroll", () => {
+    const scrolling = queryAll(detailOf(loadedTab()), ".summary-table-wide").map((marked) =>
+      marked.closest("section")?.querySelector("h2")?.textContent?.trim());
+
+    expect(scrolling).toEqual(["Agents", "Payload validation"]);
+  })
+
+  // Both classes, because the widths and the scrolling are separate rules: the floor that creates the
+  // overflow is on .summary-table-wide and the column widths are on .summary-table, and a table
+  // carrying one without the other either scrolls with no columns to scroll or compresses as before.
+  it("keep the scrolling summaries in the shared width rule too", () => {
+    for (const marked of queryAll(detailOf(loadedTab()), ".summary-table-wide")) {
+      expect(marked.classList.contains("summary-table")).toBe(true);
+    }
+  })
+
+  // Three columns of its own rather than two, which is why the rule that narrows a count is written to
+  // skip the last cell: in every other summary the second-from-left column is the value itself.
+  it("give Operational Diagnostics its three columns and the others two", () => {
+    const counted = queryAll(detailOf(loadedTab()), ".summary-table").map((marked) =>
+      [marked.closest("section")?.querySelector("h2")?.textContent?.trim(),
+       queryAll(marked, "thead th").length]);
+
+    expect(counted).toEqual([
+      ["Operational Diagnostics", 4],
+      ["Model Output", 3],
+      ["Provenance", 3],
+      ["Agents", 3],
+      ["Payload validation", 3],
+    ]);
   })
 })

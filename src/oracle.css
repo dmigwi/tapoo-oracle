@@ -557,6 +557,17 @@ a[href] {
   color: var(--oracle-amber);
 }
 
+/* How the harness was configured, as an aside to the sentence it follows: whether it echoed the model's
+   reasoning back, and how long it waited between requests.
+   
+   Muted and unbolded, unlike .agent-value beside it. A reader comparing two seats reads the model, the
+   API and the effort - these two say whether the two rows are comparable at all, which is worth having
+   on the row and not worth reading first. */
+.agent-note {
+  color: var(--oracle-muted);
+  font-size: 0.92em;
+}
+
 /* Its own line, and breakable anywhere: a URL has no spaces to wrap at, so inline it either forced the
    column wide or split mid-host wherever the cell happened to end. */
 .agent-endpoint {
@@ -1006,9 +1017,69 @@ pre code {
   width: 13%;
 }
 
+/* One set of column widths for every summary table: Operational Diagnostics, Model Output, Provenance,
+   Agents and Payload validation.
+   
+   Each of these answers the same shape of question - a named measure, and what it was - so they are
+   read as one document. Sizing themselves, each took its widths from its own longest value and the
+   same measure column landed somewhere different in every section; a reader comparing two of them had
+   to find the boundary again each time.
+   
+   Fixed layout with the widths on the header row, the way .rubric-table above does it: with
+   table-layout: fixed a browser reads column widths from the first row and ignores the rest, which is
+   also what stops one long endpoint or one long detail sentence from setting the measure column's
+   width for the whole table.
+   
+   Counted from the second cell, because Inputs.table opens every table with a selection column - an
+   empty header over a column of checkboxes. It is the first child of every header row here and has no
+   text to size itself from, so it takes a fixed 2.5rem and the columns that carry the report are
+   numbered from there.
+   
+   The measure column is a third of the width: the longest thing in it is a check name ("Trimmed
+   checksummed repeats") or a seat label ("Katara - Agent at Seat 1"), and the value beside it is a
+   sentence that wants the rest. Diagnostics is the one table with three columns of its own - its count
+   is a figure and needs almost nothing, so the rubric code it is scored by takes what is left. */
+.summary-table table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.summary-table th:first-child {
+  width: 2.5rem;
+}
+
+.summary-table th:nth-child(2) {
+  width: 33%;
+}
+
+.summary-table th:nth-child(3):not(:last-child) {
+  width: 12%;
+}
+
 .events-section form:has(> table) {
   max-height: none !important;
   overflow: visible;
+}
+
+/* Agents and Payload validation scroll sideways rather than compressing.
+   
+   Both carry a sentence as their value - one ending in an endpoint URL, the other stating counts - and
+   a sentence has a width below which it stops being readable. Held to the section's width on a narrow
+   viewport, the columns break a host name mid-word and stack the sentence into a column of two-word
+   lines: every character is present and none of it reads.
+   
+   A floor instead. The table keeps 44rem whatever the section can give it, and the wrapper scrolls the
+   overflow - the same thing this page already does for a wide command block. Below that width a reader
+   swipes; above it nothing moves, because the table is still width: 100%.
+   
+   overflow-x on its own would do nothing: a table at width 100% has no overflow to scroll. It is the
+   min-width that creates it, and the two rules only work together. */
+.summary-table-wide table {
+  min-width: 44rem;
+}
+
+.summary-table-wide {
+  overflow-x: auto !important;
 }
 
 th {

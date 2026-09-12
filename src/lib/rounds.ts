@@ -271,6 +271,8 @@ export function agentsFromRound(
       apis: [],
       endpoints: [],
       reasoningEfforts: [],
+      echoBackReasoning: [],
+      requestIntervalSeconds: [],
       uniqueCells: null,
       decayCharged: null,
       traversalSpeed: null,
@@ -349,6 +351,12 @@ export function agentsFromRound(
       add(seat.apis, setup.api)
       add(seat.endpoints, setup.endpoint)
       add(seat.reasoningEfforts, setup.reasoning)
+
+      // Read as words rather than as the boolean and the number the log states, so a seat that changed
+      // one mid-round reads the way a changed model does - and so "stated false" cannot be mistaken for
+      // "never stated", which is what an empty list means here.
+      add(seat.echoBackReasoning, setup.echoBackReasoning === null ? null : setup.echoBackReasoning ? "enabled" : "disabled")
+      add(seat.requestIntervalSeconds, setup.requestIntervalSeconds === null ? null : String(setup.requestIntervalSeconds))
     }
 
     if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged

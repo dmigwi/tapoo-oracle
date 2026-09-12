@@ -10,7 +10,6 @@
 
 import { createMazeReplay } from "./maze-view";
 import {
-  diagnosticRows,
   diagnosticTableData,
   groupResultTone,
   narrativeSummary,
@@ -175,26 +174,58 @@ function rubricTable({Inputs, html}: ReportUi, rows: Array<Record<string, string
 const codeChip = (html: ReportUi["html"]) => (value: unknown): unknown =>
   html`<span class="rubric-code">${value}</span>`;
 
+/** summaryTable marks a table as one of the report's summaries, which the stylesheet lays out to one
+ * set of column widths.
+ *
+ * Every summary on the page answers the same shape of question - a named measure and what it was - so
+ * they read as one document rather than five. Left to size themselves, each took its widths from its
+ * own longest value: the same first column landed at a different place in every section, and a reader
+ * comparing two of them had to find the boundary again each time.
+ *
+ * The widths live in oracle.css beside the rubric table's, which is laid out the same way and for the
+ * same reason. */
+const summaryTable = (node: HTMLElement): HTMLElement => {
+  node.classList.add("summary-table");
+  return node;
+};
+
+/** Marks a summary whose values are longer than a narrow viewport can hold: the Agents table, whose
+ * value is a sentence ending in an endpoint URL, and Payload validation, whose value is a sentence
+ * stating counts.
+ *
+ * These scroll sideways rather than compressing. Squeezed into a phone's width the columns break a
+ * host name mid-word and stack a sentence into a column of two-word lines - a reader has every
+ * character and can read none of them. Given a floor to keep, the table overflows its section and the
+ * wrapper scrolls, which is what the page already does for a wide code block.
+ *
+ * The other three summaries are short enough to hold their shape at any width, so they stay put: a
+ * table that scrolls when it did not need to is a table a reader has to check for hidden columns. */
+const wideSummaryTable = (node: HTMLElement): HTMLElement => {
+  summaryTable(node).classList.add("summary-table-wide");
+  return node;
+};
+
 function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement {
   const data = diagnosticTableData(report);
-  // One column per signal, each holding a count in one row and its scoring question in the other. The
-  // signal's own scoredBy says which cell is the identifier - an unscored signal has none, so the "-" in
-  // its place is never chipped as though it were a code to look up.
+  // Only actual rubric identifiers receive the code treatment; the unscored marker remains plain text.
   const chip = codeChip(html);
-  const format = Object.fromEntries(
-    diagnosticRows(report)
-      .filter((row) => row.scoredBy !== null)
-      .map((row) => [
-        row.signal,
-        (value: unknown) => (value === row.scoredBy ? chip(value) : value),
-      ]),
-  );
-  return enableRowSelection(Inputs.table(data.rows, {
+  return summaryTable(enableRowSelection(Inputs.table(data.rows, {
     columns: data.columns,
-    header: {measure: "Measure"},
-    format,
+    header: {measure: "Measure", count: "Count", scoredBy: "Scored as"},
+    format: {scoredBy: (value: unknown) => (value === "-" ? value : chip(value))},
     sort: false,
     rows: data.rows.length
+  })));
+}
+
+// What the provider reported about the model's own work.
+function modelOutputTable({Inputs}: ReportUi, report: Report): HTMLElement {
+  const rows = modelOutputRows(report);
+  return summaryTable(Inputs.table(rows, {
+    columns: ["field", "value"],
+    header: {field: "MEASURE", value: "VALUE"},
+    sort: false,
+    rows: rows.length
   }));
 }
 
@@ -206,26 +237,24 @@ function diagnosticsTable({Inputs, html}: ReportUi, report: Report): HTMLElement
 // Model Output directly above, so this reads the same way and the values have the room to be read.
 function provenanceTable({Inputs}: ReportUi, source: TapooLog): HTMLElement {
   const rows = provenanceRows(source);
-  return enableRowSelection(Inputs.table(rows, {
+  return summaryTable(enableRowSelection(Inputs.table(rows, {
     columns: ["field", "value"],
     header: {field: "MEASURE", value: "VALUE"},
     sort: false,
-    rows: rows.length,
-    layout: "auto"
-  }));
+    rows: rows.length
+  })));
 }
 
 // What each seat was running, one row per seat.
 function agentsTable({Inputs, html}: ReportUi, agents: Report["agents"]): HTMLElement {
   const rows = agentRows(agents);
-  return enableRowSelection(Inputs.table(rows, {
+  return wideSummaryTable(enableRowSelection(Inputs.table(rows, {
     columns: ["field", "value"],
     header: {field: "AGENT", value: "RUNNING"},
     format: {value: runningCell(html, rows)},
     sort: false,
-    rows: rows.length,
-    layout: "auto"
-  }));
+    rows: rows.length
+  })));
 }
 
 /** runningCell renders one seat's setup with the values weighted above the words joining them.
@@ -267,28 +296,36 @@ const runningCell = (html: ReportUi["html"], rows: AgentRow[]) =>
         : html`<span class=${`agent-value ${extra} ${values.length > 1 ? "agent-changed" : ""}`.trim()}
             >${values.join(CHANGED_JOIN)}</span>`;
 
+    // A setting stated in parentheses after the sentence it qualifies: how the harness was configured,
+    // rather than what the model was. Muted, because a reader comparing two seats reads the model, the
+    // API and the effort first - these two say whether the two rows are comparable at all.
+    const note = (label: string, values: string[]): unknown =>
+      values.length === 0
+        ? ""
+        : html`<span class="agent-note"> (${label}: ${setting(values)})</span>`;
+
     return html`<span
       >${running.models.length === 0
         ? html`<span class="agent-value agent-model">not recorded</span>`
         : setting(running.models, "agent-model")}${
         running.api.length === 0 ? "" : html`<span class="agent-joiner"> on the </span>${setting(running.api)}<span class="agent-joiner"> API</span>`}${
         running.effort.length === 0 ? "" : html`<span class="agent-joiner"> at </span>${setting(running.effort)}<span class="agent-joiner"> reasoning effort</span>`}${
+        note("echo back reasoning", running.echo)}${
         running.endpoint.length === 0
           ? ""
           : html`<span class=${`agent-endpoint ${running.endpoint.length > 1 ? "agent-changed" : ""}`.trim()}
-              >${running.endpoint.join(CHANGED_JOIN)}</span>`}</span>`;
+              >${running.endpoint.join(CHANGED_JOIN)}${note("polling rate", running.interval)}</span>`}</span>`;
   };
 
 // One scope's worth of checks: what was verified, and what could not be.
 function validationTable({Inputs}: ReportUi, checks: ValidationCheck[]): HTMLElement {
   const rows = validationRows(checks);
-  return Inputs.table(rows, {
+  return wideSummaryTable(Inputs.table(rows, {
     columns: ["field", "value"],
     header: {field: "CHECK", value: "RESULT"},
     sort: false,
-    rows: rows.length,
-    layout: "auto"
-  });
+    rows: rows.length
+  }));
 }
 
 // --- Which report is showing ---
@@ -591,13 +628,7 @@ function detail(ui: ReportUi, tab: LogTab | undefined, wanted: GameIdentity | nu
       <section class="events-section">
         <h2>Model Output</h2>
         <p class="section-note">What the provider reported about the model's own work. Not scored: a model given ten times the prompt and a model that spent its budget reasoning are doing different tasks, and that is context for the verdicts above rather than a verdict itself.</p>
-        ${ui.Inputs.table(modelOutputRows(report), {
-          columns: ["field", "value"],
-          header: {field: "MEASURE", value: "VALUE"},
-          sort: false,
-          rows: modelOutputRows(report).length,
-          layout: "auto"
-        })}
+        ${modelOutputTable(ui, report)}
       </section>
       <section class="events-section">
         <h2>Provenance</h2>

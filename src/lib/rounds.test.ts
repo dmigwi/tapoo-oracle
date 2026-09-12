@@ -516,7 +516,8 @@ describe("agentsFromRound", () => {
     cells, rejectedMove: null, decayCharged: decay,
   })
   const setup = (over: Partial<RawTurnSetup> = {}): RawTurnSetup =>
-    ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null, ...over})
+    ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null, ...over})
 
   // The path every log takes once the upstream fix lands: the turn states its own seat and model, and
   // nothing has to be recovered from a decorated label.
@@ -686,12 +687,14 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       {
         name: "Katara", seatId: 1, models: ["gemma4:cloud"], apis: ["ollama"],
         endpoints: ["http://localhost:11434/katara"], reasoningEfforts: ["max"],
+        echoBackReasoning: [], requestIntervalSeconds: [],
         // Its own turn's charge and cell, not the round's total: the figures the replay panels read.
         uniqueCells: 1, decayCharged: 3, traversalSpeed: 1,
       },
       {
         name: "Bumi", seatId: 2, models: ["moonshotai/Kimi-K3:baseten"], apis: ["huggingface"],
         endpoints: ["http://localhost:11434/bumi"], reasoningEfforts: ["high"],
+        echoBackReasoning: [], requestIntervalSeconds: [],
         // No replay record covers turn 2, so nothing settled what it charged. Null, not zero.
         uniqueCells: 1, decayCharged: null, traversalSpeed: null,
       },
@@ -805,6 +808,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
 
     const stating = (seatId: number): RawTurnSetup => ({
       seatId, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
 
     const seats = agentsFromRound(
@@ -827,6 +831,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("keeps each seat's echoed model against the seat, not against its name", () => {
     const echoing = (echoedModel: string, seatId: number): RawTurnSetup => ({
       seatId, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
     const played = (turn: number, seatId: number, cells: string[]) => ({
       turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
@@ -900,6 +905,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("keeps a seat's whole walk when a later turn numbers it", () => {
     const echoing = (echoedModel: string): RawTurnSetup => ({
       seatId: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
     const played = (turn: number, seatId: number | null, cells: string[]) => ({
       turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
@@ -1041,5 +1047,64 @@ describe("the charge a replay record states", () => {
   it("is refused when the records describe a different prediction", () => {
     expect(roundOf(["MoveUp"], ["MoveUp", "Teleport"])?.decayCharged).toBeNull()
     expect(roundOf(["MoveUp"], ["MoveDown"])?.decayCharged).toBeNull()
+  })
+})
+
+// v2.6.1 states two more settings on every request: whether the harness echoes the model's reasoning
+// back to it, and how long it waits between requests. Both belong to the seat, like the model and the
+// endpoint - and both are absent from every earlier log, which is a different answer from "off".
+describe("the settings v2.6.1 added to a request", () => {
+  const request = (over: Record<string, unknown> = {}) => logEntry({
+    turn: 1,
+    payload: LOG_EVENTS.request,
+    details: {
+      tools: [], messages: [], player: "Kora the Navigator - 1.0000x", seatId: 1,
+      model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
+      reasoning: "max", echoBackReasoning: false, requestIntervalSeconds: 5, ...over,
+    },
+  })
+  const answered = logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+    payload: {message: {content: '{"moves":["MoveDown"]}'}},
+  }})
+
+  const seatOf = (...entries: LogEntry[]) =>
+    must(playedRound(entries).agents[0], "the round's seat")
+
+  it("reads both onto the seat that stated them", () => {
+    const seat = seatOf(request(), answered)
+
+    expect(seat.echoBackReasoning).toEqual(["disabled"])
+    expect(seat.requestIntervalSeconds).toEqual(["5"])
+  })
+
+  // False is a setting, not an absence: read as a truthiness test it would report the same empty list a
+  // v2.5.1 log does, and the row would stop saying which of the two it was looking at.
+  it("tells a stated false apart from a log that never said", () => {
+    const stated = seatOf(request({echoBackReasoning: true}), answered)
+    const silent = seatOf(request({echoBackReasoning: undefined, requestIntervalSeconds: undefined}), answered)
+
+    expect(stated.echoBackReasoning).toEqual(["enabled"])
+    expect(silent.echoBackReasoning).toEqual([])
+    expect(silent.requestIntervalSeconds).toEqual([])
+  })
+
+  // A harness that changed either mid-round did not run one experiment, which is the same argument the
+  // model and endpoint lists make - so these carry every value they were given, in order.
+  it("keeps both values when a setting changed mid-round", () => {
+    const seat = seatOf(
+      request(),
+      answered,
+      logEntry({turn: 2, payload: LOG_EVENTS.request, details: {
+        tools: [], messages: [], player: "Kora the Navigator - 1.0000x", seatId: 1,
+        model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
+        reasoning: "max", echoBackReasoning: true, requestIntervalSeconds: 10,
+      }}),
+      logEntry({turn: 2, payload: LOG_EVENTS.response, details: {
+        payload: {message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+    )
+
+    expect(seat.echoBackReasoning).toEqual(["disabled", "enabled"])
+    expect(seat.requestIntervalSeconds).toEqual(["5", "10"])
   })
 })
