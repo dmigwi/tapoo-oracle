@@ -4,7 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs-view"
 import {validateOnlineJsonUrl} from "./share-link"
-import type {Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
+import type {AgentSummary, Report, LogTabsState, TapooLog, ValidationCheck} from "./types"
 import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
@@ -281,20 +281,12 @@ describe("presentation", () => {
     expect(find("Empty answers").scoredBy).toBe("V2.Q2")
   })
 
-  it("pivots diagnostics into count and scoring rows", () => {
+  it("presents each diagnostic as a row with count and scoring columns", () => {
     const table = diagnosticTableData(fixtureReport)
-    expect(table.columns).toEqual([
-      "measure",
-      "Failed requests",
-      "Harness faults",
-      "Empty answers",
-      "Malformed predictions",
-      "Token cap hits",
-      "Times disabled",
-    ])
-    expect(table.rows[0]).toMatchObject({measure: "Count", "Failed requests": 0})
+    expect(table.columns).toEqual(["measure", "count", "scoredBy"])
+    expect(table.rows[0]).toEqual({measure: "Failed requests", count: 0, scoredBy: "-"})
     // "-" and not "no": nothing scores an endpoint failure, and "no" would read as a question answered.
-    expect(table.rows[1]).toMatchObject({measure: "Scored as", "Failed requests": "-"})
+    expect(table.rows[2]).toEqual({measure: "Empty answers", count: 0, scoredBy: "V2.Q2"})
   })
 
   it("keeps the log address out of provenance", () => {
@@ -315,6 +307,17 @@ describe("presentation", () => {
     const withoutVersionOk = expectOk(withoutVersion)
     const missing = provenanceRows(withoutVersionOk.source)
     expect(must(missing.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("not recorded")
+  })
+
+  it("shows device and platform provenance exactly as logged", () => {
+    const rows = provenanceRows({
+      ...fixtureSource,
+      platform: "http://reader:secret@0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+    })
+
+    expect(rows).toContainEqual({field: "Platform", value: "http://reader:secret@0.0.0.0:5500/agents"})
+    expect(rows).toContainEqual({field: "Device", value: "Chrome/152.0.0.0 on macOS"})
   })
 
 
@@ -459,21 +462,20 @@ describe("the diagnostics a round actually reports", () => {
     const analysis = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})
     const table = diagnosticTableData(firstRound(analysis))
 
-    expect(table.rows[0]).toMatchObject({
-      measure: "Count",
+    expect(table.rows).toEqual(expect.arrayContaining([
       // One of each, and the two are counted apart: a request that never came back is somebody else's
       // outage, a tool handler that threw is the harness breaking.
-      "Failed requests": 1,
-      "Harness faults": 1,
+      {measure: "Failed requests", count: 1, scoredBy: "-"},
+      {measure: "Harness faults", count: 1, scoredBy: "-"},
       // The model itself answered every turn, so nothing it did is counted here.
-      "Empty answers": 0,
-      "Malformed predictions": 0,
-      "Token cap hits": 0,
+      {measure: "Empty answers", count: 0, scoredBy: "V2.Q2"},
+      {measure: "Malformed predictions", count: 0, scoredBy: "V2.Q1"},
+      {measure: "Token cap hits", count: 0, scoredBy: "V5.Q3"},
       // The round ran to its end - a failed request is not a disabling.
-      "Times disabled": 0,
-    })
+      {measure: "Times disabled", count: 0, scoredBy: "-"},
+    ]))
     // Neither is scored: the violation profile is about the model's reasoning.
-    expect(table.rows[1]).toMatchObject({"Failed requests": "-", "Harness faults": "-"})
+    expect(table.rows.slice(0, 2).every((row) => row.scoredBy === "-")).toBe(true)
   })
 })
 
@@ -536,7 +538,8 @@ describe("provenance names the setup a verdict depends on", () => {
     const rows = agentRows([{
       name: "Katara", seatId: 1, models: ["gemma4"], apis: ["ollama"],
       endpoints: ["http://user:pass@host/api"], reasoningEfforts: ["max"],
-      uniqueCells: null, decayCharged: null, traversalSpeed: null,
+      echoBackReasoning: [], requestIntervalSeconds: [],
+      cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null,
     }])
 
     expect(rows[0]?.value).not.toMatch(/user:pass/)
@@ -550,7 +553,14 @@ describe("provenance names the setup a verdict depends on", () => {
     const result = expectOk(sliceLogText(fixtureText, {label: "fixture"}))
     const fields = provenanceRows(result.source).map((row) => row.field)
 
-    expect(fields).toEqual(["Tapoo version", "Control mode", "Downloaded at", "Log entries"])
+    expect(fields).toEqual([
+      "Tapoo version",
+      "Platform",
+      "Device",
+      "Downloaded at",
+      "Log entries",
+      "Control mode",
+    ])
     // Seat 1 because the log says so, on the round-end record - the only place v2.5.1 states a seat.
     // Without reading it the label would fall back to acting order, which happens to agree here and so
     // would hide the field being ignored.
@@ -558,8 +568,11 @@ describe("provenance names the setup a verdict depends on", () => {
     expect(agentRows(firstRound(result).agents)).toEqual([
       {
         field: "Katara \u00b7 Agent at Seat 1",
-        value: "gemma4:cloud on the Ollama API (http://localhost:11434/api/chat) at max reasoning effort",
-        // The same four values unjoined, which is what the table actually renders - the sentence is the
+        // The endpoint reads as its own clause rather than parenthetically, because the cell puts it on
+        // its own line. echo back reasoning and polling rate say nothing here: v2.5.1 states neither, and
+        // a row inventing "disabled" for a setting the log never named would be a claim about the run.
+        value: "gemma4:cloud on the Ollama API at max reasoning effort http://localhost:11434/api/chat",
+        // The same values unjoined, which is what the table actually renders - the sentence is the
         // fallback for anything that cannot weight them.
         // Lists, not joined strings: the cell marks a setting the seat did not hold still, and it can
         // only know one changed by being handed more than one value.
@@ -568,8 +581,63 @@ describe("provenance names the setup a verdict depends on", () => {
           api: ["Ollama"],
           endpoint: ["http://localhost:11434/api/chat"],
           effort: ["max"],
+          echo: [],
+          interval: [],
         },
       },
     ])
+  })
+})
+
+// What a v2.6.1 seat reads as: the model, the API and the effort in one sentence, then how the harness
+// was configured beside them - whether it echoed the model's reasoning back, and how often it asked.
+describe("a seat running under a v2.6.1 harness", () => {
+  const seat = (over: Partial<AgentSummary> = {}): AgentSummary => ({
+    name: "Bumi", seatId: 3,
+    models: ["glm-5.1:cloud"], apis: ["ollama"], endpoints: ["http://localhost:11434/api/chat"],
+    reasoningEfforts: ["max"], echoBackReasoning: ["disabled"], requestIntervalSeconds: ["5"],
+    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
+  })
+
+  it("carries both settings through to the cell", () => {
+    const [row] = agentRows([seat()])
+
+    expect(row?.field).toBe("Bumi · Agent at Seat 3")
+    expect(row?.running).toMatchObject({
+      models: ["glm-5.1:cloud"],
+      api: ["Ollama"],
+      endpoint: ["http://localhost:11434/api/chat"],
+      effort: ["max"],
+      echo: ["disabled"],
+      // Given its unit here rather than in the record: the log states a number of seconds, and "5" alone
+      // on a row is a figure a reader has to be told the meaning of.
+      interval: ["5 sec"],
+    })
+  })
+
+  it("reads as a sentence for anything that cannot weight the values", () => {
+    expect(agentRows([seat()])[0]?.value).toBe(
+      "glm-5.1:cloud on the Ollama API at max reasoning effort (echo back reasoning: disabled) " +
+      "http://localhost:11434/api/chat (polling rate: 5 sec)",
+    )
+  })
+
+  // An older log states neither, and the row says neither: "disabled" invented for a setting nobody
+  // recorded would be a claim about how the run was configured.
+  it("says nothing about settings a log never stated", () => {
+    expect(agentRows([seat({echoBackReasoning: [], requestIntervalSeconds: []})])[0]?.value).toBe(
+      "glm-5.1:cloud on the Ollama API at max reasoning effort http://localhost:11434/api/chat",
+    )
+  })
+
+  // Both are drift-checkable for the same reason the model is: a harness that changed one mid-round did
+  // not run one experiment, and the cell marks the values it changed between.
+  it("keeps every value a changed setting held", () => {
+    const changed = agentRows([seat({echoBackReasoning: ["disabled", "enabled"], requestIntervalSeconds: ["5", "10"]})])
+
+    expect(changed[0]?.running.echo).toEqual(["disabled", "enabled"])
+    expect(changed[0]?.running.interval).toEqual(["5 sec", "10 sec"])
+    expect(changed[0]?.value).toContain("(echo back reasoning: disabled → enabled)")
+    expect(changed[0]?.value).toContain("(polling rate: 5 sec → 10 sec)")
   })
 })

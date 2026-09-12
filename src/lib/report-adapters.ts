@@ -151,20 +151,15 @@ export function diagnosticRows(report: Report): DiagnosticRow[] {
   ];
 }
 
-/** diagnosticTableData pivots the short diagnostic list into a wide comparison matrix. Keeping the
- * two measures as rows avoids packing count and scoring semantics into an ambiguous combined value. */
+/** Shapes diagnostics as one signal per row, with its count and scoring question in separate columns. */
 export function diagnosticTableData(report: Report): {columns: string[]; rows: Array<Record<string, unknown>>} {
-  const diagnostics = diagnosticRows(report)
-  const columns = ["measure", ...diagnostics.map((row) => row.signal)]
-
   return {
-    columns,
-    rows: [
-      // Object.fromEntries on a heterogeneous array is `any`; the annotation is what keeps that from
-      // becoming the declared row type.
-      Object.fromEntries<unknown>([["measure", "Count"], ...diagnostics.map((row) => [row.signal, row.count] as const)]),
-      Object.fromEntries<unknown>([["measure", "Scored as"], ...diagnostics.map((row) => [row.signal, row.scoredBy ?? "-"] as const)]),
-    ],
+    columns: ["measure", "count", "scoredBy"],
+    rows: diagnosticRows(report).map((row) => ({
+      measure: row.signal,
+      count: row.count,
+      scoredBy: row.scoredBy ?? "-",
+    })),
   }
 }
 
@@ -221,9 +216,11 @@ export function provenanceRows(source: TapooLog): SummaryRow[] {
     // most screenshotted place on the page to put an address that the rest of this change exists to
     // keep out of it. What remains is provenance the log vouches for.
     {field: "Tapoo version", value: source.version ?? "not recorded"},
-    {field: "Control mode", value: source.mode ?? "not recorded"},
+    {field: "Platform", value: source.platform ?? "not recorded"},
+    {field: "Device", value: source.device ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
     {field: "Log entries", value: formatCount(source.entries.length)},
+    {field: "Control mode", value: source.mode ?? "not recorded"},
   ];
 }
 
@@ -261,6 +258,11 @@ export type AgentRunning = {
   api: string[];
   endpoint: string[];
   effort: string[];
+  /** Whether the harness echoed the model's reasoning back to it, and how long it waited between
+   * requests. Both are stated from v2.6.1 and empty before it, so a row on an older log simply does not
+   * mention them - which is the honest rendering of a setting the log never named. */
+  echo: string[];
+  interval: string[];
 };
 
 /** CHANGED_JOIN separates the values of a setting a seat did not hold still.
@@ -304,6 +306,8 @@ export function agentRows(agents: AgentSummary[]): AgentRow[] {
       api: agent.apis.map(apiName),
       endpoint: agent.endpoints.map(withoutCredentials),
       effort: agent.reasoningEfforts,
+      echo: agent.echoBackReasoning,
+      interval: agent.requestIntervalSeconds.map((seconds) => `${seconds} sec`),
     };
 
     // The sentence joins the same way the cell does, so the fallback and what a reader sees say the same
@@ -312,8 +316,10 @@ export function agentRows(agents: AgentSummary[]): AgentRow[] {
     const sentence = [
       running.models.length > 0 ? said(running.models) : "not recorded",
       running.api.length === 0 ? "" : `on the ${said(running.api)} API`,
-      running.endpoint.length === 0 ? "" : `(${said(running.endpoint)})`,
       running.effort.length === 0 ? "" : `at ${said(running.effort)} reasoning effort`,
+      running.echo.length === 0 ? "" : `(echo back reasoning: ${said(running.echo)})`,
+      running.endpoint.length === 0 ? "" : said(running.endpoint),
+      running.interval.length === 0 ? "" : `(polling rate: ${said(running.interval)})`,
     ].filter((part) => part !== "");
 
     return {field: agentSeatLabel(agent, index), value: sentence.join(" "), running};

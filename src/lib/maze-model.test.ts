@@ -4,6 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.jso
 import {turnReports} from "./log-contract"
 
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
+import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, SummaryRow, TurnSummary, VisitStatus, VisitStatusByTurn} from "./types"
 import {sliceLogText, firstRound, must} from "./test-support";
@@ -21,8 +22,8 @@ type RoundOverrides = {encodedMaze?: EncodedMaze | null; turns?: TurnSummary[]; 
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
 const DEFAULT_TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
   {
     turn: 2,
     seatId: null,
@@ -31,7 +32,7 @@ const DEFAULT_TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", decayCharged: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null,
   },
 ]
 
@@ -72,7 +73,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
 const charged = (charges: Array<number | null>): TurnSummary[] =>
   charges.map((decayCharged, turn) => ({
     turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, decayCharged,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged,
   }))
 
 const modelFor = (overrides: RoundOverrides = {}) =>
@@ -139,8 +140,8 @@ describe("mazeFrameAt", () => {
   it("keeps two seats apart when neither states a player", () => {
     const nameless = modelFor({
       turns: [
-        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
       ],
       outcome: null,
     })
@@ -155,8 +156,8 @@ describe("mazeFrameAt", () => {
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
       ],
     })
 
@@ -372,6 +373,104 @@ describe("agentsFromRound", () => {
     expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
   })
 
+  // The identity, per seat, on the one round where every count is the real parser's: a speed is
+  // uniqueCells/decayCharged, and that is the product of the three factors the card prints. Asserted
+  // against Tapoo's own stated speed rather than against our ratio, so a parser that miscounted applied
+  // moves or turns cannot satisfy it by miscounting both halves the same way.
+  it("decomposes the capture's speed into factors that multiply back to it", () => {
+    const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
+    const played = must(firstRound(result).playedRound, "the fixture's only round")
+    const katara = must(played.agents[0], "the round's only seat")
+    const factors = must(decomposeTraversalSpeed(katara), "the seat's factors")
+
+    // The turns that settled both counts, and the charge over them.
+    expect(katara.settled).toEqual({uniqueCells: 17, movesApplied: 17, turnsTaken: 16})
+    expect(katara.decayCharged).toBe(17)
+
+    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(1, 12)
+    expect(Number(played.outcome?.traversalSpeed)).toBe(1)
+  })
+
+  // Every entry, against the unique count beside it: the gap between them is the retracing, and it is the
+  // only place on the card that says how much of the walk was ground the seat had already covered.
+  it("counts a cell again each time the seat came back to it", () => {
+    const there = ["1,0", "2,0"] as CellKey[]
+    const back = ["2,0", "1,0"] as CellKey[]
+    const turns: TurnSummary[] = [
+      {...must(DEFAULT_TURNS[0], "a turn"), turn: 0, before: "1,0", applied: 1, cells: there, decayCharged: 1},
+      {...must(DEFAULT_TURNS[0], "a turn"), turn: 1, before: "2,0", applied: 1, cells: back, decayCharged: 1},
+    ]
+    const seat = must(agentsFromRound(new Map(), turns, null)[0], "the round's only seat")
+
+    // Two entries over two turns, into one cell each way - and only two cells between them.
+    expect(seat.cellsEntered).toBe(2)
+    expect(seat.uniqueCells).toBe(2)
+
+    // And the same seat again, having walked back into "1,0" a second time: three entries, still two cells.
+    const retraced = must(agentsFromRound(new Map(), [...turns, {...must(turns[0], "a turn"), turn: 2}], null)[0], "the seat")
+    expect(retraced.cellsEntered).toBe(3)
+    expect(retraced.uniqueCells).toBe(2)
+  })
+
+  // Within one turn too, not only between turns: a batch can walk back over itself - three moves that leave
+  // and return and leave again are three entries into two cells.
+  it("counts a cell again where one turn re-enters it", () => {
+    const oscillating: TurnSummary[] = [{
+      ...must(DEFAULT_TURNS[0], "a turn"), applied: 3,
+      cells: ["0,0", "1,0", "0,0", "1,0"] as CellKey[], decayCharged: 1,
+    }]
+    const seat = must(agentsFromRound(new Map(), oscillating, null)[0], "the round's only seat")
+
+    expect(seat.cellsEntered).toBe(3)
+    expect(seat.uniqueCells).toBe(2)
+  })
+
+  // A seat that took its turn and moved nowhere counts no entry, which is a measurement rather than an
+  // absence: "not recorded" is for a seat with no turns at all.
+  it("counts no entry for a turn that moved nowhere", () => {
+    const stayed: TurnSummary[] = [{...must(DEFAULT_TURNS[0], "a turn"), applied: 0, cells: ["0,0"], decayCharged: 3}]
+    const seat = must(agentsFromRound(new Map(), stayed, null)[0], "the round's only seat")
+
+    expect(seat.cellsEntered).toBe(0)
+  })
+
+  // The defect the `settled` counts exist for, at the shape every round has: Tapoo reports a turn's charge
+  // on the turn after it, so the last turn of a round states none. Counting that turn's moves while leaving
+  // its charge out of the total made turns exceed charges - 48 against 47 - and printed an accuracy of
+  // 1.0213, which is not a value a share of turns can take.
+  //
+  // Asserted as the ceiling rather than as the number, because the ceiling is the property: no turn is
+  // charged less than one unit, so accuracy is at most 1 on every log, and a decomposition that can exceed
+  // it is dividing two different populations again.
+  it("keeps accuracy at its ceiling when the last turn was never charged", () => {
+    const turns: TurnSummary[] = Array.from({length: 48}, (_, index) => ({
+      turn: index, seatId: null, playerName: "Kora", before: `${index},0`,
+      moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
+      cells: [`${index},0`, `${index + 1},0`] as CellKey[], rejectedMove: null,
+      traversalSpeed: 1, decayCharged: index === 47 ? null : 1,
+    }))
+    const kora = must(agentsFromRound(new Map(), turns, null)[0], "the round's only seat")
+    const factors = must(decomposeTraversalSpeed(kora), "the seat's factors")
+
+    // The turn with no charge is out of all three counts, not just the charge.
+    expect(kora.settled).toEqual({uniqueCells: 47, movesApplied: 47, turnsTaken: 47})
+    // While the seat's own count still covers every turn it played, reconciling with what Tapoo reports.
+    expect(kora.uniqueCells).toBe(48)
+
+    expect(factors.accuracy).toBeLessThanOrEqual(1)
+    expect(factors.efficiency).toBeLessThanOrEqual(1)
+    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(1, 12)
+  })
+
+  // A seat the round stated no charge for has no accuracy, so it has no decomposition at all - the card
+  // says "not recorded" rather than printing two of three factors as though the third were 1.
+  it("decomposes nothing for a seat the round did not charge", () => {
+    const [katara] = seatsOf()
+
+    expect(katara?.decayCharged).toBeNull()
+    expect(decomposeTraversalSpeed(must(katara, "the round's only seat"))).toBeNull()
+  })
+
   it("reports no decay when turns carry no charge", () => {
     // The test fixture has decayCharged: null on every turn.
     expect(seatsOf()[0]?.decayCharged).toBeNull()
@@ -380,8 +479,8 @@ describe("agentsFromRound", () => {
   it("accumulates per-turn decay per agent", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2 },
       ],
     })
 
@@ -391,8 +490,8 @@ describe("agentsFromRound", () => {
   it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: 1 },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1 },
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2 },
       ],
       outcome: {
         outcome: "won",
@@ -416,7 +515,7 @@ describe("agentsFromRound", () => {
 
   it("names no seat for a round whose turns name no player", () => {
     const anonymous = [
-      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null },
+      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
     ]
 
     expect(seatsOf({turns: anonymous})).toEqual([])

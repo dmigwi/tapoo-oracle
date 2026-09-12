@@ -9,7 +9,7 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, getCellKey, isMove } from "./log-contract"
+import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
@@ -1083,35 +1083,115 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
 // Within the card, metrics are presented as a single-row horizontal table — column headers on top,
 // values below — so the label and its value share a column rather than a row.
 //
-// The numbers arrive already gathered on ReplayModel.agents, one record per seat - so a card reads one
-// object, rather than several lists where only a shared index keeps a speed beside the seat that ran it.
-// Formatting stays here because "18 of 24 (75%)" needs the maze's cell count, which is this view's.
+// The two ceilings are stated because they are what makes the decomposition worth reading: y and a can
+// only be lost, so batching is the one factor that can carry the product over 1 - which is why a 1.0000
+// speed is the boundary it is, and why a perfectly accurate seat moving one cell at a time cannot pass it.
+const FACTOR_KEY: ReadonlyArray<readonly [string, string]> = [
+  ["traversal speed = (y * b * a)", "exactly, before the figures above are rounded"],
+  ["=", "the factors on a card multiply to its speed exactly"],
+  ["\u2248", "they do not: rounded to four decimals, or the log stated a speed these turns do not compute"],
+  ["y", "route efficiency - unique cells per applied move, lost to retracing. always <= 1"],
+  ["b", "batching - applied moves per turn, the only factor that can exceed 1"],
+  ["a", "accuracy - turns per decay unit, lost to penalties. always <= 1"],
+];
+
 function agentStatsRow(model: ReplayModel): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
-  const cells = model.stats?.cells ?? 0;
 
-  const metrics: Array<{label: string; read: (agent: AgentSummary) => string}> = [
-    // "Unique", not "new" and not bare "cells entered". The value counts each cell once however often
-    // the agent went back to it, and this report is largely about how often they did - a label reading
-    // "cells entered" beside an oscillating count would invite the two to be compared as if they
-    // measured the same thing. "Unique" is also the log's own word: playerUniqueCellsVisited.
+  // The denominator for a seat's share: the seats' own counts added up. Not the maze's cell count, which
+  // answers a different question - a round that never left one corner would have every seat reading a few
+  // percent and say nothing about how the ground divided between them.
+  //
+  // A sum of the counts, so the shares on the cards total 100%: each seat is being compared against what the
+  // seats did, and the figure compared is the one on its own card. A cell two seats both entered is on both
+  // of their counts, which is what makes them add up.
+  const allCells = model.agents.reduce((total, agent) => total + (agent.cellsEntered ?? 0), 0);
+
+  // A share of a total that is zero is no share at all - not 0%, and certainly not the NaN the division
+  // gives. The count still stands on its own.
+  const shareOf = (value: number, total: number): string =>
+    total === 0 ? formatCount(value) : `${formatCount(value)} (${Math.round((value / total) * 100)}%)`;
+
+  // Two formatters, because only one of these figures is a speed. The x is Tapoo's notation for a traversal
+  // speed - its labels write "Katara the Navigator - 1.0000x" - so putting it on the factors would state
+  // three more speeds per seat, when a factor is a share of moves, a count per turn and a share of turns.
+  // The absence reads the same in every column, matching the counts beside them.
+  const factor = (value: number | undefined): string => (value === undefined ? "not recorded" : value.toFixed(4));
+  const speed = (value: number | undefined): string => (value === undefined ? "not recorded" : `${value.toFixed(4)}x`);
+
+  // A symbol as its own element, so the key below can be looked up from the cell and the letter is not read
+  // as part of the number beside it. <code> because that is what it is: the token the formula is written in.
+  const symbol = (letter: string): HTMLElement => createHtmlElement("code", "maze-agent-symbol", letter);
+
+  // A metric reads as text, or as a list of text and elements where it carries markup - which only the
+  // decomposition does. Kept as one list so every column is still declared in one place, in the order a
+  // reader meets them.
+  const metrics: Array<{label: string; read: (agent: AgentSummary) => string | Array<string | HTMLElement>}> = [
+    // Every cell entry attributed to the seat, a cell counted again each time it was re-entered, with its
+    // share of what the seats entered between them.
+    //
+    // The unique count is not a column of its own: it is this count times route efficiency, and equally the
+    // speed times the charge - two of the figures already on the card - and the card has four columns' worth
+    // of room for facts that are only stated here.
     {
-      label: "Unique cells",
-      read: (agent) =>
-        agent.uniqueCells === null || cells === 0
-          ? "not recorded"
-          : `${formatCount(agent.uniqueCells)} of ${formatCount(cells)} (${Math.round((agent.uniqueCells / cells) * 100)}%)`,
+      label: "All cells",
+      read: (agent) => (agent.cellsEntered === null ? "not recorded" : shareOf(agent.cellsEntered, allCells)),
     },
     {
-      label: "Decay units charged",
+      label: "Decay charged",
       read: (agent) => (agent.decayCharged === null ? "not recorded" : formatCount(agent.decayCharged)),
     },
+    // The speed and its decomposition in one cell, written as the equation it is: the figure, then the three
+    // factors whose product is that figure. One column rather than four because they are one statement -
+    // read apart, a factor is a ratio a reader has to reassemble; read together, the cell shows where the
+    // speed came from and which factor a seat spent its margin on.
+    //
+    // Each factor is tagged with its symbol, and FACTOR_KEY names the symbols once below the stack. Four
+    // decimals, the precision Tapoo states a speed to, because the point of printing the factors is that
+    // the product can be checked against the figure by eye.
     {
-      label: "Traversal speed",
-      read: (agent) =>
-        agent.traversalSpeed === null
-          ? "not recorded"
-          : `${classifyTraversalSpeed(agent.traversalSpeed)} (${agent.traversalSpeed.toFixed(4)})`,
+      label: "Decomposed Traversal speed",
+      read: (agent) => {
+        const stated = agent.traversalSpeed ?? undefined;
+        const factors = decomposeTraversalSpeed(agent);
+        // The figure alone where the round did not state the counts: an equation with nothing on its right
+        // would read as a decomposition that came out empty rather than as one nothing was gathered for.
+        if (!factors) return speed(stated);
+
+        // The speed on the left is the one the log states, and the sign says how the factors stand to it.
+        //
+        // An equals only where the line is one. Two things stop it being one, and the reader sees neither:
+        // the factors are shown to four decimals, so what can be multiplied on the page is rounded figures -
+        // 0.7642 * 1.7227 * 0.7532 is not 0.9916, however exactly the identity holds underneath; and the
+        // stated figure need not be the one these turns compute at all, a per-turn label stating the speed
+        // as of the turn it was written on where a round-end record states it after the final prediction
+        // resolved. Either way the line is an approximation and says so, rather than asserting an equation
+        // the printed numbers do not make - which is how a real log came to read
+        // "1.0000x = (y1.0000 * b1.0000 * a1.0213)".
+        //
+        // Falls back to the product where the log states no speed: the figure the counts give is the only
+        // one there is, and it is exact against itself.
+        const rounded = (value: number): number => Number(value.toFixed(4));
+        const asPrinted = rounded(factors.efficiency) * rounded(factors.batching) * rounded(factors.accuracy);
+        const product = factors.efficiency * factors.batching * factors.accuracy;
+        const shown = stated ?? product;
+        const sign = asPrinted === shown && rounded(shown) === shown ? "=" : "\u2248";
+
+        return [
+          `${speed(shown)} ${sign} (`,
+          symbol("y"), factor(factors.efficiency),
+          " * ", symbol("b"), factor(factors.batching),
+          " * ", symbol("a"), factor(factors.accuracy),
+          ")",
+        ];
+      },
+    },
+    // Not classifyTraversalSpeed on a missing figure: it answers Backtracker for anything it cannot read,
+    // which is right for a speed below 1.0 and wrong for no speed at all. Each column stands alone, so
+    // the absence is stated in both.
+    {
+      label: "Speed class",
+      read: (agent) => (agent.traversalSpeed === null ? "not recorded" : classifyTraversalSpeed(agent.traversalSpeed)),
     },
   ];
 
@@ -1127,15 +1207,44 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
 
     for (const {label, read} of metrics) {
       headRow.append(createHtmlElement("th", null, label));
-      bodyRow.append(createHtmlElement("td", null, read(agent)));
+      const content = read(agent);
+      const cell = createHtmlElement("td");
+      if (typeof content === "string") cell.textContent = content;
+      else cell.append(...content);
+      bodyRow.append(cell);
     }
 
     head.append(headRow);
     body.append(bodyRow);
     table.append(head, body);
-    panel.append(table);
+    // The table in its own scroller, not the card: a reader swiping the metrics should not push the seat's
+    // name off the left of the card, and the key below belongs to every card rather than to this one.
+    const scroller = createHtmlElement("div", "maze-agent-scroll");
+    scroller.append(table);
+    panel.append(scroller);
     container.append(panel);
   });
+
+  // Once, under every card: the letters mean nothing on their own, and a key per card would repeat what a
+  // reader needs to read once. Its first item is the identity - a reader who sees that the three multiply
+  // to the speed knows what the columns are for before reading what any letter stands for.
+  // Its own classes, not .maze-legend: that rule lays out the swatch strips beside the scrubber - a row
+  // flex, indented by half a thumb so it lines up with them - and this key is neither beside the scrubber
+  // nor a row of swatches. Borrowing it meant fighting it.
+  const key = createHtmlElement("ul", "maze-agent-key");
+  // The wholes the shares are of, stated once here rather than inside every card's two cells. Left out where
+  // there is nothing to divide - a round that moved nobody has no total worth naming.
+  const totals: Array<readonly [string, string]> = allCells === 0 ? [] : [[
+    "%",
+    `a share of the ${formatCount(allCells)} cell entries the seats traversed between them`,
+  ]];
+  for (const [symbol, gloss] of [...FACTOR_KEY, ...totals]) {
+    const item = createHtmlElement("li", "maze-agent-key-item");
+    item.append(createHtmlElement("strong", "maze-agent-symbol", symbol));
+    item.append(createHtmlElement("span", null, gloss));
+    key.append(item);
+  }
+  container.append(key);
 
   return container;
 }

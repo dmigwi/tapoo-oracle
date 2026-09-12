@@ -59,6 +59,7 @@ export {
   cellFromLogged,
   cellKeyFromLogged,
   classifyTraversalSpeed,
+  decomposeTraversalSpeed,
   getCellKey,
   isMove,
   openMovesFromLogged,
@@ -1000,6 +1001,8 @@ const DRIFTABLE: Array<{label: string; values: boolean; of: (agent: AgentSummary
   {label: "models", values: true, of: (agent) => agent.models},
   {label: "APIs", values: true, of: (agent) => agent.apis},
   {label: "reasoning efforts", values: true, of: (agent) => agent.reasoningEfforts},
+  {label: "echo-back settings", values: true, of: (agent) => agent.echoBackReasoning},
+  {label: "request intervals", values: true, of: (agent) => agent.requestIntervalSeconds},
   {label: "endpoints", values: false, of: (agent) => agent.endpoints},
 ];
 
@@ -1322,8 +1325,11 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
 
   // Only the export's own caveats; a round's are parseRound's.
 
+  // v2.6.1 records runtime provenance on the envelope; preserve valid strings exactly as exported.
   const log: TapooLog = {
     name: envelope.name,
+    platform: typeof envelope.platform === "string" ? envelope.platform : null,
+    device: typeof envelope.device === "string" ? envelope.device : null,
     version: typeof envelope.version === "string" ? envelope.version : null,
     mode: typeof envelope.mode === "string" ? envelope.mode : null,
     downloadedAt: typeof envelope.downloadedAt === "string" ? envelope.downloadedAt : null,

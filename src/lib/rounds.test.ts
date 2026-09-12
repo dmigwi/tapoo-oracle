@@ -3,7 +3,7 @@ import {describe, expect, it} from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
 import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
-import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgentNames} from "./rounds"
+import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
 import {buildContext} from "./rubric-context"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
@@ -45,10 +45,13 @@ const playedRound = (entries: LogEntry[]): PlayedRound =>
 const playedRounds = (entries: LogEntry[]): PlayedRound[] =>
   groupEntriesByRound(entries).map((group) => playedRound(group.entries))
 
-describe("resolveActiveAgentNames", () => {
+describe("resolveActiveAgents", () => {
   const request = (turn: number, details: Record<string, unknown>) =>
     entry(LOG_EVENTS.request, details, {turn})
-  const names = (entries: LogEntry[]) => [...resolveActiveAgentNames(entries)]
+  const names = (entries: LogEntry[]) =>
+    [...resolveActiveAgents(entries)].map(([turn, player]) => [turn, player.name])
+  const speeds = (entries: LogEntry[]) =>
+    [...resolveActiveAgents(entries)].map(([turn, player]) => [turn, player.traversalSpeed])
 
   // Two sources, and this is the order. A name stated about the turn itself outranks the label, so the
   // label here is wrong and ignored.
@@ -89,6 +92,35 @@ describe("resolveActiveAgentNames", () => {
     expect(names([request(0, {player: "Katara"})])).toEqual([])
     expect(names([request(0, {player: "Katara the Navigator"})])).toEqual([])
     expect(names([request(0, {player: ""})])).toEqual([])
+  })
+
+  // The label carries the speed as well as the name, and it is the only place a log states one per turn:
+  // a round-end record states one for whoever finished, and nothing else states one at all.
+  it("reads the speed the label ends in", () => {
+    expect(speeds([request(0, {player: "Momo the Backtracker - 0.4360x"})])).toEqual([[0, 0.436]])
+    expect(speeds([request(0, {player: "Aang the Navigator - 1.0000x"})])).toEqual([[0, 1]])
+  })
+
+  // The opening turns of a round carry "Default" instead of a figure - a speed is cells per decay unit,
+  // and neither has happened yet. Read as no speed, which is what it is: Number("Default") is NaN, and a
+  // NaN reaching the report prints as one.
+  it("reads a label stating no speed yet as no speed", () => {
+    expect(speeds([request(0, {player: "Katara the Trailblazer - Default"})])).toEqual([[0, null]])
+  })
+
+  // The name may come from the request while the speed can only come from the label, so the label is read
+  // even when it is not what named the turn.
+  it("takes the speed off the label while the name comes from the request", () => {
+    const stated = [request(0, {playerName: "Katara", player: "Katara the Navigator - 1.0000x"})]
+
+    expect(names(stated)).toEqual([[0, "Katara"]])
+    expect(speeds(stated)).toEqual([[0, 1]])
+  })
+
+  // A request with no label stated no speed. Nothing is inferred from the turn's own figures: speed is
+  // Tapoo's ratio, and computing a second one here would put two answers on the page.
+  it("states no speed for a request that carries no label", () => {
+    expect(speeds([request(0, {playerName: "Katara"})])).toEqual([[0, null]])
   })
 
   // One turn, one seat. A retry of a turn is that seat asking again, so the first request answers for it and
@@ -513,10 +545,11 @@ describe("agentsFromRound", () => {
     name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
   ) => ({
     turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells, rejectedMove: null, decayCharged: decay,
+    cells, rejectedMove: null, traversalSpeed: null, decayCharged: decay,
   })
   const setup = (over: Partial<RawTurnSetup> = {}): RawTurnSetup =>
-    ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null, ...over})
+    ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null, ...over})
 
   // The path every log takes once the upstream fix lands: the turn states its own seat and model, and
   // nothing has to be recovered from a decorated label.
@@ -686,14 +719,23 @@ describe("agentsFromRound, on a log that states its own seats", () => {
       {
         name: "Katara", seatId: 1, models: ["gemma4:cloud"], apis: ["ollama"],
         endpoints: ["http://localhost:11434/katara"], reasoningEfforts: ["max"],
+        echoBackReasoning: [], requestIntervalSeconds: [],
         // Its own turn's charge and cell, not the round's total: the figures the replay panels read.
-        uniqueCells: 1, decayCharged: 3, traversalSpeed: 1,
+        // One turn each, one move landing on it, and a charge on the first: the decomposition's counts.
+        cellsEntered: 1, uniqueCells: 1, decayCharged: 3, traversalSpeed: 1, settled: {uniqueCells: 1, movesApplied: 1, turnsTaken: 1},
       },
       {
         name: "Bumi", seatId: 2, models: ["moonshotai/Kimi-K3:baseten"], apis: ["huggingface"],
         endpoints: ["http://localhost:11434/bumi"], reasoningEfforts: ["high"],
+        echoBackReasoning: [], requestIntervalSeconds: [],
         // No replay record covers turn 2, so nothing settled what it charged. Null, not zero.
-        uniqueCells: 1, decayCharged: null, traversalSpeed: null,
+        //
+        // A speed all the same, and Katara's outcome is not where it came from: this seat never finished
+        // anything. It is the figure its own label carried on the turn it played.
+        // And nothing settled, for the same reason: the decomposition counts only turns that stated both an
+        // applied count and a charge, so a turn missing the charge is out of all three counts rather than
+        // out of one - which is what keeps accuracy at or below 1.
+        cellsEntered: 1, uniqueCells: 1, decayCharged: null, traversalSpeed: 0.9591, settled: null,
       },
     ])
   })
@@ -800,11 +842,12 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("counts each seat's cells against the seat, not against its name or number", () => {
     const played = (turn: number, seatId: number, cells: string[]) => ({
       turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
     })
 
     const stating = (seatId: number): RawTurnSetup => ({
       seatId, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
 
     const seats = agentsFromRound(
@@ -827,10 +870,11 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("keeps each seat's echoed model against the seat, not against its name", () => {
     const echoing = (echoedModel: string, seatId: number): RawTurnSetup => ({
       seatId, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
     const played = (turn: number, seatId: number, cells: string[]) => ({
       turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
     })
 
     const seats = agentsFromRound(
@@ -900,10 +944,11 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("keeps a seat's whole walk when a later turn numbers it", () => {
     const echoing = (echoedModel: string): RawTurnSetup => ({
       seatId: null, model: null, echoedModel, api: null, endpoint: null, reasoning: null,
+      echoBackReasoning: null, requestIntervalSeconds: null,
     })
     const played = (turn: number, seatId: number | null, cells: string[]) => ({
       turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
     })
 
     const seats = agentsFromRound(
@@ -1041,5 +1086,126 @@ describe("the charge a replay record states", () => {
   it("is refused when the records describe a different prediction", () => {
     expect(roundOf(["MoveUp"], ["MoveUp", "Teleport"])?.decayCharged).toBeNull()
     expect(roundOf(["MoveUp"], ["MoveDown"])?.decayCharged).toBeNull()
+  })
+})
+
+// v2.6.1 states two more settings on every request: whether the harness echoes the model's reasoning
+// back to it, and how long it waits between requests. Both belong to the seat, like the model and the
+// endpoint - and both are absent from every earlier log, which is a different answer from "off".
+describe("the settings v2.6.1 added to a request", () => {
+  const request = (over: Record<string, unknown> = {}) => logEntry({
+    turn: 1,
+    payload: LOG_EVENTS.request,
+    details: {
+      tools: [], messages: [], player: "Kora the Navigator - 1.0000x", seatId: 1,
+      model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
+      reasoning: "max", echoBackReasoning: false, requestIntervalSeconds: 5, ...over,
+    },
+  })
+  const answered = logEntry({turn: 1, payload: LOG_EVENTS.response, details: {
+    payload: {message: {content: '{"moves":["MoveDown"]}'}},
+  }})
+
+  const seatOf = (...entries: LogEntry[]) =>
+    must(playedRound(entries).agents[0], "the round's seat")
+
+  it("reads both onto the seat that stated them", () => {
+    const seat = seatOf(request(), answered)
+
+    expect(seat.echoBackReasoning).toEqual(["disabled"])
+    expect(seat.requestIntervalSeconds).toEqual(["5"])
+  })
+
+  // False is a setting, not an absence: read as a truthiness test it would report the same empty list a
+  // v2.5.1 log does, and the row would stop saying which of the two it was looking at.
+  it("tells a stated false apart from a log that never said", () => {
+    const stated = seatOf(request({echoBackReasoning: true}), answered)
+    const silent = seatOf(request({echoBackReasoning: undefined, requestIntervalSeconds: undefined}), answered)
+
+    expect(stated.echoBackReasoning).toEqual(["enabled"])
+    expect(silent.echoBackReasoning).toEqual([])
+    expect(silent.requestIntervalSeconds).toEqual([])
+  })
+
+  // A harness that changed either mid-round did not run one experiment, which is the same argument the
+  // model and endpoint lists make - so these carry every value they were given, in order.
+  it("keeps both values when a setting changed mid-round", () => {
+    const seat = seatOf(
+      request(),
+      answered,
+      logEntry({turn: 2, payload: LOG_EVENTS.request, details: {
+        tools: [], messages: [], player: "Kora the Navigator - 1.0000x", seatId: 1,
+        model: "gemma4:cloud", api: "ollama", endpoint: "http://localhost:11434/api/chat",
+        reasoning: "max", echoBackReasoning: true, requestIntervalSeconds: 10,
+      }}),
+      logEntry({turn: 2, payload: LOG_EVENTS.response, details: {
+        payload: {message: {content: '{"moves":["MoveDown"]}'}},
+      }}),
+    )
+
+    expect(seat.echoBackReasoning).toEqual(["disabled", "enabled"])
+    expect(seat.requestIntervalSeconds).toEqual(["5", "10"])
+  })
+})
+
+// The gap this closes: a round that never finished, and a seat that did not make the final move, both
+// used to report no speed at all - because the only figure being read was the one on the round-end
+// record, which names a single seat and exists only once a round has ended.
+describe("the speed a seat was going when the round did not settle it", () => {
+  const turnOf = (turn: number, label: string, moves = '{"moves":["MoveDown"]}'): LogEntry[] => [
+    logEntry({turn, payload: LOG_EVENTS.request, details: {
+      tools: [], messages: [{role: "tool", content: JSON.stringify({currentCell: {row: turn, col: 0}})}],
+      player: label,
+    }}),
+    logEntry({turn, payload: LOG_EVENTS.response, details: {payload: {message: {content: moves}}}}),
+  ]
+
+  const speedOf = (entries: LogEntry[], name: string) =>
+    playedRound(entries).agents.find((agent) => agent.name === name)?.traversalSpeed
+
+  // No level-won, no level-lost: the log simply stops, which is what a disabled agent or an interrupted
+  // run leaves behind.
+  it("reports a speed for a round that never ended", () => {
+    const unfinished = [
+      ...turnOf(0, "Kora the Trailblazer - Default"),
+      ...turnOf(1, "Kora the Navigator - 1.0000x"),
+      ...turnOf(2, "Kora the Backtracker - 0.9591x"),
+    ]
+
+    expect(speedOf(unfinished, "Kora")).toBe(0.9591)
+  })
+
+  // The last turn to state one, because the figure is cumulative: every earlier reading is the same
+  // measure part-way through the round.
+  it("keeps the latest reading, not the first", () => {
+    const climbing = [
+      ...turnOf(0, "Kora the Backtracker - 0.5000x"),
+      ...turnOf(1, "Kora the Navigator - 1.0000x"),
+    ]
+
+    expect(speedOf(climbing, "Kora")).toBe(1)
+  })
+
+  // Two seats, one outcome. The finisher takes the round's settled figure; the other seat keeps what its
+  // own label said, which is the reading that used to be thrown away.
+  it("gives a seat that did not finish the speed its own turns stated", () => {
+    const round = [
+      ...turnOf(0, "Kora the Navigator - 1.0000x"),
+      ...turnOf(1, "Bumi the Backtracker - 0.8000x"),
+      logEntry({turn: 2, payload: LOG_EVENTS.levelWon, details: {
+        outcome: "won", traversalSpeed: "1.2500",
+        agent: {playerName: "Kora"},
+        playerPosition: {x: 0, y: 2}, playerUniqueCellsVisited: 2, decayUnitsCharged: 2,
+      }}),
+    ]
+
+    expect(speedOf(round, "Kora")).toBe(1.25)
+    expect(speedOf(round, "Bumi")).toBe(0.8)
+  })
+
+  // A round whose labels state nothing - every turn "Default", an older log, or requests with no label at
+  // all - still reports nothing rather than a zero. Not recorded is a different answer from standing still.
+  it("still reports nothing where no turn stated a speed", () => {
+    expect(speedOf([...turnOf(0, "Kora the Trailblazer - Default")], "Kora")).toBeNull()
   })
 })

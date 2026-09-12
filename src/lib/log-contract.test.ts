@@ -135,6 +135,42 @@ describe("parseTapooLogText", () => {
     expect(expectOk(result).source.entries).toHaveLength(1)
   })
 
+  it("reads v2.6.1 device and platform provenance from the export envelope", () => {
+    const result = parse(envelope({
+      version: "2.6.1",
+      platform: "http://0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+      entries: [entry({
+        payload: LOG_EVENTS.levelStarted,
+        details: {
+          platform: "ignored legacy platform",
+          device: "ignored legacy device",
+        },
+      })],
+    }))
+
+    expect(expectOk(result).source).toMatchObject({
+      platform: "http://0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+    })
+  })
+
+  it("rejects malformed provenance but preserves blank strings exactly", () => {
+    const malformed = expectOk(parse(envelope({
+      version: "2.6.1",
+      platform: 5500,
+      device: {browser: "Chrome"},
+    }))).source
+    const blank = expectOk(parse(envelope({
+      version: "2.6.1",
+      platform: "  ",
+      device: "",
+    }))).source
+
+    expect(malformed).toMatchObject({platform: null, device: null})
+    expect(blank).toMatchObject({platform: "  ", device: ""})
+  })
+
   it.each([
     ["a non-object", 42, /object at the top level/],
     ["null", null, /object at the top level/],
@@ -651,7 +687,7 @@ describe("a log whose seat changed model mid-round", () => {
 describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
     turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, decayCharged: null,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null,
   })
 
   it("passes a round where each seat kept one player", () => {
@@ -697,7 +733,8 @@ describe("seatRosterCheck", () => {
 describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
-    reasoningEfforts: ["max"], uniqueCells: null, decayCharged: null, traversalSpeed: null, ...over,
+    reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
+    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
   })
 
   it("passes a round whose seats each held one setup throughout", () => {
