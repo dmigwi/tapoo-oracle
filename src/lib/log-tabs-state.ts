@@ -231,25 +231,14 @@ async function loadLogTabFields(
   };
 }
 
-/** Names a tab after the file it loaded: the last path segment, else the host, else "Report N", and
- * shortened to fit a tab.
+/** Names a tab with the final characters of the exact loaded value.
  *
- * Shortened from the left, keeping the *end*: logs from one run share a directory and differ in the file
- * name, so trimming the tail would leave a row of tabs reading the same thing.
- *
- * Every arm falls back rather than throwing - this runs on a URL that has already been validated, but
- * naming a tab must not be able to fail the load that produced it. */
+ * No URL parsing or decoding: the suffix is the contract, so hosts, paths, query strings and ordinary
+ * text are treated alike. A leading ellipsis marks only values whose beginning was removed. A non-string
+ * runtime value still falls back rather than failing a completed load while naming its tab. */
 export function extractTabLabelFromUrl(value: string, index = 0, maxLength = 34): string {
-  const fallback = `Report ${index + 1}`;
-
-  let label: string;
-  try {
-    const url = new URL(value);
-    label = asTrimmedText(decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "")) || url.hostname;
-  } catch {
-    return fallback;
-  }
-
-  if (!label) return fallback;
-  return label.length <= maxLength ? label : `...${label.slice(-(maxLength - 3))}`;
+  if (typeof value !== "string") return `Report ${index + 1}`;
+  if (!Number.isFinite(maxLength) || maxLength <= 0) return "";
+  const suffixLength = Math.floor(maxLength);
+  return value.length > suffixLength ? `...${value.slice(-suffixLength)}` : value;
 }

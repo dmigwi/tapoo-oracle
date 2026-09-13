@@ -93,22 +93,25 @@ describe("report URL tabs", () => {
     })
   })
 
-  it("derives readable report labels from URLs", () => {
-    expect(extractTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0)).toBe("tapoo run.json")
-    expect(extractTabLabelFromUrl("https://example.com/logs/", 1)).toBe("logs")
-    expect(extractTabLabelFromUrl("not a url", 2)).toBe("Report 3")
+  it("uses the final characters of the exact report value", () => {
+    expect(extractTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0))
+      .toBe(".../example.com/logs/tapoo%20run.json")
+    expect(extractTabLabelFromUrl("https://example.com/logs/", 1)).toBe("https://example.com/logs/")
+    expect(extractTabLabelFromUrl("not a url", 2)).toBe("not a url")
   })
 
-  // A URL with neither a path segment nor a host still has to name its tab: every arm of this falls
-  // back, because naming a tab must not fail the load that produced it.
-  it("names a tab a URL gives nothing to name", () => {
-    expect(extractTabLabelFromUrl("file:///", 4)).toBe("Report 5")
+  it("does not parse a short value before naming the tab", () => {
+    expect(extractTabLabelFromUrl("file:///", 4)).toBe("file:///")
   })
 
-  // From the beginning, so the file name a reader tells two tabs apart by survives.
-  it("trims a long label from the beginning", () => {
+  it("keeps exactly the requested suffix and marks that the beginning was removed", () => {
     expect(extractTabLabelFromUrl("https://example.com/logs/very-long-prefix-tapoo-agent-api-log.json", 0, 27))
-      .toBe("...tapoo-agent-api-log.json")
+      .toBe("...ix-tapoo-agent-api-log.json")
+  })
+
+  it("returns no characters when the maximum length is not positive", () => {
+    expect(extractTabLabelFromUrl("https://example.com/report.json", 0, 0)).toBe("")
+    expect(extractTabLabelFromUrl("https://example.com/report.json", 0, -1)).toBe("")
   })
 
   it("opens the add-report form without creating a report entry", () => {
@@ -171,7 +174,7 @@ describe("report URL tabs", () => {
     const first = next.tabs.find((tab) => tab.id === "first")
 
     expect(first).toMatchObject({
-      label: "first.json",
+      label: "https://example.com/first.json",
       status: "loaded",
       loadedUrl: "https://example.com/first.json",
     })
@@ -193,7 +196,7 @@ describe("report URL tabs", () => {
     const first = next.tabs.find((tab) => tab.id === "first")
     const second = next.tabs.find((tab) => tab.id === "second")
 
-    expect(first).toMatchObject({label: "first.json", status: "loaded"})
+    expect(first).toMatchObject({label: "https://example.com/first.json", status: "loaded"})
     expect(must(must(first, "the loaded tab").result, "an analysis on the loaded tab").ok).toBe(true)
     expect(second).toMatchObject({url: "https://example.com/second.json", status: "empty"})
   })
