@@ -396,7 +396,7 @@ export type Outcome = {
   outcome?: string;
   traversalSpeed?: string | number;
   traversalSpeedClass?: string;
-  agent?: {playerName?: string};
+  agent?: {seatId?: number; playerName?: string; model?: string};
   playerPosition?: {x?: number; y?: number};
   playerUniqueCellsVisited?: number;
   decayUnitsCharged?: number;

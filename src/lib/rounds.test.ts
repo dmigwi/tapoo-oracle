@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 
-import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
 import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
 import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
@@ -115,6 +115,17 @@ describe("resolveActiveAgents", () => {
 
     expect(names(stated)).toEqual([[0, "Katara"]])
     expect(speeds(stated)).toEqual([[0, 1]])
+  })
+
+  it("resolves the final active agent and speed from the snapshot's second game", () => {
+    const secondGame = must(
+      groupEntriesByRound(fixtureData.entries as LogEntry[]).find(({identity}) => identity.game === 4),
+      "game 4 in the v2.6.1 snapshot",
+    )
+    const resolved = [...resolveActiveAgents(secondGame.entries)]
+
+    expect(resolved).toHaveLength(20)
+    expect(resolved.at(-1)).toEqual([19, {name: "Azula", traversalSpeed: 0.4545}])
   })
 
   // A request with no label stated no speed. Nothing is inferred from the turn's own figures: speed is
@@ -368,6 +379,32 @@ describe("a turn that produced no prediction", () => {
     expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], submittedCount: 0, applied: 0, decayCharged: 3})
   })
 
+  it("keeps the final speed when a provider failure prevents a prediction", () => {
+    const played = playedRound([
+      entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 0, game: 6, level: 54}),
+      entry(LOG_EVENTS.request, {
+        player: "Azula the Backtracker - 0.4545x",
+        playerName: "Azula",
+        seatId: 2,
+      }, {turn: 19, game: 6, level: 54}),
+      entry(LOG_EVENTS.providerHttpFailure, {status: 503}, {turn: 19, game: 6, level: 54, log: "error"}),
+    ])
+
+    expect(played.turns).toEqual([
+      expect.objectContaining({
+        turn: 19,
+        playerName: "Azula",
+        traversalSpeed: 0.4545,
+        moves: [],
+        applied: 0,
+        decayCharged: null,
+      }),
+    ])
+    expect(played.agents).toEqual([
+      expect.objectContaining({name: "Azula", seatId: 2, traversalSpeed: 0.4545}),
+    ])
+  })
+
   it("leaves the agent where the turn before it ended", () => {
     // Without this the scrubber snaps the agent back to the start whenever a turn submitted nothing.
     const empty = at(roundWithEmptyTurn()[0]!.turns, 1)
@@ -419,7 +456,10 @@ describe("the context buildPlayedRound is handed", () => {
   // The caller's context, over exactly these entries. buildContext is the most expensive read the app
   // makes, so the record must be derived from the one already built rather than from a second walk.
   it("derives the round from the context it is given", () => {
-    const entries = fixtureData.entries as LogEntry[]
+    const entries = must(
+      groupEntriesByRound(fixtureData.entries as LogEntry[])[0],
+      "the fixture's first round",
+    ).entries
     const context = buildContext(entries, {label: "fixture"})
 
     expect(shape(must(buildPlayedRound(entries, context), "a round"))).toEqual(shape(roundOf(entries)))
@@ -632,6 +672,27 @@ describe("agentsFromRound", () => {
     const seats = agentsFromRound(new Map(), [], {outcome: "won", agent: {playerName: "Kora"}})
 
     expect(seats.map((agent) => agent.name)).toEqual(["Kora"])
+  })
+
+  it("uses completed-round totals when a per-turn charge reading is missing", () => {
+    const turns = [
+      seat("Kora", 0, ["0,0", "1,0"], 1, 1),
+      seat("Kora", 1, ["1,0", "2,0"], null, 1),
+    ]
+    const [only] = agentsFromRound(new Map(), turns, {
+      outcome: "won",
+      agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2,
+      playerUniqueCellsVisited: 2,
+      decayUnitsCharged: 3,
+      traversalSpeed: "0.6667",
+    })
+
+    expect(only).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 3,
+      settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2},
+    })
   })
 })
 

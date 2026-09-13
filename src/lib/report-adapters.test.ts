@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest"
 
-import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {diagnosticRows, diagnosticTableData, modelOutputRows, groupResultTone, narrativeSummary, profileCards, agentRows, provenanceRows, withoutCredentials, rubricQuestionRows, validationRows, warningHeadline} from "./report-adapters"
 import {addLogTab, createInitialLogTabs, deleteLogTab, loadNewLogTabFromUrl, loadLogTabFromUrl, extractTabLabelFromUrl} from "./log-tabs-view"
 import {validateOnlineJsonUrl} from "./share-link"
@@ -8,7 +8,7 @@ import type {AgentSummary, Report, LogTabsState, TapooLog, ValidationCheck} from
 import {sliceLogText, at, expectErr, expectOk, firstRound, messagesOf, must, twoSeatDriftLog} from "./test-support";
 
 // Vendored from the fixed-revision gemma4 Gist supplied for contract validation. Keeping the bytes
-// local makes the suite deterministic while preserving the complete Tapoo 2.5.1 payload.
+// local makes the suite deterministic while preserving the complete Tapoo 2.6.1 payload.
 let fixture: Record<string, unknown>
 let fixtureText: string
 let fixtureReport: Report
@@ -33,9 +33,8 @@ describe("sliceLogText", () => {
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
-    // One report per round, each carrying the full rubric. The fixture is a single-round log, so the
-    // count is 1 - a multi-round log is what the round tabs exist for.
-    expect(expectOk(result).rounds).toHaveLength(1)
+    // One report per round, each carrying the full rubric.
+    expect(expectOk(result).rounds).toHaveLength(2)
     // The declared name, not the "gemma4" the provider echoed back: an echo drops the ":cloud" saying
     // where the model was served from, and that is the half a reader comparing two runs needs.
     expect(firstRound(result).agents.map((agent) => agent.models)).toEqual([["gemma4:cloud"]])
@@ -230,12 +229,12 @@ describe("presentation", () => {
   it("keeps capabilities and violations as separate fractions", () => {
     const cards = profileCards(fixtureReport)
     expect(at(cards, 0)).toMatchObject({ label: "Capabilities demonstrated", value: "5/9" })
-    expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "2/6" })
+    expect(at(cards, 1)).toMatchObject({ label: "Violations confirmed", value: "1/6" })
 
     // The groups behind each fraction, on the card that states it - not several words away in prose.
     // Counted, so the ids and the numerator can never disagree about what was met.
     expect(at(cards, 0).groups).toHaveLength(5)
-    expect(at(cards, 1).groups).toHaveLength(2)
+    expect(at(cards, 1).groups).toHaveLength(1)
     expect(at(cards, 0).groups.map((group) => group.id).every((id) => id.startsWith("C"))).toBe(true)
     expect(at(cards, 1).groups.map((group) => group.id).every((id) => id.startsWith("V"))).toBe(true)
     // Each code carries the name it stands for, so "C6" can be read where it appears.
@@ -258,9 +257,9 @@ describe("presentation", () => {
     const structural = rows.filter((row) => row.id?.startsWith("C7.") ?? false)
 
     expect(structural).toHaveLength(2)
-    expect(at(structural, 0)).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (0/2)"})
+    expect(at(structural, 0)).toMatchObject({id: "C7.Q1", answer: "NO", groupResult: "NO (1/2)"})
     expect(at(structural, 0).question).toMatch(/corridor cells/)
-    expect(at(structural, 1)).toMatchObject({id: "C7.Q2", answer: "NO", groupResult: "NO (0/2)"})
+    expect(at(structural, 1)).toMatchObject({id: "C7.Q2", answer: "YES", groupResult: "NO (1/2)"})
   })
 
   it("provides one definition for every evaluated rubric answer", () => {
@@ -301,7 +300,7 @@ describe("presentation", () => {
 
   it("describes provenance without inventing missing fields", () => {
     const rows = provenanceRows(fixtureSource)
-    expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.5.1")
+    expect(must(rows.find((row) => row.field === "Tapoo version"), "a matching row").value).toBe("2.6.1")
 
     const withoutVersion = sliceLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
@@ -325,7 +324,7 @@ describe("presentation", () => {
     const summary = narrativeSummary(fixtureReport)
 
     expect(summary).toMatch(/predictions?\./)
-    expect(summary).toMatch(/Navigator/)
+    expect(summary).toMatch(/Trailblazer/)
     // The fraction is on the cards directly beneath, and the setup is on the Agents table - which can
     // say which seat ran which, where a single sentence had to pick one.
     expect(summary).not.toMatch(/of 9 capabilities/)
@@ -561,17 +560,16 @@ describe("provenance names the setup a verdict depends on", () => {
       "Log entries",
       "Control mode",
     ])
-    // Seat 1 because the log says so, on the round-end record - the only place v2.5.1 states a seat.
+    // Seat 1 because the log says so on the round-end record.
     // Without reading it the label would fall back to acting order, which happens to agree here and so
     // would hide the field being ignored.
     expect(firstRound(result).agents.map((agent) => agent.seatId)).toEqual([1])
     expect(agentRows(firstRound(result).agents)).toEqual([
       {
-        field: "Katara \u00b7 Agent at Seat 1",
+        field: "Kora \u00b7 Agent at Seat 1",
         // The endpoint reads as its own clause rather than parenthetically, because the cell puts it on
-        // its own line. echo back reasoning and polling rate say nothing here: v2.5.1 states neither, and
-        // a row inventing "disabled" for a setting the log never named would be a claim about the run.
-        value: "gemma4:cloud on the Ollama API at max reasoning effort http://localhost:11434/api/chat",
+        // its own line. v2.6.1 also states echo-back reasoning and polling rate.
+        value: "gemma4:cloud on the Ollama API at max reasoning effort (echo back reasoning: disabled) http://localhost:11434/api/chat (polling rate: 5 sec)",
         // The same values unjoined, which is what the table actually renders - the sentence is the
         // fallback for anything that cannot weight them.
         // Lists, not joined strings: the cell marks a setting the seat did not hold still, and it can
@@ -581,8 +579,8 @@ describe("provenance names the setup a verdict depends on", () => {
           api: ["Ollama"],
           endpoint: ["http://localhost:11434/api/chat"],
           effort: ["max"],
-          echo: [],
-          interval: [],
+          echo: ["disabled"],
+          interval: ["5 sec"],
         },
       },
     ])

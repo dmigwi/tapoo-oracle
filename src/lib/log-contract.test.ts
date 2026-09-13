@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 
 import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSettingsCheck, seatRosterCheck, classifyTraversalSpeed, parseRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
@@ -9,6 +9,12 @@ import {groupEntriesByRound, roundLabel} from "./rounds"
 import {roundReportFor} from "./rubric-report"
 import {fnv1a64Checksum} from "./utils"
 import {sliceLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
+
+const fixtureLogEntries = () => (fixtureData as unknown as {entries: LogEntry[]}).entries
+const firstFixtureRoundEntries = () => must(
+  groupEntriesByRound(fixtureLogEntries())[0],
+  "the fixture's first round",
+).entries
 
 // `over` is deliberately not Partial<LogEntry>: several cases hand it values no producer would write -
 // a numeric payload, an unknown level - which is exactly the shape parseTapooLogText is asked to
@@ -328,7 +334,7 @@ describe("the traversal payload checksum", () => {
 
   // The half that matters most: a false positive here would put an accuracy warning on every clean
   // report, and a reader who meets one on a good log stops believing the next one.
-  it("is silent on a real export, where all 16 payloads reconstruct byte-exactly", () => {
+  it("is silent on a real export, where all 88 payloads reconstruct byte-exactly", () => {
     expect(checksumWarnings(fixtureData)).toEqual([])
   })
 
@@ -347,11 +353,10 @@ describe("the traversal payload checksum", () => {
   })
 
   // A payload with no checksum at all is *counted*, not passed over. The distinction has a number in the
-  // report behind it - "16 of 16 reconstructed" against "16 not checkable" - and skipping these would
+  // report behind it - "88 of 88 reconstructed" against "88 not checkable" - and skipping these would
   // shrink the denominator until a round that verified nothing looked like a round with nothing to verify.
   //
-  // No log has one: every get_maze_structure result in the capture is checksummed, and the 32 tool results
-  // that are not belong to the other two tools, which this check never reaches.
+  // No log has one: every get_maze_structure result in the capture is checksummed.
   it("counts a maze-structure payload with no checksum instead of passing over it", () => {
     const log = JSON.parse(JSON.stringify(fixtureData)) as {entries: LogEntry[]}
     let stripped = 0
@@ -366,14 +371,18 @@ describe("the traversal payload checksum", () => {
         stripped += 1
       }
     }
-    expect(stripped).toBe(16)
+    expect(stripped).toBe(88)
 
-    const round = parseRound(log.entries)
-    const check = must(round.checks.find((one) => one.name === "Traversal payloads"), "the traversal check")
-    expect(check.outcome).toBe("unchecked")
-    expect(check.detail).toMatch(/^16 get_maze_structure results carried no checksum/)
+    const checks = groupEntriesByRound(log.entries).map(({entries}) =>
+      must(parseRound(entries).checks.find((one) => one.name === "Traversal payloads"), "the traversal check"),
+    )
+    expect(checks.map((check) => check.outcome)).toEqual(["unchecked", "unchecked"])
+    expect(checks.map((check) => check.detail)).toEqual([
+      "67 get_maze_structure results carried no checksum, or the round never recorded the destination cell and history window a reconstruction needs",
+      "21 get_maze_structure results carried no checksum, or the round never recorded the destination cell and history window a reconstruction needs",
+    ])
     // Unverifiable, never damaged: nothing here says the payload is wrong.
-    expect(round.warnings).toEqual([])
+    expect(groupEntriesByRound(log.entries).flatMap(({entries}) => parseRound(entries).warnings)).toEqual([])
   })
 
   it("reports a payload whose contents no longer match what Tapoo hashed", () => {
@@ -390,15 +399,16 @@ describe("the traversal payload checksum", () => {
         const first = payload.filteredTraversalHistory?.[0]?.openMoves?.[0]
         if (!first) continue
         // One status flipped and nothing else: the payload still parses, and would still draw.
-        first[1] = "oscillating"
+        first[1] = first[1] === "oscillating" ? "unvisited" : "oscillating"
         message.content = JSON.stringify(payload)
         tampered += 1
       }
     }
 
-    expect(tampered).toBe(16)
+    expect(tampered).toBe(88)
     expect(checksumWarnings(log)).toEqual([
-      "16 maze-structure payloads do not match their checksums, the first at turn 0 of game 2 level 1, so the visit colours on the replay may not be what the agent was shown.",
+      "67 maze-structure payloads do not match their checksums, the first at turn 0 of game 3 level 1, so the visit colours on the replay may not be what the agent was shown.",
+      "21 maze-structure payloads do not match their checksums, the first at turn 0 of game 4 level 1, so the visit colours on the replay may not be what the agent was shown.",
     ])
   })
 })
@@ -799,17 +809,15 @@ describe("agentSettingsCheck", () => {
 // The summary the report shows: what was verified, and what could not be.
 //
 // The checks report only their failures, so a clean log says nothing - and "nothing" covered both a
-// round that verified all 16 payloads and a round that could attempt none. These pin the difference.
+// round that verified all 67 payloads and a round that could attempt none. These pin the difference.
 describe("the validation summary", () => {
   const named = (checks: ValidationCheck[], name: string) => {
     const check = checks.find((candidate) => candidate.name === name)
     if (!check) throw new Error(`no check named ${name}`)
     return check
   }
-  const fixtureEntries = () => (fixtureData as unknown as {entries: LogEntry[]}).entries
-
   it("reports what a real round verified", () => {
-    const round = parseRound(fixtureEntries())
+    const round = parseRound(firstFixtureRoundEntries())
 
     expect(round.checks.map((check) => [check.name, check.outcome])).toEqual([
       ["Encoded maze", "passed"],
@@ -821,8 +829,8 @@ describe("the validation summary", () => {
       ["Traversal payloads", "passed"],
     ])
     expect(round.checks.every((check) => check.scope === "round")).toBe(true)
-    expect(named(round.checks, "Traversal payloads").detail).toBe("16 of 16 get_maze_structure results reconstructed byte-exactly")
-    expect(named(round.checks, "Agent personas").detail).toMatch(/3 distinct system prompts across 32 appearances, of the 4 personas/)
+    expect(named(round.checks, "Traversal payloads").detail).toBe("67 of 67 get_maze_structure results reconstructed byte-exactly")
+    expect(named(round.checks, "Agent personas").detail).toMatch(/2 distinct system prompts across 134 appearances, of the 4 personas/)
   })
 
   // A trimmed persona belongs to one row only. Six of them under two checksums is a persona sequence,
@@ -866,19 +874,19 @@ describe("the validation summary", () => {
   // compacting something it never logged, not a check that failed to run. Reported as "not checked" it
   // read as a fault in the report, so it sits beside the result instead of being it.
   it("counts the repeats it could compare, and states the rest as a property of the log", () => {
-    const round = parseRound(fixtureEntries())
+    const round = parseRound(firstFixtureRoundEntries())
 
     expect(named(round.checks, "Prompts and tool descriptions").detail)
       .toBe("5 of 5 texts logged in full hashed to the checksum beside them")
 
     const repeats = named(round.checks, "Trimmed checksummed repeats")
     expect(repeats.outcome).toBe("passed")
-    // Only what this row owns: the 76 trimmed tool descriptions and user messages. A trimmed persona is
+    // Only what this row owns: the 331 trimmed tool descriptions and user messages. A trimmed persona is
     // not a repeat of a text this round logged - it is the next prompt in a sequence Tapoo never logs in
-    // full - so all 32 of its appearances are the personas row's to report.
-    expect(repeats.detail).toBe("76 of 76 repeats matched the full text logged under the same checksum")
+    // full - so all 134 of its appearances are the personas row's to report.
+    expect(repeats.detail).toBe("331 of 331 repeats matched the full text logged under the same checksum")
     expect(named(round.checks, "Agent personas").detail)
-      .toBe("3 distinct system prompts across 32 appearances, of the 4 personas Tapoo defines")
+      .toBe("2 distinct system prompts across 134 appearances, of the 4 personas Tapoo defines")
   })
 
   // Two checks cover the file rather than a round, and say so: an entry that fails the contract is
@@ -889,8 +897,8 @@ describe("the validation summary", () => {
 
     expect(parsed.checks.map((check) => check.name)).toEqual(["Log entry fields", "Model responses"])
     expect(parsed.checks.every((check) => check.scope === "log")).toBe(true)
-    expect(named(parsed.checks, "Log entry fields").detail).toBe("66 of 66 log entries carried a payload, a timestamp and a known log level")
-    expect(named(parsed.checks, "Model responses").detail).toBe("32 of 32 model responses were read")
+    expect(named(parsed.checks, "Log entry fields").detail).toBe("360 of 360 log entries carried a payload, a timestamp and a known log level")
+    expect(named(parsed.checks, "Model responses").detail).toBe("174 of 174 model responses were read")
   })
 
   it("counts entries the entry contract turned away", () => {
@@ -905,7 +913,7 @@ describe("the validation summary", () => {
   // business and must not be counted against it. Counting them read as 32 unverifiable payloads on a
   // log where every payload the check covers verified.
   it("counts only the payloads the reconstruction is about", () => {
-    expect(named(parseRound(fixtureEntries()).checks, "Traversal payloads").detail)
+    expect(named(parseRound(firstFixtureRoundEntries()).checks, "Traversal payloads").detail)
       .not.toMatch(/not checkable/)
   })
 
@@ -917,12 +925,13 @@ describe("the validation summary", () => {
       const details = entry.details as Record<string, unknown> | null
       if (details && "historyWindowRadius" in details) delete details.historyWindowRadius
     }
-    const check = named(parseRound(stripped.entries).checks, "Traversal payloads")
+    const entries = must(groupEntriesByRound(stripped.entries)[0], "the fixture's first round").entries
+    const check = named(parseRound(entries).checks, "Traversal payloads")
 
     expect(check.outcome).toBe("unchecked")
     expect(check.detail).toMatch(/never recorded the destination cell and history window/)
     // And still silent, because a missing input is not evidence of damage.
-    expect(parseRound(stripped.entries).warnings).toEqual([])
+    expect(parseRound(entries).warnings).toEqual([])
   })
 
   // A failure has to read as one, and must not replace the warning that already reports it.
@@ -934,10 +943,11 @@ describe("the validation summary", () => {
         if (typeof message.content_checksum === "string") message.content_checksum = "0xdeadbeefdeadbeef"
       }
     }
-    const round = parseRound(tampered.entries)
+    const entries = must(groupEntriesByRound(tampered.entries)[0], "the fixture's first round").entries
+    const round = parseRound(entries)
 
     expect(named(round.checks, "Traversal payloads").outcome).toBe("failed")
-    expect(named(round.checks, "Traversal payloads").detail).toMatch(/^16 of 16 get_maze_structure results did not match/)
+    expect(named(round.checks, "Traversal payloads").detail).toMatch(/^67 of 67 get_maze_structure results did not match/)
     expect(round.warnings.some((warning) => warning.message.includes("checksum"))).toBe(true)
   })
 
@@ -972,14 +982,15 @@ describe("the prompts and tool descriptions a round carried", () => {
     ({name, description, description_checksum: checksum})
 
   // The half that matters most: a false positive here would put an accuracy warning on every clean
-  // report. The real export carries 128 prompt and description appearances and raises none.
+  // report. The first round in the real export carries hundreds of prompt and description appearances
+  // and raises none.
   it("says nothing about a round whose prompts and descriptions are intact", () => {
-    expect(parseRound((fixtureData as unknown as {entries: LogEntry[]}).entries).warnings).toEqual([])
+    expect(parseRound(firstFixtureRoundEntries()).warnings).toEqual([])
   })
 
   // The invariant the repeat denominator rests on: a trimmed text always carries a checksum, so nothing
   // trimmed is dropped for lack of one and "N of N repeats" is every repeat the round logged. Verified
-  // across the whole capture - 107 trimmed texts, 107 checksums, no exception - and asserted here so a
+  // across the whole capture - 601 trimmed texts, 601 checksums, no exception - and asserted here so a
   // producer that stops doing it is caught by the suite rather than by a denominator quietly shrinking.
   it("finds every trimmed text in the real capture carrying a checksum", () => {
     const trimmed: Array<{text: string; checksum: unknown}> = []
@@ -1000,7 +1011,7 @@ describe("the prompts and tool descriptions a round carried", () => {
       }
     }
 
-    expect(trimmed).toHaveLength(107)
+    expect(trimmed).toHaveLength(601)
     expect(trimmed.filter((one) => typeof one.checksum !== "string")).toEqual([])
   })
 

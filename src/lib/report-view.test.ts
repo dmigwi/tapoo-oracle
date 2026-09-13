@@ -6,6 +6,7 @@ import * as Inputs from "@observablehq/inputs"
 import {html} from "htl"
 import {describe, expect, it} from "vitest"
 
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {createInitialLogTabs} from "./log-tabs-view"
 import {roundReportFor} from "./rubric-report"
 import {roundLabel} from "./rounds"
@@ -306,6 +307,26 @@ describe("activeRound", () => {
 
   it("takes the round an identity names", () => {
     expect(labelOf(activeRound(twoRoundTab(), {game: 3, level: 2}))).toBe("Game 3 \u00b7 Level 2")
+  })
+
+  it("returns Game 4 from the v2.6.1 snapshot", () => {
+    const result = sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"})
+    if (!result.ok) throw new Error(result.error)
+    const tab: LogTab = {
+      id: "snapshot",
+      url: "https://example.com/v2.6.1.json",
+      label: "v2.6.1 snapshot",
+      status: "loaded",
+      result,
+    }
+
+    const round = activeRound(tab, {game: 4, level: 1})
+
+    expect(round?.identity).toEqual({game: 4, level: 1})
+    expect(round?.entries).toHaveLength(90)
+    expect(round?.report.predictions).toBe(13)
+    expect(round?.report.agents).toMatchObject([{name: "Azula", seatId: 2, traversalSpeed: 0.4545}])
+    expect(round?.report.diagnostics).toMatchObject({endpointFailures: 1, agentDisablings: 1})
   })
 
   // An identity can only come from a round tab this module drew, so one that matches nothing means the

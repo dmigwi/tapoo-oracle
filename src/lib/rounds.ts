@@ -274,6 +274,7 @@ export function agentsFromRound(
   // and the one to report. This list is only consulted for a seat nothing declared a model for.
   const echoes = new Map<AgentSummary, string[]>()
   const entered = new Map<AgentSummary, Set<CellKey>>()
+  const turnsBySeat = new Map<AgentSummary, TurnSummary[]>()
   // Kept apart from `entered`: the decomposition counts cells over its own turns, and the seat's
   // round-wide count covers every turn it played.
   const settledCells = new Map<AgentSummary, Set<CellKey>>()
@@ -357,6 +358,7 @@ export function agentsFromRound(
     // the row above it naming the same seat.
     const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
     if (!seat) continue
+    turnsBySeat.set(seat, [...turnsBySeat.get(seat) ?? [], turn])
 
     if (setup) {
       add(seat.models, setup.model)
@@ -465,6 +467,33 @@ export function agentsFromRound(
     // The record declares a model the same way a request does, so it joins the declared list rather than
     // standing in for it.
     add(finisher.models, asTrimmedText(record.model) || null)
+
+    // A completed one-seat round can settle a hole in its per-turn charge readings from the outcome's
+    // authoritative totals. Use this only when every round turn belongs to the finisher and every applied
+    // count is known; otherwise replacing the partial account would attribute another seat's work or invent
+    // moves the log never confirmed.
+    const ownedTurns = turnsBySeat.get(finisher) ?? []
+    const roundTurns = outcome?.turnCount
+    const uniqueCells = outcome?.playerUniqueCellsVisited
+    const decayCharged = outcome?.decayUnitsCharged
+    if (
+      typeof roundTurns === "number" &&
+      Number.isInteger(roundTurns) &&
+      ownedTurns.length === roundTurns &&
+      ownedTurns.every((turn) => turn.applied !== null) &&
+      typeof uniqueCells === "number" &&
+      Number.isFinite(uniqueCells) &&
+      typeof decayCharged === "number" &&
+      Number.isFinite(decayCharged)
+    ) {
+      finisher.uniqueCells = uniqueCells
+      finisher.decayCharged = decayCharged
+      finisher.settled = {
+        uniqueCells,
+        movesApplied: ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0),
+        turnsTaken: ownedTurns.length,
+      }
+    }
   }
 
   // The echo, only where nothing declared a model - better than reporting no model at all, and it names
@@ -604,6 +633,27 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
+    })
+    predicted.add(turn)
+  }
+
+  // A request can end on a provider failure before Tapoo receives a prediction or a replay record. It is
+  // still a turn, and its decorated player label is the latest stated name and traversal speed. Keep it
+  // with no moves and no inferred charge rather than dropping that final state from the agent summary.
+  for (const [turn, player] of activePlayers) {
+    if (predicted.has(turn)) continue
+    turns.push({
+      turn,
+      seatId: context.rawSetupByTurn.get(turn)?.seatId ?? null,
+      playerName: player.name,
+      traversalSpeed: player.traversalSpeed,
+      before: null,
+      moves: [],
+      submittedCount: 0,
+      applied: 0,
+      cells: [],
+      rejectedMove: null,
+      decayCharged: null,
     })
   }
   turns.sort((left, right) => left.turn - right.turn)
