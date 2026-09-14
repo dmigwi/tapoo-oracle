@@ -4,6 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.jso
 import {LOG_EVENTS} from "./log-events"
 import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
 import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
+import {decomposeTraversalSpeed} from "./geometry"
 import {buildContext} from "./rubric-context"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
@@ -672,6 +673,65 @@ describe("agentsFromRound", () => {
     const seats = agentsFromRound(new Map(), [], {outcome: "won", agent: {playerName: "Kora"}})
 
     expect(seats.map((agent) => agent.name)).toEqual(["Kora"])
+  })
+
+  // The outcome's totals are the round's, so they may only replace a seat's own account where that seat is
+  // the whole account. Here a second seat played turn 2, so the finisher owns 2 of the round's 3 turns and
+  // keeps what its own turns stated - taking the totals would credit Kora with Bumi's ground and charge.
+  it("keeps a seat's own account where another seat played part of the round", () => {
+    const [kora] = agentsFromRound(new Map(), [
+      seat("Kora", 0, ["0,0", "1,0"], 1, 1),
+      seat("Kora", 1, ["1,0", "2,0"], 1, 1),
+      seat("Bumi", 2, ["2,0", "3,0"], 1, 2),
+    ], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 3, playerUniqueCellsVisited: 3, decayUnitsCharged: 3, traversalSpeed: "1.0000",
+    })
+
+    expect(kora).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 2,
+      settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2},
+    })
+  })
+
+  // And where a turn never settled how many of its moves landed: the totals would then be reconciling
+  // against an account that is partly guesswork, so the seat keeps the turns that did settle.
+  it("keeps a seat's own account where a turn's applied count is unknown", () => {
+    const unsettled = {...seat("Kora", 1, ["1,0", "2,0"], 1, 1), applied: null}
+    const [kora] = agentsFromRound(new Map(), [seat("Kora", 0, ["0,0", "1,0"], 1, 1), unsettled], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2, playerUniqueCellsVisited: 9, decayUnitsCharged: 9, traversalSpeed: "1.0000",
+    })
+
+    expect(kora).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 2,
+      settled: {uniqueCells: 1, movesApplied: 1, turnsTaken: 1},
+    })
+  })
+
+  // The moves are the seat's own count and not the outcome's cell count, which is what makes route
+  // efficiency a measurement rather than the constant 1: this seat applied 4 moves to enter 2 cells, so it
+  // spent half of them on ground it had already covered.
+  it("counts the moves the turns applied, not the cells the outcome reports", () => {
+    const retraced = (turn: number, cells: string[]) => ({...seat("Kora", turn, cells, 1, 1), applied: 2})
+    const [kora] = agentsFromRound(new Map(), [
+      retraced(0, ["0,0", "1,0", "0,0"]),
+      retraced(1, ["0,0", "1,0", "0,0"]),
+    ], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2, playerUniqueCellsVisited: 2, decayUnitsCharged: 3, traversalSpeed: "0.6667",
+    })
+
+    expect(kora?.settled).toEqual({uniqueCells: 2, movesApplied: 4, turnsTaken: 2})
+
+    // Both ceilings, which is what one population buys: a seat cannot enter more new cells than it applied
+    // moves, and cannot take more turns than it was charged units.
+    const factors = must(decomposeTraversalSpeed(must(kora, "the round's only seat")), "the seat's factors")
+    expect(factors.efficiency).toBeLessThanOrEqual(1)
+    expect(factors.accuracy).toBeLessThanOrEqual(1)
+    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(2 / 3, 12)
   })
 
   it("uses completed-round totals when a per-turn charge reading is missing", () => {

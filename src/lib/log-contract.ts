@@ -238,8 +238,8 @@ export function responseUsage(payload: unknown): ResponseUsage {
 // turn, level and game are deliberately not among them, and this is the one thing here worth arguing
 // about, because the current producer always writes them. logTapooRecordEntry in frontend/app/logs.ts
 // stamps level, turn and game on every entry it writes, from the counters it holds - `details` is the
-// sole field it writes conditionally - and the v2.5.0 vendored sample and the v2.5.1 snapshot both carry
-// all three on every entry.
+// sole field it writes conditionally - and the sample in README.md and the v2.6.1 snapshot both carry all
+// three on every entry, on all 360 of the snapshot's.
 //
 // A gate is not written for the producer of the day, though. rounds.test.ts records a real log of
 // hundreds of turns that stamped game and level on its round boundaries only, and a gate insisting on
@@ -253,6 +253,12 @@ export function responseUsage(payload: unknown): ResponseUsage {
 // This holds for every Tapoo shape from v2.5.1 on, deliberately and until further notice. Neither
 // project is settled enough to declare a version floor, so the analyzer reads what it is given rather
 // than what the current build happens to write.
+//
+// The snapshot in _snapshot_/ is a v2.6.1 export, so it exercises none of what the older shape needs: a
+// request that states no seat and no model, a player recovered from the decorated label, an envelope with
+// no platform or device. log-versions.test.ts holds those: it builds one round in every shape the oracle
+// answers for and asserts the round reads the same out of each, with the fields a version added asserted
+// where they appear and asserted absent where they do not. A new Tapoo shape is a case added there.
 function isLogEntry(value: unknown): value is LogEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
@@ -713,13 +719,13 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
       // reconstruction above, so what a readable message is has one definition.
       //
       // Dropping a text with no checksum loses nothing this can check, and nothing trimmed either: every
-      // trimmed text in the capture carries one - all 107, across system prompts, user messages and tool
-      // descriptions, no exception. The checksum-less ones are all untrimmed: the 16 assistant messages,
-      // which are the model's own tool calls, and 32 of the 48 tool results, only get_maze_structure
+      // trimmed text in the snapshot carries one - all 601, across system prompts, user messages and tool
+      // descriptions, no exception. The checksum-less ones are all untrimmed: the 88 assistant messages,
+      // which are the model's own tool calls, and 176 of the 264 tool results, only get_maze_structure
       // carrying one.
       //
-      // That is what makes the repeat denominator trustworthy: "76 of 76" is every trimmed text this round
-      // logged outside the personas, not merely the ones that happened to arrive checkable. A trimmed text
+      // That is what makes the repeat denominator trustworthy: "331 of 331" is every trimmed text that
+      // round logged outside the personas, not merely the ones that happened to arrive checkable. A trimmed text
       // with no checksum would be unverifiable *and* uncounted, the one shape this cannot report - it has
       // never appeared, and if the producer starts writing one it will need a row of its own.
       if (message.role === "tool") continue;
@@ -938,9 +944,10 @@ function userWarningCheck(warnings: number, verified: number): ValidationCheck {
  * counting one population from different angles is a reader working out whether they disagree.
  *
  * A trimmed repeat whose full text the log does not carry is not a failure and not a check that did not
- * run. It is the producer compacting a text it never logged in full - in the v2.5.1 capture, 2 of the 7
- * distinct trimmed checksums have no full text in the file at all, across 30 appearances - so there is
- * nothing here to compare and nothing wrong with that.
+ * run. It is the producer compacting a text it never logged in full, so there is nothing here to compare
+ * and nothing wrong with that. The snapshot happens to carry every one of its repeats in full - 331 of 331
+ * and 97 of 97, across its two rounds - so the case is held open by its own test rather than by a capture:
+ * see "says nothing was checked where no repeat could be compared".
  *
  * Its own row all the same, because the population is not the one above it: those texts are logged in
  * full and hashed, these are compared against an earlier copy, and one row reporting both let whichever

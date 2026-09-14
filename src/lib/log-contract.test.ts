@@ -576,8 +576,8 @@ describe("the encoded maze payload", () => {
 // to click. The branch that names it was reachable and unasserted - deleting it as dead weight would
 // have left a tab with an empty label, which is why it is pinned here rather than trusted to be unused.
 //
-// No log in this repo takes this path: the v2.5.0 sample and the v2.5.1 snapshot both stamp all three
-// counters on every entry. It is asserted because the code tolerates the shape, not because one is known
+// No log in this repo takes this path: the sample in README.md and the v2.6.1 snapshot both stamp all
+// three counters on every entry, on all 360 of the snapshot's. It is asserted because the code tolerates the shape, not because one is known
 // to exist - and a tolerance nothing checks is a tolerance that quietly stops working.
 describe("a log that names no round at all", () => {
   it("gathers it as one round with a name a reader can click", () => {
@@ -644,9 +644,9 @@ describe("a log that returns to a round it already played", () => {
 })
 
 
-// End to end over a whole log, because every other test of this reaches agentsFromRound directly. The
-// real capture has one seat that never changed anything, so it cannot show what a round that is not one
-// experiment looks like - see twoSeatDriftLog for why it is built rather than saved.
+// End to end over a whole log, because every other test of this reaches agentsFromRound directly. The real
+// capture seats one agent per round and neither changed anything, so it cannot show what a round that is
+// not one experiment looks like - see twoSeatDriftLog for why it is built rather than saved.
 describe("a log whose seat changed model mid-round", () => {
   const round = () => {
     const result = expectOk(sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "two-seat"}))

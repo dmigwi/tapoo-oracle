@@ -290,9 +290,18 @@ function createLogTabItem(tab: LogTab, state: LogTabsState, actions: LogTabActio
   const button = document.createElement("button");
   button.type = "button";
   button.className = "log-tab-button";
-  button.textContent = tab.label;
-  // The label, not the URL. A title carrying the address puts it back in the DOM for any reader,
-  // screenshot or copy-paste - the thing the share token exists to avoid.
+  // A left-to-right mark before the label's own ellipsis, because .log-tab-button is `direction: rtl` -
+  // that is what makes the tab shorten a label from the front rather than the back. In a right-to-left
+  // paragraph a leading run of dots is neutral, so it is laid out at the paragraph's start, which is the
+  // right-hand end: "...log.json" renders as "log.json..." and the mark that says the front was cut reads
+  // as though the back was. The LRM makes the dots part of the label's own left-to-right run.
+  //
+  // Only our own dots need it. The ellipsis the tab adds when it shortens the label further is placed by
+  // the browser, which puts it at the correct end already.
+  button.textContent = tab.label.startsWith("...") ? `\u200e${tab.label}` : tab.label;
+  // The label, which is the tail of the address rather than the whole of it. The tab is the only place a
+  // reader can tell which file a report came from, so it carries enough of the address to name the file -
+  // and no more, the address itself staying out of the DOM the share token exists to keep it out of.
   button.title = tab.label;
   button.setAttribute("role", "tab");
   button.setAttribute("aria-selected", String(tab.id === state.activeTabId));

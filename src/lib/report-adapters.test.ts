@@ -93,9 +93,11 @@ describe("report URL tabs", () => {
     })
   })
 
+  // 38 characters by default: the most a tab can display at its widest, so the markup never carries more
+  // of an address than a reader could see. Narrower windows show less of the same end, decided by the tab.
   it("uses the final characters of the exact report value", () => {
     expect(extractTabLabelFromUrl("https://example.com/logs/tapoo%20run.json", 0))
-      .toBe(".../example.com/logs/tapoo%20run.json")
+      .toBe("...ps://example.com/logs/tapoo%20run.json")
     expect(extractTabLabelFromUrl("https://example.com/logs/", 1)).toBe("https://example.com/logs/")
     expect(extractTabLabelFromUrl("not a url", 2)).toBe("not a url")
   })
@@ -457,8 +459,9 @@ describe("modelOutputRows", () => {
 
 // The table reads in a declared order, not in whatever order three separate construction sites appended
 // their checks. Asserted on the adapter rather than on the page, because this is where the order is decided.
-// The counts reach the table, which nothing asserted end to end: the real capture is a clean run, so every
-// column reads zero and a count that never arrived would look exactly the same.
+// The counts reach the table, which nothing asserted end to end against a log carrying every one of them:
+// the capture's first round is a clean run, where each column reads zero and a count that never arrived
+// would look exactly the same, and its second carries some of them but no harness fault.
 describe("the diagnostics a round actually reports", () => {
   it("carries a failed request and a harness fault through to the table", () => {
     const analysis = sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "drift"})

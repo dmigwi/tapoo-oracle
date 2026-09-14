@@ -358,7 +358,11 @@ export function agentsFromRound(
     // the row above it naming the same seat.
     const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
     if (!seat) continue
-    turnsBySeat.set(seat, [...turnsBySeat.get(seat) ?? [], turn])
+    // Pushed into the seat's own list rather than rebuilt from it: a round of 2,004 turns would otherwise
+    // copy a growing array once per turn, to answer one question at the end of the walk.
+    const ownTurns = turnsBySeat.get(seat) ?? []
+    ownTurns.push(turn)
+    turnsBySeat.set(seat, ownTurns)
 
     if (setup) {
       add(seat.models, setup.model)

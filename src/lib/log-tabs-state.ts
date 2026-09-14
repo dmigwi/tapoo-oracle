@@ -235,8 +235,22 @@ async function loadLogTabFields(
  *
  * No URL parsing or decoding: the suffix is the contract, so hosts, paths, query strings and ordinary
  * text are treated alike. A leading ellipsis marks only values whose beginning was removed. A non-string
- * runtime value still falls back rather than failing a completed load while naming its tab. */
-export function extractTabLabelFromUrl(value: string, index = 0, maxLength = 34): string {
+ * runtime value still falls back rather than failing a completed load while naming its tab.
+ *
+ * The end, because that is where one export differs from the next: a run of logs shares a host, a project
+ * and a directory, and differs in the file name and the timestamp inside it.
+ *
+ * How much of that end a reader *sees* is not decided here. `.log-tab-button` is `direction: rtl` with
+ * `text-overflow: ellipsis`, so the tab shortens the label from the front, to the width it has, and the
+ * browser places the ellipsis - which means a wide window shows more of the name than a phone does, and a
+ * window being resized re-decides on every frame. A length computed here could do none of that: it is
+ * fixed when the log loads, before the label has a width.
+ *
+ * What this length decides is what the *markup* carries, which the tab may show less of but never more.
+ * 38 is the widest a tab can be - `min(18rem, 58vw)` less the delete column is 288px at any window over
+ * 497px, and 38 characters of the label's own font fill it. Measured, not guessed. So the page holds the
+ * most a reader could ever see of an address, and nothing beyond it. */
+export function extractTabLabelFromUrl(value: string, index = 0, maxLength = 38): string {
   if (typeof value !== "string") return `Report ${index + 1}`;
   if (!Number.isFinite(maxLength) || maxLength <= 0) return "";
   const suffixLength = Math.floor(maxLength);

@@ -860,7 +860,7 @@ describe("the per-seat metrics card", () => {
   //
   // The sign is what keeps the cell from asserting an equation the printed numbers do not make. Here the
   // three turns enter 3 cells on 3 applied moves and are charged 6, so the factors give 0.5000 where the
-  // outcome record - the capture's, describing a 17-cell round - states 1.0000x. A real log read
+  // round's outcome record, which this fixture states for a 17-cell round, says 1.0000x. A real log read
   // "1.0000x = (y1.0000 * b1.0000 * a1.0213)" before this.
   it("approximates where the factors do not reach the figure the log states", () => {
     const card = metrics(build(chargedRound()))
