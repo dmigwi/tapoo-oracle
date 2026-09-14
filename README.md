@@ -25,12 +25,27 @@ Tapoo Oracle accepts Tapoo log exports shaped like:
 ```json
 {
   "name": "tapoo",
-  "version": "2.5.0",
+  "platform": "http://0.0.0.0:5500/agents",
+  "device": "Chrome/152.0.0.0 on macOS",
+  "version": "2.6.1",
+  "storageVersion": "5",
   "mode": "agent-api",
-  "downloadedAt": "2026-08-30T21-00-00+02-00",
-  "entries": []
+  "downloadedAt": "2026-09-13T13-50-30+02-00",
+  "entries": [],
+  "entriesChecksum": "0x5ca3981fae1b8fff"
 }
 ```
+
+Two things are required: `name` must be `tapoo`, and `entries` must hold at least one readable entry.
+Everything else is read where an export carries it and reported as "not recorded" where it does not,
+because a log is whatever the Tapoo that wrote it produced - exports from before a field existed are read
+exactly as they always were. A `mode` other than `agent-api` is analyzed too, with a warning that the
+rubric describes no other kind of round.
+
+`entriesChecksum` is the exception that can refuse a load: where a log file records one, its entries are
+hashed and the load fails if the two disagree. It is a check, not a signature - the algorithm is public and
+keyless, so it catches an accidental save or a hand edit rather than a deliberate rewrite. A file that
+records none is read as it always was; nothing follows from the absence.
 
 Input that is not a Tapoo export is rejected. The analyzer does not guess at unknown field names.
 

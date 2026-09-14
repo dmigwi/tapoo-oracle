@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 
-import {asArray, asRecord, asTrimmedText, capitalize, clamp, fnv1a64Checksum, formatCount, isRecord, relativeAge} from "./utils"
+import {asArray, asRecord, asTrimmedText, capitalize, checksumEntries, clamp, createFnv1a64, fnv1a64Checksum, formatCount, isRecord, relativeAge} from "./utils"
 
 // The structure string and checksum from a real Tapoo export (v2.5.1, 6x4), carried here rather than
 // imported from the maze suite: this describes the hash, not the maze. maze.test.ts keeps the whole
@@ -8,6 +8,83 @@ import {asArray, asRecord, asTrimmedText, capitalize, clamp, fnv1a64Checksum, fo
 const REAL_STRUCTURE =
   "01012121012105030343430343050301230303210503034303034305030301030303050343030303030501210303010305034343434343050121212121210"
 const REAL_CHECKSUM = "0x74af82cb14470b9d"
+
+/** The implementation this replaced, kept as the check on the one that replaced it.
+ *
+ * A BigInt per byte is the clearest statement of FNV-1a and too slow to ship - 17ms against 5ms on a
+ * megabyte - so the limb arithmetic answers for it in production and it answers for the limbs here. Two
+ * implementations that were written from the specification rather than from each other, which is what makes
+ * one an oracle for the other. */
+const referenceFnv1a64 = (text: string): string => {
+  let hash = 0xcbf29ce484222325n
+  for (const byte of new TextEncoder().encode(text)) {
+    hash ^= BigInt(byte)
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n)
+  }
+  return `0x${hash.toString(16).padStart(16, "0")}`
+}
+
+describe("the hash against a byte-at-a-time reference", () => {
+  it.each([
+    ["empty", ""],
+    ["ascii", "tapoo-v2.6.1-agent-api-logs"],
+    ["a curly quote, an em dash and an arrow", "\u2019 \u2014 \u2192"],
+    ["a surrogate pair", "\u{1d11e}"],
+  ])("answers what the reference answers for %s", (_what, text) => {
+    expect(fnv1a64Checksum(text)).toBe(referenceFnv1a64(text))
+  })
+
+  // Past the encoder buffer's first size, and multi-byte throughout: a buffer sized for one byte per UTF-16
+  // unit truncates the encoding here, and both of this module's forms would truncate identically, so only
+  // an outside implementation can say the bytes hashed were the text's own.
+  it("answers what the reference answers past the buffer's first size", () => {
+    const long = "\u00e9\u2014\u2192\u{1d11e} ".repeat(20000)
+
+    expect(long.length).toBeGreaterThan(1 << 16)
+    expect(fnv1a64Checksum(long)).toBe(referenceFnv1a64(long))
+  })
+})
+
+// Taking the hash a piece at a time has to answer what hashing the whole string answers, or the checksum
+// a log states and the checksum this recomputes are two different measurements wearing one name.
+describe("the incremental form of the same hash", () => {
+  it("answers what one update over the joined text answers", () => {
+    const pieces = ["{\"a\":1}", ",", "{\"b\":[2,3]}", ",", "\u00e9\u2014\u2192"]
+    const hash = createFnv1a64()
+    for (const piece of pieces) hash.update(piece)
+
+    expect(hash.digest()).toBe(fnv1a64Checksum(pieces.join("")))
+  })
+
+  // Boundaries are the only way the two can part company: each piece is UTF-8 encoded on its own, so a
+  // split surrogate pair would encode as two replacement characters. JSON never hands one over split,
+  // and this pins that a pair kept whole hashes the same either way.
+  it("keeps a surrogate pair whole across pieces", () => {
+    const hash = createFnv1a64()
+    hash.update("prefix \u{1d11e}")
+    hash.update(" suffix")
+
+    expect(hash.digest()).toBe(fnv1a64Checksum("prefix \u{1d11e} suffix"))
+  })
+
+  // The producer's contract, stated as an equality: the entries' checksum is the hash of their compact
+  // JSON, whichever way it was reached. An implementation that drifted from this would refuse every log.
+  it("hashes an array exactly as its compact JSON hashes", () => {
+    const entries = [{epochMs: 1, payload: "Agent level started."}, {epochMs: 2, details: {moves: ["MoveDown"]}}]
+
+    expect(checksumEntries(entries)).toBe(fnv1a64Checksum(JSON.stringify(entries)))
+    expect(checksumEntries([])).toBe(fnv1a64Checksum("[]"))
+  })
+
+  // The one shape where writing each element's JSON in turn is not obviously the same as stringifying the
+  // array: an element JSON has no text for is "null" inside an array and nothing at all on its own.
+  it("writes null for an element with no JSON of its own, as an array's JSON does", () => {
+    const holed = [1, undefined, 2]
+
+    expect(checksumEntries(holed)).toBe(fnv1a64Checksum("[1,null,2]"))
+    expect(checksumEntries(holed)).toBe(fnv1a64Checksum(JSON.stringify(holed)))
+  })
+})
 
 describe("fnv1a64Checksum", () => {
   it("reproduces the checksum Tapoo stamped on a real maze", () => {

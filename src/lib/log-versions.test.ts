@@ -16,6 +16,7 @@ import {describe, expect, it} from "vitest"
 import {LOG_EVENTS} from "./log-events"
 import {agentRows, provenanceRows} from "./report-adapters"
 import {expectOk, firstRound, must, sliceLogText} from "./test-support"
+import {checksumEntries} from "./utils"
 import {fnv1a64Checksum} from "./utils"
 import type {AgentSummary, SummaryRow} from "./types"
 
@@ -55,6 +56,25 @@ const SHAPES = {
     },
     outcomeAgent: {seatId: 1, playerName: "Katara", model: "gemma4:cloud"},
   },
+  // The shape that added the storage schema the entries were written under, and the checksum the file
+  // records for them. Same round, same requests: what changed is what the file says about itself.
+  "2.6.2": {
+    envelope: {
+      platform: "http://0.0.0.0:5500/agents",
+      device: "Chrome/152.0.0.0 on macOS",
+      storageVersion: "5",
+    },
+    request: {
+      player: "Katara the Navigator - 1.0000x",
+      playerName: "Katara",
+      seatId: 1,
+      model: "gemma4:cloud",
+      echoBackReasoning: false,
+      requestIntervalSeconds: 5,
+    },
+    outcomeAgent: {seatId: 1, playerName: "Katara", model: "gemma4:cloud"},
+    stampsEntriesChecksum: true,
+  },
 } as const
 
 type Version = keyof typeof SHAPES
@@ -87,13 +107,7 @@ const logOf = (version: Version): string => {
     entry(LOG_EVENTS.response, {payload: {model: "gemma4", message: {content: '{"moves":["MoveDown"]}'}}}, turn),
   ]
 
-  return JSON.stringify({
-    name: "tapoo",
-    version,
-    mode: "agent-api",
-    downloadedAt: "2026-09-13T13-50-30+02-00",
-    ...shape.envelope,
-    entries: [
+  const entries = [
       entry(LOG_EVENTS.levelStarted, {
         startPosition: {x: 1, y: 1}, destinationCell: {row: 0, col: 5}, historyWindowRadius: 2, maze: MAZE,
       }, 0),
@@ -108,7 +122,19 @@ const logOf = (version: Version): string => {
         playerUniqueCellsVisited: 2,
         decayUnitsCharged: 2,
       }, 2),
-    ],
+  ]
+
+  // Stamped the way the producer stamps it: over the entries, once they are the entries the file carries.
+  const checksum = "stampsEntriesChecksum" in shape ? {entriesChecksum: checksumEntries(entries)} : {}
+
+  return JSON.stringify({
+    name: "tapoo",
+    version,
+    mode: "agent-api",
+    downloadedAt: "2026-09-13T13-50-30+02-00",
+    ...shape.envelope,
+    ...checksum,
+    entries,
   })
 }
 
@@ -186,5 +212,43 @@ describe("a round read out of every Tapoo shape", () => {
     expect(value(shown("2.6.1"), "Device")).toBe("Chrome/152.0.0.0 on macOS")
     expect(value(shown("2.5.1"), "Platform")).toBe("not recorded")
     expect(value(shown("2.5.1"), "Device")).toBe("not recorded")
+  })
+
+  // The storage schema the entries were written under, which v2.6.2 states beside the app version: two
+  // releases can share a schema, so a reader citing a report needs the one that says what rules the entries
+  // were recorded by. Absent before it, and a row that says so rather than an empty cell.
+  it("shows the storage schema a v2.6.2 export names, and not-recorded before it", () => {
+    const shown = (version: Version) => provenanceRows(expectOk(sliceLogText(logOf(version), {label: version})).source)
+
+    expect(value(shown("2.6.2"), "Storage version")).toBe("5")
+    expect(value(shown("2.6.1"), "Storage version")).toBe("not recorded")
+    expect(value(shown("2.5.1"), "Storage version")).toBe("not recorded")
+  })
+
+  // The checksum a log file records for its entries, which only v2.6.2 carries: it is verified at parse
+  // time, so a log that reaches a report has passed it, and the check says which of the two happened -
+  // proven whole, or nothing to prove it against.
+  it("verifies the checksum a v2.6.2 export records for its entries, and checks nothing before it", () => {
+    const checked = (version: Version) => {
+      const parsed = expectOk(sliceLogText(logOf(version), {label: version}))
+      return must(parsed.checks.find((check) => check.name === "Entries checksum"), "the checksum check")
+    }
+
+    expect(checked("2.6.2")).toMatchObject({scope: "log", outcome: "passed"})
+    expect(checked("2.6.2").detail).toMatch(/^all 6 log entries hash to 0x[0-9a-f]{16}, the checksum recorded for them$/)
+    expect(checked("2.6.1").outcome).toBe("unchecked")
+    expect(checked("2.5.1").outcome).toBe("unchecked")
+  })
+
+  // And the shape's own refusal: an export that states a checksum is refused where its entries no longer
+  // hash to it, which is the one caveat on this page that stops a report being produced at all.
+  it("refuses a v2.6.2 export whose entries were changed after download", () => {
+    const shaped = JSON.parse(logOf("2.6.2")) as {entries: unknown[]}
+    const edited = JSON.stringify({...shaped, entries: shaped.entries.slice(1)})
+
+    const result = sliceLogText(edited, {label: "edited"})
+
+    expect(result.ok).toBe(false)
+    expect(result.ok ? "" : result.error).toMatch(/do not match the checksum recorded for them/)
   })
 })

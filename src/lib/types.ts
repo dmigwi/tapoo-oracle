@@ -130,7 +130,8 @@ export type GameIdentity = {game: number | null; level: number | null};
  * round - builds them over that round's entries. A file-wide copy carried here was read by nothing. */
 export type TapooLog = {
   name: string;
-  version: string | null;
+  appVersion: string | null;
+  storageVersion: string | null;
   mode: string | null;
   downloadedAt: string | null;
   /** Tapoo runtime URL recorded when the exported session started. */

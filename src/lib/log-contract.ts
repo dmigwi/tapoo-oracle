@@ -31,7 +31,7 @@ import type {
   TapooLog,
 } from "./types";
 
-import {asArray, asRecord, asTrimmedText, fnv1a64Checksum, formatCount, isRecord} from "./utils";
+import {asArray, asRecord, asTrimmedText, checksumEntries, fnv1a64Checksum, formatCount, isRecord} from "./utils";
 import {cellFromGridPoint, mazeFromEncoded} from "./maze";
 // Imported as well as re-exported below: a re-export puts a name on this module's surface without
 // putting it in scope, and traversalPayloadWarnings needs to call them.
@@ -1104,6 +1104,49 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     return {ok: false, error: "Tapoo log export is missing its `entries` array."};
   }
 
+  // The log file's own check that its entries are the ones Tapoo wrote: fnv1a64 over the compact JSON of
+  // the entries array, which is what the producer hashes on its way out. Recomputed here from the parsed
+  // array, because JSON.parse followed by JSON.stringify reproduces the producer's bytes - both sides are
+  // the same canonical serializer, and a value it wrote round-trips to the text it wrote.
+  //
+  // Over `envelope.entries`, not the readable ones filtered below: the producer hashes what it stored,
+  // stand-ins for records that failed to decode included, so filtering first would ask a different question
+  // and fail every log that carries one.
+  //
+  // Fatal, where every other caveat on this page is a warning. The others say a verdict may be incomplete or
+  // may be wrong; this one says the file disagrees with itself, and there is no verdict to qualify.
+  //
+  // The message is the two figures and nothing after them. Which half moved is not something two digests
+  // can say - entries edited, a checksum edited, a producer that wrote the wrong one - and there is no
+  // remedy to offer either: the same file downloaded again hashes to the same value, and a payload that
+  // disagrees with its own checksum is taken as unrecoverable here rather than repaired.
+  //
+  // It is not a signature: the algorithm is public and keyless, so a deliberate rewrite can recompute it.
+  // What it catches is a file edited by hand or by accident between download and report.
+  //
+  // Absent on a log written before the producer stamped one, which reads exactly as it did before: a
+  // checksum that was never written is not a checksum that failed.
+  //
+  // Verified here and not carried on the TapooLog. A log that reaches a reader has already passed this, so
+  // the field would have one value for every log ever rendered, and the check below is where a reader who
+  // wants the figure itself finds it - stated once, beside what it checks.
+  const statedChecksum = typeof envelope.entriesChecksum === "string" ? envelope.entriesChecksum : null;
+  if (statedChecksum !== null) {
+    // Hashed a piece at a time rather than from one string of the whole array - see checksumEntries, which
+    // is the producer's own method. Not for speed, which is a wash: for the copy it does not make, which at
+    // the 100 MB the download limit admits would be a second file held beside the one just parsed.
+    const recomputed = checksumEntries(envelope.entries);
+    if (recomputed !== statedChecksum) {
+      return {
+        ok: false,
+        error:
+          `Tapoo log entries do not match the checksum recorded for them: the log file records ` +
+          `${statedChecksum}, and its ${formatCount(envelope.entries.length)} log entries hash to ` +
+          `${recomputed}.`,
+      };
+    }
+  }
+
   const warnings: LogWarning[] = [];
   if (envelope.mode !== AGENT_API_MODE) {
     // Inaccurate rather than incomplete: every question is written for an agent-api round, so answering
@@ -1166,6 +1209,23 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
           : `${formatCount(entries.length)} of ${formatCount(entries.length)} log entries carried a payload, a timestamp and a known log level`,
     },
     responseCheck(responses),
+    {
+      // A file that verified says so. The failing case never reaches here - a mismatch refuses the load
+      // above - so this row has two outcomes: the file recorded a checksum and its entries hash to it, or
+      // it recorded none.
+      //
+      // Where it recorded none the detail says so and stops: what follows from that is a longer argument
+      // than a row can make, and the outcome column already says the word for it.
+      name: "Entries checksum",
+      scope: "log",
+      outcome: statedChecksum === null ? "unchecked" : "passed",
+      detail:
+        statedChecksum === null
+          ? "the log file records no checksum for its entries"
+          // "all N", not "N of N": the other rows count a numerator that can come out lower, where a log
+          // reaching this row has every entry hashing to the value, a mismatch having refused the load.
+          : `all ${formatCount(envelope.entries.length)} log entries hash to ${statedChecksum}, the checksum recorded for them`,
+    },
   ];
 
   // Only the export's own caveats; a round's are parseRound's.
@@ -1175,7 +1235,8 @@ export function parseTapooLogText(text: unknown, {sourceUrl}: {sourceUrl?: strin
     name: envelope.name,
     platform: typeof envelope.platform === "string" ? envelope.platform : null,
     device: typeof envelope.device === "string" ? envelope.device : null,
-    version: typeof envelope.version === "string" ? envelope.version : null,
+    appVersion: typeof envelope.version === "string" ? envelope.version : null,
+    storageVersion: typeof envelope.storageVersion === "string" ? envelope.storageVersion : null,
     mode: typeof envelope.mode === "string" ? envelope.mode : null,
     downloadedAt: typeof envelope.downloadedAt === "string" ? envelope.downloadedAt : null,
     entries,

@@ -215,7 +215,8 @@ export function provenanceRows(source: TapooLog): SummaryRow[] {
     // above already carries the share link that identifies the same log, and a table cell is the
     // most screenshotted place on the page to put an address that the rest of this change exists to
     // keep out of it. What remains is provenance the log vouches for.
-    {field: "Tapoo version", value: source.version ?? "not recorded"},
+    {field: "App version", value: source.appVersion ?? "not recorded"},
+    {field: "Storage version", value: source.storageVersion ?? "not recorded"},
     {field: "Platform", value: source.platform ?? "not recorded"},
     {field: "Device", value: source.device ?? "not recorded"},
     {field: "Downloaded at", value: source.downloadedAt ?? "not recorded"},
@@ -347,6 +348,7 @@ export const LOG_SCOPE_MARK = "*";
 const CHECK_ORDER = [
   "Log entry fields",
   "Model responses",
+  "Entries checksum",
   "Encoded maze",
   "Traversal payloads",
   "Prompts and tool descriptions",
@@ -356,6 +358,7 @@ const CHECK_ORDER = [
   "User warnings",
   "Seat roster",
   "Agent settings",
+  "Round totals",
 ];
 
 const rank = (name: string): number => {
