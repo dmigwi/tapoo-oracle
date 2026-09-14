@@ -21,10 +21,8 @@ import type {
   TurnReports,
   EncodedMaze,
   ParsedRound,
-  AgentSummary,
   LogWarning,
   MazeResult,
-  TurnSummary,
   ValidationCheck,
   AssistantMessage,
   ResponseUsage,
@@ -238,8 +236,8 @@ export function responseUsage(payload: unknown): ResponseUsage {
 // turn, level and game are deliberately not among them, and this is the one thing here worth arguing
 // about, because the current producer always writes them. logTapooRecordEntry in frontend/app/logs.ts
 // stamps level, turn and game on every entry it writes, from the counters it holds - `details` is the
-// sole field it writes conditionally - and the v2.5.0 vendored sample and the v2.5.1 snapshot both carry
-// all three on every entry.
+// sole field it writes conditionally - and the sample in README.md and the v2.6.1 snapshot both carry all
+// three on every entry, on all 360 of the snapshot's.
 //
 // A gate is not written for the producer of the day, though. rounds.test.ts records a real log of
 // hundreds of turns that stamped game and level on its round boundaries only, and a gate insisting on
@@ -253,6 +251,12 @@ export function responseUsage(payload: unknown): ResponseUsage {
 // This holds for every Tapoo shape from v2.5.1 on, deliberately and until further notice. Neither
 // project is settled enough to declare a version floor, so the analyzer reads what it is given rather
 // than what the current build happens to write.
+//
+// The snapshot in _snapshot_/ is a v2.6.1 export, so it exercises none of what the older shape needs: a
+// request that states no seat and no model, a player recovered from the decorated label, an envelope with
+// no platform or device. log-versions.test.ts holds those: it builds one round in every shape the oracle
+// answers for and asserts the round reads the same out of each, with the fields a version added asserted
+// where they appear and asserted absent where they do not. A new Tapoo shape is a case added there.
 function isLogEntry(value: unknown): value is LogEntry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
@@ -713,13 +717,13 @@ function promptWarnings(entries: LogEntry[], round: string): {warnings: LogWarni
       // reconstruction above, so what a readable message is has one definition.
       //
       // Dropping a text with no checksum loses nothing this can check, and nothing trimmed either: every
-      // trimmed text in the capture carries one - all 107, across system prompts, user messages and tool
-      // descriptions, no exception. The checksum-less ones are all untrimmed: the 16 assistant messages,
-      // which are the model's own tool calls, and 32 of the 48 tool results, only get_maze_structure
+      // trimmed text in the snapshot carries one - all 601, across system prompts, user messages and tool
+      // descriptions, no exception. The checksum-less ones are all untrimmed: the 88 assistant messages,
+      // which are the model's own tool calls, and 176 of the 264 tool results, only get_maze_structure
       // carrying one.
       //
-      // That is what makes the repeat denominator trustworthy: "76 of 76" is every trimmed text this round
-      // logged outside the personas, not merely the ones that happened to arrive checkable. A trimmed text
+      // That is what makes the repeat denominator trustworthy: "331 of 331" is every trimmed text that
+      // round logged outside the personas, not merely the ones that happened to arrive checkable. A trimmed text
       // with no checksum would be unverifiable *and* uncounted, the one shape this cannot report - it has
       // never appeared, and if the producer starts writing one it will need a row of its own.
       if (message.role === "tool") continue;
@@ -938,9 +942,10 @@ function userWarningCheck(warnings: number, verified: number): ValidationCheck {
  * counting one population from different angles is a reader working out whether they disagree.
  *
  * A trimmed repeat whose full text the log does not carry is not a failure and not a check that did not
- * run. It is the producer compacting a text it never logged in full - in the v2.5.1 capture, 2 of the 7
- * distinct trimmed checksums have no full text in the file at all, across 30 appearances - so there is
- * nothing here to compare and nothing wrong with that.
+ * run. It is the producer compacting a text it never logged in full, so there is nothing here to compare
+ * and nothing wrong with that. The snapshot happens to carry every one of its repeats in full - 331 of 331
+ * and 97 of 97, across its two rounds - so the case is held open by its own test rather than by a capture:
+ * see "says nothing was checked where no repeat could be compared".
  *
  * Its own row all the same, because the population is not the one above it: those texts are logged in
  * full and hashed, these are compared against an earlier copy, and one row reporting both let whichever
@@ -973,166 +978,6 @@ function trimmedRepeatCheck({matched, unmatched}: RepeatTally): ValidationCheck 
     detail:
       `${formatCount(matched)} of ${formatCount(matched)} repeats matched the full text logged under the ` +
       `same checksum${absentClause}`,
-  };
-}
-
-/** agentSeatLabel names a seat the way both the report and the replay say it.
- *
- * One function because two places render it, and a seat called something different in each would read
- * as two seats. Prefers the seat the log stated; falls back to the position it acted in.
- *
- * The seat alone where no turn named the player: a request may state its seat and leave the name to the
- * decorated label, and a label that resolves to nothing leaves a seat that plainly played and has no
- * name. "Agent at Seat 2" is what is known about it; a leading separator with nothing before it is not. */
-export const agentSeatLabel = (agent: AgentSummary, index: number): string => {
-  const seat = `Agent at Seat ${agent.seatId ?? index + 1}`
-  return agent.name === "" ? seat : `${agent.name} \u00b7 ${seat}`
-}
-
-
-/** The per-turn settings a seat can be found to have changed, and how each is reported.
- *
- * `values: false` for endpoints alone, and not for brevity. This detail is rendered into a table cell,
- * and an endpoint may carry `user:pass@host` - the thing withoutCredentials exists to keep out of the
- * DOM. That function lives in report-adapters, which imports this module, so it cannot be reached from
- * here without closing a cycle. The count says drift happened; the Agents table shows the addresses
- * themselves, stripped. */
-const DRIFTABLE: Array<{label: string; values: boolean; of: (agent: AgentSummary) => readonly string[]}> = [
-  {label: "models", values: true, of: (agent) => agent.models},
-  {label: "APIs", values: true, of: (agent) => agent.apis},
-  {label: "reasoning efforts", values: true, of: (agent) => agent.reasoningEfforts},
-  {label: "echo-back settings", values: true, of: (agent) => agent.echoBackReasoning},
-  {label: "request intervals", values: true, of: (agent) => agent.requestIntervalSeconds},
-  {label: "endpoints", values: false, of: (agent) => agent.endpoints},
-];
-
-/** How a seat is named in a finding, where there is no roster index to fall back on. */
-const seatName = (agent: AgentSummary): string =>
-  agent.name === "" ? `Seat ${agent.seatId ?? "?"}` : agent.name;
-
-/** What one seat changed, as clauses, or none where it held one of everything. */
-function driftOf(agent: AgentSummary): string[] {
-  return DRIFTABLE.filter((field) => field.of(agent).length > 1).map((field) => {
-    const held = field.of(agent);
-    const counted = `${formatCount(held.length)} ${field.label}`;
-    return field.values ? `${counted} (${held.join(", ")})` : counted;
-  });
-}
-
-/** seatRosterCheck reports whether the round's seats and players line up one to one.
- *
- * Tapoo seats one player per seat, so the two name the same thing and a log that disagrees with itself
- * cannot be attributed. Both directions are silent failures without this, and they fail differently:
- *
- *   One seat, two players. The second turn is credited to the first player - the seat matches, so the
- *   record is found and its name kept - and the other player's turn disappears into it. One row on the
- *   page, its cells and charge holding two agents' work.
- *
- *   One player, two seats. Two records with the same name, so the page shows the player twice, and
- *   anything that reads a seat by name reaches whichever comes first.
- *
- * Read off the turns rather than the summaries, because a summary is what the disagreement destroys: the
- * first case leaves one record with nothing about it out of place.
- *
- * Turns that state only one of the two say nothing here - a legacy log numbers no turn, and this check has
- * no opinion on it. */
-export function seatRosterCheck(turns: readonly TurnSummary[]): ValidationCheck {
-  const name = "Seat roster";
-  const scope = "round" as const;
-  const playersBySeat = new Map<number, Set<string>>();
-  const seatsByPlayer = new Map<string, Set<number>>();
-
-  for (const turn of turns) {
-    const player = asTrimmedText(turn.playerName);
-    if (turn.seatId === null || player === "") continue;
-    (playersBySeat.get(turn.seatId) ?? playersBySeat.set(turn.seatId, new Set()).get(turn.seatId)!).add(player);
-    (seatsByPlayer.get(player) ?? seatsByPlayer.set(player, new Set()).get(player)!).add(turn.seatId);
-  }
-
-  if (playersBySeat.size === 0) {
-    return {name, scope, outcome: "unchecked", detail: "no turn stated both a seat and a player"};
-  }
-
-  const findings = [
-    ...[...playersBySeat].filter(([, players]) => players.size > 1).map(
-      ([seatId, players]) => `seat ${seatId} played as ${formatCount(players.size)} players (${[...players].join(", ")})`,
-    ),
-    ...[...seatsByPlayer].filter(([, seatIds]) => seatIds.size > 1).map(
-      ([player, seatIds]) => `${player} played from ${formatCount(seatIds.size)} seats (${[...seatIds].join(", ")})`,
-    ),
-  ];
-
-  if (findings.length > 0) {
-    return {
-      name,
-      scope,
-      outcome: "failed",
-      detail: `${findings.join("; ")} - a seat is one player and a player is one seat, so these turns cannot be told apart`,
-    };
-  }
-
-  return {
-    name,
-    scope,
-    outcome: "passed",
-    detail:
-      playersBySeat.size === 1
-        ? "one seat, one player, throughout"
-        : `${formatCount(playersBySeat.size)} seats, one player each, throughout`,
-  };
-}
-
-/** agentSettingsCheck reports whether each seat answered under one setup for the whole round.
- *
- * A seat that changed model, provider, endpoint or effort mid-round was not one experiment: its turns
- * before and after are not comparable, and a verdict drawn across them compares two setups. The same
- * argument the tool-description check makes, and the reason AgentSummary holds lists - a list longer
- * than one *is* the finding, so nothing is counted twice to reach it.
- *
- * Every drifted seat is named, and every setting each one changed, with the values it changed between.
- * A count alone - "ran 2 different settings" - told a reader that something moved and left them to find
- * what in the Agents table, and reporting only the first seat hid the rest of a finding that is about
- * comparability: a round with two unstable seats is not one bad seat.
- *
- * Stated as a replication problem, because that is the consequence a reader can act on: there is no one
- * setup they could run again to get this profile back, and the row names the settings they would have to
- * choose between to try.
- *
- * Only possible because settings are read per turn. A roster declared once at the start of a round
- * could not contradict itself, so there would be nothing here to check. */
-export function agentSettingsCheck(agents: readonly AgentSummary[]): ValidationCheck {
-  const name = "Agent settings";
-  const scope = "round" as const;
-  const stated = agents.filter(
-    (agent) =>
-      agent.models.length + agent.apis.length + agent.endpoints.length + agent.reasoningEfforts.length > 0,
-  );
-  if (stated.length === 0) {
-    return {name, scope, outcome: "unchecked", detail: "the round recorded no model, provider or effort"};
-  }
-
-  const drifted = stated.map((agent) => ({agent, changed: driftOf(agent)}))
-    .filter(({changed}) => changed.length > 0);
-
-  if (drifted.length > 0) {
-    return {
-      name,
-      scope,
-      outcome: "failed",
-      detail:
-        `${drifted.map(({agent, changed}) => `${seatName(agent)} ran ${changed.join(" and ")}`).join("; ")}` +
-        ` - this makes it hard to replicate this report output/profile.`,
-    };
-  }
-
-  return {
-    name,
-    scope,
-    outcome: "passed",
-    detail:
-      stated.length === 1
-        ? "one seat, on one model, endpoint and reasoning effort throughout"
-        : `${formatCount(stated.length)} seats, each on one model, endpoint and reasoning effort throughout`,
   };
 }
 

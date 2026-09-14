@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest"
 
-import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 
 import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
+import {roundReportFor} from "./rubric-report"
 import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, SummaryRow, TurnSummary, VisitStatus, VisitStatusByTurn} from "./types"
-import {sliceLogText, firstRound, must} from "./test-support";
+import {at, sliceLogText, expectOk, firstRound, must} from "./test-support";
 
 const REAL_MAZE: EncodedMaze = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -357,20 +358,47 @@ describe("agentsFromRound", () => {
     expect(katara?.uniqueCells).toBe(3)
   })
 
-  // The check that settles the semantics rather than asserting our own arithmetic back at us: Tapoo
-  // states its own figure in the outcome record, and ours has to equal it. Counting the start square
-  // made this 18 against Tapoo's 17.
+  // The check that settles the semantics rather than asserting our own arithmetic back at us: Tapoo states
+  // its own figure in the outcome record, and ours has to equal it. Counting the start square made this 18
+  // against Tapoo's 17 on the round this capture replaced.
+  //
+  // Counted here off the walk rather than read off the seat. A completed round copies the outcome's totals
+  // onto the seat that finished it, so `agents[0].uniqueCells` is Tapoo's own figure by then - asserting it
+  // against the record it came from would compare a number with itself and hold however far our counting
+  // drifted. The union below is derived from nothing but the turns, which is what makes this a check.
   it("reconciles with the unique-cell count Tapoo reports for the round", () => {
-    const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
+    const result = sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"})
     const round = firstRound(result)
-    const played = must(round.playedRound, "the fixture's only round")
+    const played = must(round.playedRound, "the fixture's first round")
 
-    expect(played.outcome?.playerUniqueCellsVisited).toBe(17)
-    expect(must(played.agents[0], "the round's only seat").uniqueCells).toBe(17)
+    // slice(1) for the same reason the parser does it: cells opens with the square the seat was already
+    // standing on, and Tapoo does not count that as visited.
+    const walked = new Set(played.turns.flatMap((turn) => turn.cells.slice(1)))
+
+    expect(played.outcome?.playerUniqueCellsVisited).toBe(69)
+    expect(walked.size).toBe(69)
+    // And the figure the card shows is that same count, whichever source it came from.
+    expect(must(played.agents[0], "the round's only seat").uniqueCells).toBe(69)
 
     // And the radius the round was actually configured with, read from the same export.
     const model = must(mazeReplayModel(round.playedRound), "a model for the round")
-    expect(value(mazeLevelRows(model), "History window")).toBe("2 cells (Manhattan radius)")
+    expect(value(mazeLevelRows(model), "History window")).toBe("4 cells (Manhattan radius)")
+  })
+
+  // The same check against the parser's own counting, on the round that has no outcome to copy from: an
+  // unfinished round leaves agentsFromRound's count standing, so this is where a start square counted as
+  // entered, or a re-entered cell counted twice, shows up as a number that disagrees with the walk.
+  it("counts a seat's cells off its own turns where no outcome settles them", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const played = must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the fixture's second round")
+    const azula = must(played.agents[0], "the round's only seat")
+
+    // No outcome record at all, so nothing to copy: this is the parser's arithmetic on its own.
+    expect(played.outcome).toBeNull()
+    expect(azula.uniqueCells).toBe(new Set(played.turns.flatMap((turn) => turn.cells.slice(1))).size)
+    expect(azula.uniqueCells).toBe(15)
+    // And every entry, counting a cell again each time it was re-entered - four more than the cells reached.
+    expect(azula.cellsEntered).toBe(19)
   })
 
   // The identity, per seat, on the one round where every count is the real parser's: a speed is
@@ -379,16 +407,16 @@ describe("agentsFromRound", () => {
   // moves or turns cannot satisfy it by miscounting both halves the same way.
   it("decomposes the capture's speed into factors that multiply back to it", () => {
     const result = sliceLogText(JSON.stringify(fixtureData), {label: "gemma4"})
-    const played = must(firstRound(result).playedRound, "the fixture's only round")
+    const played = must(firstRound(result).playedRound, "the fixture's first round")
     const katara = must(played.agents[0], "the round's only seat")
     const factors = must(decomposeTraversalSpeed(katara), "the seat's factors")
 
     // The turns that settled both counts, and the charge over them.
-    expect(katara.settled).toEqual({uniqueCells: 17, movesApplied: 17, turnsTaken: 16})
-    expect(katara.decayCharged).toBe(17)
+    expect(katara.settled).toEqual({uniqueCells: 69, movesApplied: 69, turnsTaken: 67})
+    expect(katara.decayCharged).toBe(67)
 
-    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(1, 12)
-    expect(Number(played.outcome?.traversalSpeed)).toBe(1)
+    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(1.0299, 3)
+    expect(Number(played.outcome?.traversalSpeed)).toBe(1.0299)
   })
 
   // Every entry, against the unique count beside it: the gap between them is the retracing, and it is the
@@ -521,4 +549,3 @@ describe("agentsFromRound", () => {
     expect(seatsOf({turns: anonymous})).toEqual([])
   })
 })
-

@@ -120,11 +120,11 @@ export function sliceLogText(
  * structural: this one exists only while a test runs, and it is TypeScript, like every other fixture in
  * this suite.
  *
- * It exists because the real capture has one seat that never changed anything, so it cannot show what
- * agentSettingsCheck reports, or what the Agents cell does with a setting that moved. It also carries one
- * failed request and one harness fault, which the capture has none of, so the diagnostics table has
- * something other than zeroes to render. Everything but
- * seat 1's model is held still, so the change is the only finding.
+ * It exists because the real capture seats one agent per round and neither of them changed anything, so it
+ * cannot show what agentSettingsCheck reports, or what the Agents cell does with a setting that moved. It
+ * also carries a harness fault, which the capture has none of at all, beside a failed request, which the
+ * capture has one of - in its second round, together with a disabling, an empty answer and six malformed
+ * predictions. Everything but seat 1's model is held still, so the change is the only finding.
  *
  * Checksums are computed with the app's own hash, so the prompt and tool-description checks verify. The
  * traversal payloads deliberately carry none: reproducing Tapoo's pre-compaction bytes here would be

@@ -3,7 +3,7 @@
 // Nothing here invents a number. Every value traces to a rubric answer or to a field the log states
 // outright, which is why the adapters are pure and testable without a DOM.
 
-import { agentSeatLabel } from "./log-contract"
+import { agentSeatLabel } from "./rounds"
 import type { AgentSummary, LogWarning, GroupKind, GroupResult, Report, SummaryRow, TapooLog, ValidationCheck } from "./types"
 import { capitalize, formatCount } from "./utils"
 

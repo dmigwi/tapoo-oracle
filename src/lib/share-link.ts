@@ -47,7 +47,7 @@ export function validateOnlineJsonUrl(value: unknown): UrlResult {
 // network failed when it did not.
 //
 // 100 MB in 120 seconds is a sustained 6.7 Mbit/s, which is the slowest connection this expects to
-// serve a maximum-size log to. Ordinary logs are nowhere near it - the v2.5.1 capture is 0.2 MB and a
+// serve a maximum-size log to. Ordinary logs are nowhere near it - the snapshot in _snapshot_/ is 1.2 MB and a
 // 2,000-entry round about 6 MB - so this deadline is only ever met by a log at the ceiling or by a host
 // that has stopped answering.
 const DEFAULT_FETCH_TIMEOUT_MS = 120_000;

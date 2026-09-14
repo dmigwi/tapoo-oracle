@@ -182,6 +182,19 @@ export function roundLabel({game, level}: GameIdentity): string {
 }
 
 
+/** agentSeatLabel names a seat the way both the report and the replay say it.
+ *
+ * One function because two places render it, and a seat called something different in each would read
+ * as two seats. Prefers the seat the log stated; falls back to the position it acted in.
+ *
+ * The seat alone where no turn named the player: a request may state its seat and leave the name to the
+ * decorated label, and a label that resolves to nothing leaves a seat that plainly played and has no
+ * name. "Agent at Seat 2" is what is known about it; a leading separator with nothing before it is not. */
+export const agentSeatLabel = (agent: AgentSummary, index: number): string => {
+  const seat = `Agent at Seat ${agent.seatId ?? index + 1}`
+  return agent.name === "" ? seat : `${agent.name} \u00b7 ${seat}`
+}
+
 /** groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
  *
  * The one definition of what a round is. The replay reads it to build a maze per round, and the report
@@ -274,6 +287,7 @@ export function agentsFromRound(
   // and the one to report. This list is only consulted for a seat nothing declared a model for.
   const echoes = new Map<AgentSummary, string[]>()
   const entered = new Map<AgentSummary, Set<CellKey>>()
+  const turnsBySeat = new Map<AgentSummary, TurnSummary[]>()
   // Kept apart from `entered`: the decomposition counts cells over its own turns, and the seat's
   // round-wide count covers every turn it played.
   const settledCells = new Map<AgentSummary, Set<CellKey>>()
@@ -346,8 +360,9 @@ export function agentsFromRound(
   // `before`, the cell the seat was already standing on, so the whole array is "where I was, then
   // everywhere I went". Counting all of it credits a seat with a cell it never moved into, and for turn 0
   // that cell is the start square - which Tapoo does not treat as the player's at all: its traversal
-  // history labels the start "Self" on every reading, and its outcome record counts 17 unique cells where
-  // the walk touches 18. For later turns the slice changes nothing, cells[0] already being in the set
+  // history labels the start "Self" on every reading, and its outcome record counts 69 unique cells where
+  // the walk touches 70 - and states that 70 beside them, as allUniqueCellsVisited, so the two figures
+  // differ by exactly the square the seat was placed on. For later turns the slice changes nothing, cells[0] already being in the set
   // from the turn before, so this is precisely the start-square correction and it is what makes the count
   // reconcile with playerUniqueCellsVisited.
   for (const turn of turns) {
@@ -357,6 +372,11 @@ export function agentsFromRound(
     // the row above it naming the same seat.
     const seat = seatInfoAt(turn.seatId, turn.playerName ?? "")
     if (!seat) continue
+    // Pushed into the seat's own list rather than rebuilt from it: a round of 2,004 turns would otherwise
+    // copy a growing array once per turn, to answer one question at the end of the walk.
+    const ownTurns = turnsBySeat.get(seat) ?? []
+    ownTurns.push(turn)
+    turnsBySeat.set(seat, ownTurns)
 
     if (setup) {
       add(seat.models, setup.model)
@@ -465,6 +485,41 @@ export function agentsFromRound(
     // The record declares a model the same way a request does, so it joins the declared list rather than
     // standing in for it.
     add(finisher.models, asTrimmedText(record.model) || null)
+
+    // A completed one-seat round can settle a hole in its per-turn charge readings from the outcome's
+    // authoritative totals. Use this only when every round turn belongs to the finisher and every applied
+    // count is known; otherwise replacing the partial account would attribute another seat's work or invent
+    // moves the log never confirmed.
+    const ownedTurns = turnsBySeat.get(finisher) ?? []
+    const roundTurns = outcome?.turnCount
+    const uniqueCells = outcome?.playerUniqueCellsVisited
+    const decayCharged = outcome?.decayUnitsCharged
+    const movesApplied = ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0)
+    if (
+      typeof roundTurns === "number" &&
+      Number.isInteger(roundTurns) &&
+      ownedTurns.length === roundTurns &&
+      ownedTurns.every((turn) => turn.applied !== null) &&
+      typeof uniqueCells === "number" &&
+      Number.isFinite(uniqueCells) &&
+      typeof decayCharged === "number" &&
+      Number.isFinite(decayCharged) &&
+      // And only where the turns can bear them. A seat cannot enter more new cells than it applied moves,
+      // nor take more turns than it was charged units - so totals breaking either are a log disagreeing
+      // with itself, and mixing them with the turns' own counts would answer a share above 1: a route
+      // efficiency of 2.5 is not a measurement, it is two accounts being added together.
+      //
+      // The seat then keeps what its turns settled, which is consistent by construction. Its product no
+      // longer reaches the stated speed, and the card says so with the approximation sign it already has
+      // for exactly this: a figure the log states, beside factors that do not multiply to it. What the
+      // disagreement itself is, roundTotalsCheck reports.
+      uniqueCells <= movesApplied &&
+      ownedTurns.length <= decayCharged
+    ) {
+      finisher.uniqueCells = uniqueCells
+      finisher.decayCharged = decayCharged
+      finisher.settled = {uniqueCells, movesApplied, turnsTaken: ownedTurns.length}
+    }
   }
 
   // The echo, only where nothing declared a model - better than reporting no model at all, and it names
@@ -604,6 +659,27 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
+    })
+    predicted.add(turn)
+  }
+
+  // A request can end on a provider failure before Tapoo receives a prediction or a replay record. It is
+  // still a turn, and its decorated player label is the latest stated name and traversal speed. Keep it
+  // with no moves and no inferred charge rather than dropping that final state from the agent summary.
+  for (const [turn, player] of activePlayers) {
+    if (predicted.has(turn)) continue
+    turns.push({
+      turn,
+      seatId: context.rawSetupByTurn.get(turn)?.seatId ?? null,
+      playerName: player.name,
+      traversalSpeed: player.traversalSpeed,
+      before: null,
+      moves: [],
+      submittedCount: 0,
+      applied: 0,
+      cells: [],
+      rejectedMove: null,
+      decayCharged: null,
     })
   }
   turns.sort((left, right) => left.turn - right.turn)

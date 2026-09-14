@@ -134,14 +134,47 @@ describe("createLogTabsInput sharing", () => {
     vi.restoreAllMocks()
   })
 
+  // The tab shortens a label from the front - .log-tab-button is direction: rtl - and in a right-to-left
+  // paragraph a leading run of dots is neutral, so it is laid out at the right-hand end: "...log.json"
+  // renders as "log.json...", and the mark that says the front was cut reads as though the back was. A
+  // left-to-right mark in front of the dots binds them to the label's own run.
+  it("marks a shortened label so its ellipsis reads at the front", async () => {
+    window.location.hash = `#r=${expectOk(encodeReportPayload(gistUrl)).payload}`
+    const node = createLogTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    const label = at(queryAll(node, ".log-tab-button"), 0).textContent ?? ""
+
+    expect(label.startsWith("\u200e...")).toBe(true)
+    // And the mark is the only thing before them: it is a direction hint, not part of the name.
+    expect(label.slice(1)).toBe(must(at(queryAll(node, ".log-tab-button"), 0).getAttribute("title"), "the tab's title"))
+
+    node.remove()
+  })
+
+  // And only a shortened label carries it: the mark is a hint about the dots, so a label that kept its
+  // whole value has nothing to hint about and stays the text it is.
+  it("leaves a label that was not shortened exactly as it is", async () => {
+    window.location.hash = `#r=${expectOk(encodeReportPayload("https://e.co/a.json")).payload}`
+    const node = createLogTabsInput({fetchText: async () => logExport})
+    document.body.append(node)
+    await settle()
+
+    expect(at(queryAll(node, ".log-tab-button"), 0).textContent).toBe("https://e.co/a.json")
+
+    node.remove()
+  })
+
   it("leaves nothing in the DOM that can be turned back into a working log address", async () => {
     window.location.hash = `#r=${expectOk(encodeReportPayload(gistUrl)).payload}`
     const node = createLogTabsInput({fetchText: async () => logExport})
     document.body.append(node)
     await settle()
 
-    // Strict because the panel shows the share link and not the log address: no part of the address
-    // survives anywhere, not even the host. The report is named by its label.
+    // Strict because the panel shows the share link and not the log address: the host, the gist id and the
+    // revision id do not survive anywhere. What the tab carries is the end of the address, bounded to what
+    // it could display - here the file name, which is how a reader tells one report from another.
     expect(node.innerHTML).not.toContain(gistUrl)
     expect(node.innerHTML).not.toContain("gist.githubusercontent.com")
     expect(node.innerHTML).not.toContain("908ef03ef653fe39581f0756122ffe4c")

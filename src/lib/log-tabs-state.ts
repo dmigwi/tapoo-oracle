@@ -231,25 +231,31 @@ async function loadLogTabFields(
   };
 }
 
-/** Names a tab after the file it loaded: the last path segment, else the host, else "Report N", and
- * shortened to fit a tab.
+/** Names a tab with the final characters of the exact loaded value.
  *
- * Shortened from the left, keeping the *end*: logs from one run share a directory and differ in the file
- * name, so trimming the tail would leave a row of tabs reading the same thing.
+ * No URL parsing or decoding: the suffix is the contract, so hosts, paths, query strings and ordinary
+ * text are treated alike. A leading ellipsis marks only values whose beginning was removed. A non-string
+ * runtime value still falls back rather than failing a completed load while naming its tab.
  *
- * Every arm falls back rather than throwing - this runs on a URL that has already been validated, but
- * naming a tab must not be able to fail the load that produced it. */
-export function extractTabLabelFromUrl(value: string, index = 0, maxLength = 34): string {
-  const fallback = `Report ${index + 1}`;
-
-  let label: string;
-  try {
-    const url = new URL(value);
-    label = asTrimmedText(decodeURIComponent(url.pathname.split("/").filter(Boolean).at(-1) ?? "")) || url.hostname;
-  } catch {
-    return fallback;
-  }
-
-  if (!label) return fallback;
-  return label.length <= maxLength ? label : `...${label.slice(-(maxLength - 3))}`;
+ * The end, because that is where one export differs from the next: a run of logs shares a host, a project
+ * and a directory, and differs in the file name and the timestamp inside it.
+ *
+ * How much of that end a reader *sees* is not decided here. `.log-tab-button` is `direction: rtl` with
+ * `text-overflow: ellipsis`, so the tab shortens the label from the front, to the width it has, and the
+ * browser places the ellipsis - which means a wide window shows more of the name than a phone does, and a
+ * window being resized re-decides on every frame. A length computed here could do none of that: it is
+ * fixed when the log loads, before the label has a width.
+ *
+ * What this length decides is what the *markup* carries, which the tab may show less of but never more.
+ * 38 is the widest a tab can be - `min(18rem, 58vw)` less the delete column is 288px at any window over
+ * 497px, and 38 characters of the label's own font fill it. Measured, not guessed. So the page holds the
+ * most a reader could ever see of an address, and nothing beyond it. */
+export function extractTabLabelFromUrl(value: string, index = 0, suffixLength = 38): string {
+  // Not a check against the type system: the value arrives from `unknown`, and an object reaching here is
+  // defect 6 - untrusted input stringified rather than rejected, which named a report "[object Object]".
+  // asTrimmedText refuses it upstream as well; both layers are pinned, and neither is the other's reason.
+  if (typeof value !== "string") return `Report ${index + 1}`;
+  if (!Number.isFinite(suffixLength) || suffixLength <= 0) return "";
+  const kept = Math.floor(suffixLength);
+  return value.length > kept ? `...${value.slice(-kept)}` : value;
 }

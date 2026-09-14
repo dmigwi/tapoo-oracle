@@ -21,7 +21,8 @@
 // rubric pass it calls, and then the questions themselves: the file reads in the order the work
 // happens.
 
-import { DECLARED_TOOLS, agentSettingsCheck, classifyTraversalSpeed, parseRound, seatRosterCheck, stepFrom } from "./log-contract"
+import { DECLARED_TOOLS, classifyTraversalSpeed, parseRound, stepFrom } from "./log-contract"
+import { agentSettingsCheck, roundTotalsCheck, seatRosterCheck } from "./rubric-contract"
 import { buildPlayedRound } from "./rounds"
 import { buildContext } from "./rubric-context"
 import type {
@@ -78,6 +79,9 @@ export function roundReportFor(slice: RoundSlice): RoundReport {
         // decoded no maze still has turns to check, so this reads the turns and not the maze.
         seatRosterCheck(report.playedRound?.turns ?? []),
         agentSettingsCheck(report.agents),
+        // Over the turns and the outcome, the two readings of one round that can disagree - and the seats
+        // above are derived from both, so what they report rests on this having been asked.
+        roundTotalsCheck(report.playedRound?.turns ?? [], report.playedRound?.outcome ?? null),
       ],
     },
   };

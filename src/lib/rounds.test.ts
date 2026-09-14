@@ -1,13 +1,14 @@
 import {describe, expect, it} from "vitest"
 
-import fixtureData from "./_snapshot_/tapoo-v2.5.1-gemma4-base-agent-api-log.json" with {type: "json"}
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
-import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
-import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
+import {agentSettingsCheck} from "./rubric-contract"
+import {agentSeatLabel, agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
+import {decomposeTraversalSpeed} from "./geometry"
 import {buildContext} from "./rubric-context"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
-import type {AgentSummary, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup} from "./types"
+import type {AgentSummary, CellKey, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup, TurnSummary} from "./types"
 
 const entry = (
   payload: string,
@@ -115,6 +116,17 @@ describe("resolveActiveAgents", () => {
 
     expect(names(stated)).toEqual([[0, "Katara"]])
     expect(speeds(stated)).toEqual([[0, 1]])
+  })
+
+  it("resolves the final active agent and speed from the snapshot's second game", () => {
+    const secondGame = must(
+      groupEntriesByRound(fixtureData.entries as LogEntry[]).find(({identity}) => identity.game === 4),
+      "game 4 in the v2.6.1 snapshot",
+    )
+    const resolved = [...resolveActiveAgents(secondGame.entries)]
+
+    expect(resolved).toHaveLength(20)
+    expect(resolved.at(-1)).toEqual([19, {name: "Azula", traversalSpeed: 0.4545}])
   })
 
   // A request with no label stated no speed. Nothing is inferred from the turn's own figures: speed is
@@ -368,6 +380,32 @@ describe("a turn that produced no prediction", () => {
     expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], submittedCount: 0, applied: 0, decayCharged: 3})
   })
 
+  it("keeps the final speed when a provider failure prevents a prediction", () => {
+    const played = playedRound([
+      entry(LOG_EVENTS.levelStarted, {maze: REAL_MAZE}, {turn: 0, game: 6, level: 54}),
+      entry(LOG_EVENTS.request, {
+        player: "Azula the Backtracker - 0.4545x",
+        playerName: "Azula",
+        seatId: 2,
+      }, {turn: 19, game: 6, level: 54}),
+      entry(LOG_EVENTS.providerHttpFailure, {status: 503}, {turn: 19, game: 6, level: 54, log: "error"}),
+    ])
+
+    expect(played.turns).toEqual([
+      expect.objectContaining({
+        turn: 19,
+        playerName: "Azula",
+        traversalSpeed: 0.4545,
+        moves: [],
+        applied: 0,
+        decayCharged: null,
+      }),
+    ])
+    expect(played.agents).toEqual([
+      expect.objectContaining({name: "Azula", seatId: 2, traversalSpeed: 0.4545}),
+    ])
+  })
+
   it("leaves the agent where the turn before it ended", () => {
     // Without this the scrubber snaps the agent back to the start whenever a turn submitted nothing.
     const empty = at(roundWithEmptyTurn()[0]!.turns, 1)
@@ -419,7 +457,10 @@ describe("the context buildPlayedRound is handed", () => {
   // The caller's context, over exactly these entries. buildContext is the most expensive read the app
   // makes, so the record must be derived from the one already built rather than from a second walk.
   it("derives the round from the context it is given", () => {
-    const entries = fixtureData.entries as LogEntry[]
+    const entries = must(
+      groupEntriesByRound(fixtureData.entries as LogEntry[])[0],
+      "the fixture's first round",
+    ).entries
     const context = buildContext(entries, {label: "fixture"})
 
     expect(shape(must(buildPlayedRound(entries, context), "a round"))).toEqual(shape(roundOf(entries)))
@@ -632,6 +673,86 @@ describe("agentsFromRound", () => {
     const seats = agentsFromRound(new Map(), [], {outcome: "won", agent: {playerName: "Kora"}})
 
     expect(seats.map((agent) => agent.name)).toEqual(["Kora"])
+  })
+
+  // The outcome's totals are the round's, so they may only replace a seat's own account where that seat is
+  // the whole account. Here a second seat played turn 2, so the finisher owns 2 of the round's 3 turns and
+  // keeps what its own turns stated - taking the totals would credit Kora with Bumi's ground and charge.
+  it("keeps a seat's own account where another seat played part of the round", () => {
+    const [kora] = agentsFromRound(new Map(), [
+      seat("Kora", 0, ["0,0", "1,0"], 1, 1),
+      seat("Kora", 1, ["1,0", "2,0"], 1, 1),
+      seat("Bumi", 2, ["2,0", "3,0"], 1, 2),
+    ], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 3, playerUniqueCellsVisited: 3, decayUnitsCharged: 3, traversalSpeed: "1.0000",
+    })
+
+    expect(kora).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 2,
+      settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2},
+    })
+  })
+
+  // And where a turn never settled how many of its moves landed: the totals would then be reconciling
+  // against an account that is partly guesswork, so the seat keeps the turns that did settle.
+  it("keeps a seat's own account where a turn's applied count is unknown", () => {
+    const unsettled = {...seat("Kora", 1, ["1,0", "2,0"], 1, 1), applied: null}
+    const [kora] = agentsFromRound(new Map(), [seat("Kora", 0, ["0,0", "1,0"], 1, 1), unsettled], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2, playerUniqueCellsVisited: 9, decayUnitsCharged: 9, traversalSpeed: "1.0000",
+    })
+
+    expect(kora).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 2,
+      settled: {uniqueCells: 1, movesApplied: 1, turnsTaken: 1},
+    })
+  })
+
+  // The moves are the seat's own count and not the outcome's cell count, which is what makes route
+  // efficiency a measurement rather than the constant 1: this seat applied 4 moves to enter 2 cells, so it
+  // spent half of them on ground it had already covered.
+  it("counts the moves the turns applied, not the cells the outcome reports", () => {
+    const retraced = (turn: number, cells: string[]) => ({...seat("Kora", turn, cells, 1, 1), applied: 2})
+    const [kora] = agentsFromRound(new Map(), [
+      retraced(0, ["0,0", "1,0", "0,0"]),
+      retraced(1, ["0,0", "1,0", "0,0"]),
+    ], {
+      outcome: "won", agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2, playerUniqueCellsVisited: 2, decayUnitsCharged: 3, traversalSpeed: "0.6667",
+    })
+
+    expect(kora?.settled).toEqual({uniqueCells: 2, movesApplied: 4, turnsTaken: 2})
+
+    // Both ceilings, which is what one population buys: a seat cannot enter more new cells than it applied
+    // moves, and cannot take more turns than it was charged units.
+    const factors = must(decomposeTraversalSpeed(must(kora, "the round's only seat")), "the seat's factors")
+    expect(factors.efficiency).toBeLessThanOrEqual(1)
+    expect(factors.accuracy).toBeLessThanOrEqual(1)
+    expect(factors.efficiency * factors.batching * factors.accuracy).toBeCloseTo(2 / 3, 12)
+  })
+
+  it("uses completed-round totals when a per-turn charge reading is missing", () => {
+    const turns = [
+      seat("Kora", 0, ["0,0", "1,0"], 1, 1),
+      seat("Kora", 1, ["1,0", "2,0"], null, 1),
+    ]
+    const [only] = agentsFromRound(new Map(), turns, {
+      outcome: "won",
+      agent: {playerName: "Kora", seatId: 1},
+      turnCount: 2,
+      playerUniqueCellsVisited: 2,
+      decayUnitsCharged: 3,
+      traversalSpeed: "0.6667",
+    })
+
+    expect(only).toMatchObject({
+      uniqueCells: 2,
+      decayCharged: 3,
+      settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2},
+    })
   })
 })
 
@@ -1207,5 +1328,27 @@ describe("the speed a seat was going when the round did not settle it", () => {
   // all - still reports nothing rather than a zero. Not recorded is a different answer from standing still.
   it("still reports nothing where no turn stated a speed", () => {
     expect(speedOf([...turnOf(0, "Kora the Trailblazer - Default")], "Kora")).toBeNull()
+  })
+})
+
+
+// The guard that keeps an impossible total out of the figures rather than only out of the report.
+describe("a round whose totals its own turns cannot bear", () => {
+  it("keeps the seat's own account, so no factor passes its ceiling", () => {
+    const turns: TurnSummary[] = [0, 1].map((n) => ({
+      turn: n, seatId: null, playerName: "Kora", before: `${n},0`, moves: ["MoveDown"] as Move[],
+      submittedCount: 1, applied: 1, cells: [`${n},0`, `${n + 1},0`] as CellKey[], rejectedMove: null,
+      traversalSpeed: null, decayCharged: 1,
+    }))
+    const [kora] = agentsFromRound(new Map(), turns, {
+      outcome: "won", agent: {playerName: "Kora"}, turnCount: 2, traversalSpeed: "2.5000",
+      // Five cells on two applied moves: the log contradicting itself.
+      playerUniqueCellsVisited: 5, decayUnitsCharged: 2,
+    })
+    const factors = must(decomposeTraversalSpeed(must(kora, "the round's only seat")), "the seat's factors")
+
+    expect(kora).toMatchObject({uniqueCells: 2, decayCharged: 2, settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2}})
+    expect(factors.efficiency).toBeLessThanOrEqual(1)
+    expect(factors.accuracy).toBeLessThanOrEqual(1)
   })
 })
