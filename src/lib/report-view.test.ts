@@ -487,6 +487,8 @@ describe("payload validation", () => {
     expect(names).toEqual([
       "Log entry fields*",
       "Model responses*",
+      // The third check that covers the whole file: the entries are the ones downloaded.
+      "Entries checksum*",
       "Encoded maze",
       "Traversal payloads",
       "Prompts and tool descriptions",

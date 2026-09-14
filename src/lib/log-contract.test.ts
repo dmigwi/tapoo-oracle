@@ -136,8 +136,71 @@ describe("parseTapooLogText", () => {
 
     expect(result.ok).toBe(true)
     expect(expectOk(result).warnings).toEqual([])
-    expect(expectOk(result).source).toMatchObject({name: "tapoo", version: "2.5.1", mode: AGENT_API_MODE})
+    expect(expectOk(result).source).toMatchObject({name: "tapoo", appVersion: "2.5.1", mode: AGENT_API_MODE})
     expect(expectOk(result).source.entries).toHaveLength(1)
+  })
+
+  // The export's own proof that its entries are the ones Tapoo wrote. Computed the way the producer
+  // computes it - fnv1a64 over the compact JSON of the entries array - so this asserts the two agree
+  // about what is hashed, not merely that some checksum round-trips.
+  describe("the checksum an export states over its own entries", () => {
+    const checkOf = (result: ReturnType<typeof parse>) =>
+      must(expectOk(result).checks.find((check) => check.name === "Entries checksum"), "the checksum check")
+
+    const checksummed = (over: Record<string, unknown> = {}) => {
+      const shaped = envelope(over)
+      return {...shaped, entriesChecksum: fnv1a64Checksum(JSON.stringify(shaped.entries))}
+    }
+
+    it("accepts a log whose entries hash to the value it states", () => {
+      const result = parse(checksummed())
+
+      expect(result.ok).toBe(true)
+      expect(checkOf(result)).toMatchObject({
+        scope: "log",
+        outcome: "passed",
+        detail: `all 1 entries hash to ${fnv1a64Checksum(JSON.stringify([entry()]))}, the value the export states`,
+      })
+    })
+
+    // Refused, where every other caveat on the page is a warning: there is no verdict to qualify when the
+    // evidence is not the evidence the file claims to carry.
+    it("refuses a log whose entries were changed after download", () => {
+      const shaped = checksummed()
+      const edited = {...shaped, entries: [{...entry(), payload: "Agent level lost."}]}
+
+      const result = parse(edited)
+
+      expect(result.ok).toBe(false)
+      expect(expectErr(result).error).toMatch(/does not match its own entries checksum/)
+      // Both figures, because a reader comparing them can tell a tampered file from a stale checksum.
+      expect(expectErr(result).error).toContain(shaped.entriesChecksum)
+      expect(expectErr(result).error).toContain("1 entries hash to")
+    })
+
+    // The producer hashes what it stored, stand-ins for records that failed to decode included. Hashing the
+    // readable ones instead would refuse every log that carries one - the logs most worth reading.
+    it("hashes what the file carries, not the entries that survive the shape check", () => {
+      const withUnreadable = checksummed({entries: [entry(), {epochMs: -1, notAnEntry: true}]})
+
+      const result = parse(withUnreadable)
+
+      expect(result.ok).toBe(true)
+      expect(checkOf(result).outcome).toBe("passed")
+      expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/did not match the log entry shape/)
+    })
+
+    // A checksum that was never written is not a checksum that failed: every log from before the producer
+    // stamped one reads exactly as it did.
+    it("reads a log that states no checksum as it always did", () => {
+      const result = parse(envelope())
+
+      expect(result.ok).toBe(true)
+      expect(checkOf(result)).toMatchObject({
+        outcome: "unchecked",
+        detail: "the export states no checksum of its entries, so they cannot be shown to be the ones downloaded",
+      })
+    })
   })
 
   it("reads v2.6.1 device and platform provenance from the export envelope", () => {
@@ -205,7 +268,7 @@ describe("parseTapooLogText", () => {
     const result = parse(envelope({version: undefined}))
 
     expect(result.ok).toBe(true)
-    expect(expectOk(result).source.version).toBeNull()
+    expect(expectOk(result).source.appVersion).toBeNull()
     expect(messagesOf(expectOk(result).warnings).join(" ")).toMatch(/no Tapoo version/)
   })
 
@@ -732,7 +795,9 @@ describe("the validation summary", () => {
   it("scopes the file-wide checks to the log, not to a round", () => {
     const parsed = expectOk(parseTapooLogText(JSON.stringify(fixtureData)))
 
-    expect(parsed.checks.map((check) => check.name)).toEqual(["Log entry fields", "Model responses"])
+    expect(parsed.checks.map((check) => check.name)).toEqual([
+      "Log entry fields", "Model responses", "Entries checksum",
+    ])
     expect(parsed.checks.every((check) => check.scope === "log")).toBe(true)
     expect(named(parsed.checks, "Log entry fields").detail).toBe("360 of 360 log entries carried a payload, a timestamp and a known log level")
     expect(named(parsed.checks, "Model responses").detail).toBe("174 of 174 model responses were read")
