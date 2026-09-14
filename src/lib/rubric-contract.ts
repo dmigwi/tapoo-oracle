@@ -209,8 +209,15 @@ export function roundTotalsCheck(turns: readonly TurnSummary[], outcome: Outcome
     charged += turn.decayCharged ?? 0;
   }
 
+  // A turn that never settled how many of its moves landed says nothing about how many cells they could
+  // have entered, and a round of those sums to no applied moves at all - under which every cell the round
+  // states reads as impossible. Not stated is not contradicted, so the cells are compared only where every
+  // turn states one, and the detail below says when they could not be.
+  const appliedKnown = turns.every((turn) => turn.applied !== null);
+  const unstated = appliedKnown ? "" : ", and its turns state no applied count to compare those cells with";
+
   const impossible = [
-    stated.cells > movesApplied
+    appliedKnown && stated.cells > movesApplied
       ? `${formatCount(stated.cells)} cells entered on ${formatCount(movesApplied)} applied moves`
       : null,
     stated.turns > stated.charged
@@ -239,7 +246,7 @@ export function roundTotalsCheck(turns: readonly TurnSummary[], outcome: Outcome
       detail:
         `${formatCount(stated.cells)} cells and ${formatCount(stated.charged)} units charged, against ` +
         `${formatCount(entered.size)} and ${formatCount(charged)} the turns settled - the round states ` +
-        `what its last turns had not yet reported`,
+        `what its last turns had not yet reported${unstated}`,
     }
   }
 
@@ -247,6 +254,8 @@ export function roundTotalsCheck(turns: readonly TurnSummary[], outcome: Outcome
     name,
     scope,
     outcome: "passed",
-    detail: `${formatCount(stated.cells)} cells and ${formatCount(stated.charged)} units charged, the same the turns settled`,
+    detail:
+      `${formatCount(stated.cells)} cells and ${formatCount(stated.charged)} units charged, the same the ` +
+      `turns settled${unstated}`,
   }
 }

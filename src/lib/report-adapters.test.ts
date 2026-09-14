@@ -106,12 +106,14 @@ describe("report URL tabs", () => {
     expect(extractTabLabelFromUrl("file:///", 4)).toBe("file:///")
   })
 
+  // The length is the suffix, not a ceiling on the label: the three dots that mark the removal sit outside
+  // it, so 27 characters of the value arrive inside a 30-character label.
   it("keeps exactly the requested suffix and marks that the beginning was removed", () => {
     expect(extractTabLabelFromUrl("https://example.com/logs/very-long-prefix-tapoo-agent-api-log.json", 0, 27))
       .toBe("...ix-tapoo-agent-api-log.json")
   })
 
-  it("returns no characters when the maximum length is not positive", () => {
+  it("returns no characters when the suffix length is not positive", () => {
     expect(extractTabLabelFromUrl("https://example.com/report.json", 0, 0)).toBe("")
     expect(extractTabLabelFromUrl("https://example.com/report.json", 0, -1)).toBe("")
   })

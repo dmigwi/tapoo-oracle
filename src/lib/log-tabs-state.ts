@@ -250,9 +250,12 @@ async function loadLogTabFields(
  * 38 is the widest a tab can be - `min(18rem, 58vw)` less the delete column is 288px at any window over
  * 497px, and 38 characters of the label's own font fill it. Measured, not guessed. So the page holds the
  * most a reader could ever see of an address, and nothing beyond it. */
-export function extractTabLabelFromUrl(value: string, index = 0, maxLength = 38): string {
+export function extractTabLabelFromUrl(value: string, index = 0, suffixLength = 38): string {
+  // Not a check against the type system: the value arrives from `unknown`, and an object reaching here is
+  // defect 6 - untrusted input stringified rather than rejected, which named a report "[object Object]".
+  // asTrimmedText refuses it upstream as well; both layers are pinned, and neither is the other's reason.
   if (typeof value !== "string") return `Report ${index + 1}`;
-  if (!Number.isFinite(maxLength) || maxLength <= 0) return "";
-  const suffixLength = Math.floor(maxLength);
-  return value.length > suffixLength ? `...${value.slice(-suffixLength)}` : value;
+  if (!Number.isFinite(suffixLength) || suffixLength <= 0) return "";
+  const kept = Math.floor(suffixLength);
+  return value.length > kept ? `...${value.slice(-kept)}` : value;
 }

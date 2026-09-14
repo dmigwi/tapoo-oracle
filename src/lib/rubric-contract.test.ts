@@ -120,6 +120,29 @@ describe("roundTotalsCheck", () => {
     })
   })
 
+  // Not stated is not contradicted. A log whose turns never settled how many of their moves landed sums to
+  // no applied moves at all, and comparing cells against that would report every round of that shape as
+  // contradicting itself - the difference between "this log disagrees with itself" and "this log did not
+  // say", which is the distinction every other check here is careful about.
+  it("does not read unstated applied counts as a contradiction", () => {
+    const unsettled = walked.map((turn) => ({...turn, applied: null}))
+
+    expect(roundTotalsCheck(unsettled, totals())).toMatchObject({
+      outcome: "passed",
+      detail:
+        "2 cells and 2 units charged, the same the turns settled, and its turns state no applied count " +
+        "to compare those cells with",
+    })
+  })
+
+  // The charge side still stands: both of its figures come from the round's own record, so a turn saying
+  // nothing about its moves takes nothing away from it.
+  it("still fails on a charge total the round cannot have paid", () => {
+    const unsettled = walked.map((turn) => ({...turn, applied: null}))
+
+    expect(roundTotalsCheck(unsettled, totals({turnCount: 5, decayUnitsCharged: 2})).outcome).toBe("failed")
+  })
+
   it("checks nothing where the round states no totals", () => {
     expect(roundTotalsCheck(walked, null)).toMatchObject({
       outcome: "unchecked",
