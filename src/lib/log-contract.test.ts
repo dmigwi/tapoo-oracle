@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 
-import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, agentSettingsCheck, seatRosterCheck, classifyTraversalSpeed, parseRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
+import {AGENT_API_MODE, DECLARED_TOOLS, assistantMessage, responseUsage, LOG_ENVELOPE_NAME, LOG_EVENTS, MOVES, classifyTraversalSpeed, parseRound, getCellKey, parseTapooLogText, statusesFromLogged, stepFrom, turnReports} from "./log-contract"
 import {loadTapooLogFromUrl, validateOnlineJsonUrl} from "./share-link"
-import type {AgentSummary, LogEntry, Move, ValidationCheck} from "./types"
+import type {LogEntry, ValidationCheck} from "./types"
 import {groupEntriesByRound, roundLabel} from "./rounds"
-import {roundReportFor} from "./rubric-report"
 import {fnv1a64Checksum} from "./utils"
-import {sliceLogText, at, expectErr, expectOk, messagesOf, must, twoSeatDriftLog} from "./test-support";
+import {at, expectErr, expectOk, messagesOf, must} from "./test-support";
 
 const fixtureLogEntries = () => (fixtureData as unknown as {entries: LogEntry[]}).entries
 const firstFixtureRoundEntries = () => must(
@@ -643,168 +642,6 @@ describe("a log that returns to a round it already played", () => {
   })
 })
 
-
-// End to end over a whole log, because every other test of this reaches agentsFromRound directly. The real
-// capture seats one agent per round and neither changed anything, so it cannot show what a round that is
-// not one experiment looks like - see twoSeatDriftLog for why it is built rather than saved.
-describe("a log whose seat changed model mid-round", () => {
-  const round = () => {
-    const result = expectOk(sliceLogText(JSON.stringify(twoSeatDriftLog()), {label: "two-seat"}))
-    const opened = roundReportFor(must(result.rounds[0], "a round"))
-    return {report: opened.report, checks: opened.round.checks}
-  }
-
-  it("reads both seats, each with the setup its own turns stated", () => {
-    const agents = round().report.agents
-
-    expect(agents.map((agent) => [agent.seatId, agent.name, agent.models, agent.apis])).toEqual([
-      [1, "Katara", ["moonshotai/Kimi-K3:baseten", "moonshotai/Kimi-K3:together"], ["openai"]],
-      [2, "Bumi", ["gemma4:cloud"], ["ollama"]],
-    ])
-  })
-
-  it("reports the change, naming the seat, the setting and both models", () => {
-    const check = must(round().checks.find((entry) => entry.name === "Agent settings"), "the settings check")
-
-    expect(check.outcome).toBe("failed")
-    expect(check.detail).toBe(
-      "Katara ran 2 models (moonshotai/Kimi-K3:baseten, moonshotai/Kimi-K3:together) - " +
-      "this makes it hard to replicate this report output/profile.",
-    )
-  })
-
-  // The drift has to be the only finding, or the fixture is demonstrating its own defects. Its prompts
-  // and tool descriptions carry checksums computed with the app's own hash, so they verify.
-  it("is otherwise a clean round, so the finding is the one thing to read", () => {
-    expect(round().checks.map((check) => [check.name, check.outcome])).toEqual([
-      ["Encoded maze", "passed"],
-      ["Prompts and tool descriptions", "passed"],
-      // No repeats and no traversal checksums: honestly unverifiable rather than quietly passed.
-      ["Trimmed checksummed repeats", "unchecked"],
-      ["Tool descriptions", "passed"],
-      ["Agent personas", "passed"],
-      // No warning was issued, which is the good case and reads as one.
-      ["User warnings", "passed"],
-      ["Traversal payloads", "unchecked"],
-      ["Seat roster", "passed"],
-      ["Agent settings", "failed"],
-    ])
-  })
-})
-
-// A seat is one player and a player is one seat. Both directions fail silently without a check, and they
-// fail differently - which is why the check reads the turns rather than the records they produce.
-describe("seatRosterCheck", () => {
-  const played = (turn: number, seatId: number | null, playerName: string | null) => ({
-    turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null,
-  })
-
-  it("passes a round where each seat kept one player", () => {
-    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 2, "Bumi"), played(2, 1, "Katara")])
-
-    expect(check.outcome).toBe("passed")
-    expect(check.detail).toBe("2 seats, one player each, throughout")
-    expect(seatRosterCheck([played(0, 1, "Katara")]).detail).toBe("one seat, one player, throughout")
-  })
-
-  // The destructive direction. The second turn matches the seat, so the record is found and its name kept,
-  // and Bumi's turn is credited to Katara - one row on the page holding two agents' cells and charge, with
-  // nothing about it out of place. Nothing downstream can find this, which is why it is caught here.
-  it("reports one seat played under two players", () => {
-    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 1, "Bumi")])
-
-    expect(check.outcome).toBe("failed")
-    expect(check.detail).toBe(
-      "seat 1 played as 2 players (Katara, Bumi) - a seat is one player and a player is one seat, so " +
-      "these turns cannot be told apart",
-    )
-  })
-
-  // The visible direction: two records with one name, so the page shows the player twice and anything
-  // reading a seat by name reaches whichever comes first.
-  it("reports one player playing from two seats", () => {
-    const check = seatRosterCheck([played(0, 1, "Katara"), played(1, 2, "Katara")])
-
-    expect(check.outcome).toBe("failed")
-    expect(check.detail).toMatch(/^Katara played from 2 seats \(1, 2\)/)
-  })
-
-  // A turn stating one of the two says nothing: a log that numbers no turn is the ordinary case, and this
-  // check has no opinion on it.
-  it("says nothing where no turn stated both a seat and a player", () => {
-    const check = seatRosterCheck([played(0, null, "Katara"), played(1, 2, null)])
-
-    expect(check.outcome).toBe("unchecked")
-    expect(check.detail).toBe("no turn stated both a seat and a player")
-  })
-})
-
-describe("agentSettingsCheck", () => {
-  const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
-    name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
-    reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
-    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
-  })
-
-  it("passes a round whose seats each held one setup throughout", () => {
-    const check = agentSettingsCheck([agent(), agent({name: "Bumi"})])
-
-    expect(check.outcome).toBe("passed")
-    expect(check.detail).toBe("2 seats, each on one model, endpoint and reasoning effort throughout")
-    expect(agentSettingsCheck([agent()]).detail).toBe("one seat, on one model, endpoint and reasoning effort throughout")
-  })
-
-  // Which setting, and between which values. A bare count told a reader that something moved and left
-  // them to find what in the Agents table.
-  it("names the setting a seat changed and the values it changed between", () => {
-    const check = agentSettingsCheck([agent({models: ["gemma4", "glm-5.1"]})])
-
-    expect(check.outcome).toBe("failed")
-    expect(check.detail).toBe(
-      "Katara ran 2 models (gemma4, glm-5.1) - this makes it hard to replicate this report output/profile.",
-    )
-  })
-
-  // Every unstable seat, not just the first. A round with two of them is not one bad seat, and the
-  // question this check answers - are these turns comparable - is about the round.
-  it("names every seat that drifted, and every setting each one changed", () => {
-    const check = agentSettingsCheck([
-      agent({models: ["gemma4", "glm-5.1"], reasoningEfforts: ["max", "high"]}),
-      agent({name: "Bumi", apis: ["ollama", "openai"]}),
-    ])
-
-    expect(check.detail).toBe(
-      "Katara ran 2 models (gemma4, glm-5.1) and 2 reasoning efforts (max, high); " +
-      "Bumi ran 2 APIs (ollama, openai) - this makes it hard to replicate this report output/profile.",
-    )
-  })
-
-  // An endpoint may carry user:pass@host, and this detail is rendered into a table cell. The count says
-  // the drift happened; the Agents table shows the addresses, stripped on the way in.
-  it("counts changed endpoints without printing them", () => {
-    const check = agentSettingsCheck([
-      agent({endpoints: ["http://user:pass@host/api", "http://other/api"]}),
-    ])
-
-    expect(check.outcome).toBe("failed")
-    expect(check.detail).toBe("Katara ran 2 endpoints - this makes it hard to replicate this report output/profile.")
-    expect(check.detail).not.toMatch(/user:pass|http/)
-  })
-
-  // A seat that stated a number and no player is still named, or a finding would open with " ran 2".
-  it("names a drifted seat that stated no player", () => {
-    const check = agentSettingsCheck([agent({name: "", seatId: 4, models: ["gemma4", "glm-5.1"]})])
-
-    expect(check.detail).toMatch(/^Seat 4 ran 2 models/)
-  })
-
-  it("says nothing of a round that recorded no settings at all", () => {
-    const check = agentSettingsCheck([agent({models: [], apis: [], reasoningEfforts: []})])
-
-    expect(check.outcome).toBe("unchecked")
-  })
-})
 
 // The summary the report shows: what was verified, and what could not be.
 //

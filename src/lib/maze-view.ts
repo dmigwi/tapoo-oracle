@@ -9,7 +9,8 @@
 // Observable's generator pumping, which is driven by requestAnimationFrame and does not run while the
 // document is hidden.
 
-import { agentSeatLabel, cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
+import { cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
+import { agentSeatLabel } from "./rounds"
 import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
@@ -1130,9 +1131,11 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
     // Every cell entry attributed to the seat, a cell counted again each time it was re-entered, with its
     // share of what the seats entered between them.
     //
-    // The unique count is not a column of its own: it is this count times route efficiency, and equally the
-    // speed times the charge - two of the figures already on the card - and the card has four columns' worth
-    // of room for facts that are only stated here.
+    // The unique count is not a column of its own. It is a third view of the same walk, and on a round whose
+    // every turn settled it is this count times route efficiency - but only then: the factors divide the
+    // turns that stated both an applied count and a charge, where this counts every turn the seat played, so
+    // a round with an unsettled turn multiplies out to more cells than the seat entered. The card holds the
+    // two counts the factors are built from and leaves the third to the replay.
     {
       label: "All cells",
       read: (agent) => (agent.cellsEntered === null ? "not recorded" : shareOf(agent.cellsEntered, allCells)),

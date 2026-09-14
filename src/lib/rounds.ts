@@ -182,6 +182,19 @@ export function roundLabel({game, level}: GameIdentity): string {
 }
 
 
+/** agentSeatLabel names a seat the way both the report and the replay say it.
+ *
+ * One function because two places render it, and a seat called something different in each would read
+ * as two seats. Prefers the seat the log stated; falls back to the position it acted in.
+ *
+ * The seat alone where no turn named the player: a request may state its seat and leave the name to the
+ * decorated label, and a label that resolves to nothing leaves a seat that plainly played and has no
+ * name. "Agent at Seat 2" is what is known about it; a leading separator with nothing before it is not. */
+export const agentSeatLabel = (agent: AgentSummary, index: number): string => {
+  const seat = `Agent at Seat ${agent.seatId ?? index + 1}`
+  return agent.name === "" ? seat : `${agent.name} \u00b7 ${seat}`
+}
+
 /** groupEntriesByRound splits a log into the rounds it recorded, in the order they were played.
  *
  * The one definition of what a round is. The replay reads it to build a maze per round, and the report
@@ -347,8 +360,9 @@ export function agentsFromRound(
   // `before`, the cell the seat was already standing on, so the whole array is "where I was, then
   // everywhere I went". Counting all of it credits a seat with a cell it never moved into, and for turn 0
   // that cell is the start square - which Tapoo does not treat as the player's at all: its traversal
-  // history labels the start "Self" on every reading, and its outcome record counts 17 unique cells where
-  // the walk touches 18. For later turns the slice changes nothing, cells[0] already being in the set
+  // history labels the start "Self" on every reading, and its outcome record counts 69 unique cells where
+  // the walk touches 70 - and states that 70 beside them, as allUniqueCellsVisited, so the two figures
+  // differ by exactly the square the seat was placed on. For later turns the slice changes nothing, cells[0] already being in the set
   // from the turn before, so this is precisely the start-square correction and it is what makes the count
   // reconcile with playerUniqueCellsVisited.
   for (const turn of turns) {
@@ -480,6 +494,7 @@ export function agentsFromRound(
     const roundTurns = outcome?.turnCount
     const uniqueCells = outcome?.playerUniqueCellsVisited
     const decayCharged = outcome?.decayUnitsCharged
+    const movesApplied = ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0)
     if (
       typeof roundTurns === "number" &&
       Number.isInteger(roundTurns) &&
@@ -488,15 +503,22 @@ export function agentsFromRound(
       typeof uniqueCells === "number" &&
       Number.isFinite(uniqueCells) &&
       typeof decayCharged === "number" &&
-      Number.isFinite(decayCharged)
+      Number.isFinite(decayCharged) &&
+      // And only where the turns can bear them. A seat cannot enter more new cells than it applied moves,
+      // nor take more turns than it was charged units - so totals breaking either are a log disagreeing
+      // with itself, and mixing them with the turns' own counts would answer a share above 1: a route
+      // efficiency of 2.5 is not a measurement, it is two accounts being added together.
+      //
+      // The seat then keeps what its turns settled, which is consistent by construction. Its product no
+      // longer reaches the stated speed, and the card says so with the approximation sign it already has
+      // for exactly this: a figure the log states, beside factors that do not multiply to it. What the
+      // disagreement itself is, roundTotalsCheck reports.
+      uniqueCells <= movesApplied &&
+      ownedTurns.length <= decayCharged
     ) {
       finisher.uniqueCells = uniqueCells
       finisher.decayCharged = decayCharged
-      finisher.settled = {
-        uniqueCells,
-        movesApplied: ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0),
-        turnsTaken: ownedTurns.length,
-      }
+      finisher.settled = {uniqueCells, movesApplied, turnsTaken: ownedTurns.length}
     }
   }
 

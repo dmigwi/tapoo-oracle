@@ -2,13 +2,13 @@ import {describe, expect, it} from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {LOG_EVENTS} from "./log-events"
-import {agentSeatLabel, agentSettingsCheck} from "./log-contract"
-import {agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
+import {agentSettingsCheck} from "./rubric-contract"
+import {agentSeatLabel, agentsFromRound, buildPlayedRound, gameIdentityKey, groupEntriesByRound, resolveActiveAgents} from "./rounds"
 import {decomposeTraversalSpeed} from "./geometry"
 import {buildContext} from "./rubric-context"
 import {buildReport} from "./rubric-report"
 import {at, levelOf as firstLevel, must, rubricTurn as turn, toolMessage} from "./test-support"
-import type {AgentSummary, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup} from "./types"
+import type {AgentSummary, CellKey, LogEntry, LogLevel, Move, PlayedRound, RawTurnSetup, TurnSummary} from "./types"
 
 const entry = (
   payload: string,
@@ -1328,5 +1328,27 @@ describe("the speed a seat was going when the round did not settle it", () => {
   // all - still reports nothing rather than a zero. Not recorded is a different answer from standing still.
   it("still reports nothing where no turn stated a speed", () => {
     expect(speedOf([...turnOf(0, "Kora the Trailblazer - Default")], "Kora")).toBeNull()
+  })
+})
+
+
+// The guard that keeps an impossible total out of the figures rather than only out of the report.
+describe("a round whose totals its own turns cannot bear", () => {
+  it("keeps the seat's own account, so no factor passes its ceiling", () => {
+    const turns: TurnSummary[] = [0, 1].map((n) => ({
+      turn: n, seatId: null, playerName: "Kora", before: `${n},0`, moves: ["MoveDown"] as Move[],
+      submittedCount: 1, applied: 1, cells: [`${n},0`, `${n + 1},0`] as CellKey[], rejectedMove: null,
+      traversalSpeed: null, decayCharged: 1,
+    }))
+    const [kora] = agentsFromRound(new Map(), turns, {
+      outcome: "won", agent: {playerName: "Kora"}, turnCount: 2, traversalSpeed: "2.5000",
+      // Five cells on two applied moves: the log contradicting itself.
+      playerUniqueCellsVisited: 5, decayUnitsCharged: 2,
+    })
+    const factors = must(decomposeTraversalSpeed(must(kora, "the round's only seat")), "the seat's factors")
+
+    expect(kora).toMatchObject({uniqueCells: 2, decayCharged: 2, settled: {uniqueCells: 2, movesApplied: 2, turnsTaken: 2}})
+    expect(factors.efficiency).toBeLessThanOrEqual(1)
+    expect(factors.accuracy).toBeLessThanOrEqual(1)
   })
 })
