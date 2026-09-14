@@ -143,7 +143,7 @@ describe("parseTapooLogText", () => {
   // The export's own proof that its entries are the ones Tapoo wrote. Computed the way the producer
   // computes it - fnv1a64 over the compact JSON of the entries array - so this asserts the two agree
   // about what is hashed, not merely that some checksum round-trips.
-  describe("the checksum an export states over its own entries", () => {
+  describe("the checksum a log file records for its entries", () => {
     const checkOf = (result: ReturnType<typeof parse>) =>
       must(expectOk(result).checks.find((check) => check.name === "Entries checksum"), "the checksum check")
 
@@ -152,14 +152,14 @@ describe("parseTapooLogText", () => {
       return {...shaped, entriesChecksum: fnv1a64Checksum(JSON.stringify(shaped.entries))}
     }
 
-    it("accepts a log whose entries hash to the value it states", () => {
+    it("accepts a log whose entries hash to the checksum recorded for them", () => {
       const result = parse(checksummed())
 
       expect(result.ok).toBe(true)
       expect(checkOf(result)).toMatchObject({
         scope: "log",
         outcome: "passed",
-        detail: `all 1 entries hash to ${fnv1a64Checksum(JSON.stringify([entry()]))}, the value the export states`,
+        detail: `all 1 log entries hash to ${fnv1a64Checksum(JSON.stringify([entry()]))}, the checksum recorded for them`,
       })
     })
 
@@ -172,10 +172,11 @@ describe("parseTapooLogText", () => {
       const result = parse(edited)
 
       expect(result.ok).toBe(false)
-      expect(expectErr(result).error).toMatch(/does not match its own entries checksum/)
-      // Both figures, because a reader comparing them can tell a tampered file from a stale checksum.
+      expect(expectErr(result).error).toMatch(/do not match the checksum recorded for them/)
+      // Both figures, because they are what a reader can act on - and because the message stops there: which
+      // half moved is not something two digests can say.
       expect(expectErr(result).error).toContain(shaped.entriesChecksum)
-      expect(expectErr(result).error).toContain("1 entries hash to")
+      expect(expectErr(result).error).toContain("1 log entries hash to")
     })
 
     // The producer hashes what it stored, stand-ins for records that failed to decode included. Hashing the
@@ -192,13 +193,13 @@ describe("parseTapooLogText", () => {
 
     // A checksum that was never written is not a checksum that failed: every log from before the producer
     // stamped one reads exactly as it did.
-    it("reads a log that states no checksum as it always did", () => {
+    it("reads a log that records no checksum as it always did", () => {
       const result = parse(envelope())
 
       expect(result.ok).toBe(true)
       expect(checkOf(result)).toMatchObject({
         outcome: "unchecked",
-        detail: "the export states no checksum of its entries, so they cannot be shown to be the ones downloaded",
+        detail: "the log file records no checksum for its entries",
       })
     })
   })

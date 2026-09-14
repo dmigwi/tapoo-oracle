@@ -56,8 +56,8 @@ const SHAPES = {
     },
     outcomeAgent: {seatId: 1, playerName: "Katara", model: "gemma4:cloud"},
   },
-  // The shape that added the storage schema the entries were written under, and the export's own checksum
-  // over them. Same round, same requests: what changed is what the file says about itself.
+  // The shape that added the storage schema the entries were written under, and the checksum the file
+  // records for them. Same round, same requests: what changed is what the file says about itself.
   "2.6.2": {
     envelope: {
       platform: "http://0.0.0.0:5500/agents",
@@ -220,22 +220,22 @@ describe("a round read out of every Tapoo shape", () => {
   it("shows the storage schema a v2.6.2 export names, and not-recorded before it", () => {
     const shown = (version: Version) => provenanceRows(expectOk(sliceLogText(logOf(version), {label: version})).source)
 
-    expect(value(shown("2.6.2"), "Tapoo Storage version")).toBe("5")
-    expect(value(shown("2.6.1"), "Tapoo Storage version")).toBe("not recorded")
-    expect(value(shown("2.5.1"), "Tapoo Storage version")).toBe("not recorded")
+    expect(value(shown("2.6.2"), "Storage version")).toBe("5")
+    expect(value(shown("2.6.1"), "Storage version")).toBe("not recorded")
+    expect(value(shown("2.5.1"), "Storage version")).toBe("not recorded")
   })
 
-  // The checksum an export states over its own entries, which only v2.6.2 carries: it is verified at parse
+  // The checksum a log file records for its entries, which only v2.6.2 carries: it is verified at parse
   // time, so a log that reaches a report has passed it, and the check says which of the two happened -
   // proven whole, or nothing to prove it against.
-  it("verifies the entries checksum a v2.6.2 export states, and checks nothing before it", () => {
+  it("verifies the checksum a v2.6.2 export records for its entries, and checks nothing before it", () => {
     const checked = (version: Version) => {
       const parsed = expectOk(sliceLogText(logOf(version), {label: version}))
       return must(parsed.checks.find((check) => check.name === "Entries checksum"), "the checksum check")
     }
 
     expect(checked("2.6.2")).toMatchObject({scope: "log", outcome: "passed"})
-    expect(checked("2.6.2").detail).toMatch(/^all 6 entries hash to 0x[0-9a-f]{16}, the value the export states$/)
+    expect(checked("2.6.2").detail).toMatch(/^all 6 log entries hash to 0x[0-9a-f]{16}, the checksum recorded for them$/)
     expect(checked("2.6.1").outcome).toBe("unchecked")
     expect(checked("2.5.1").outcome).toBe("unchecked")
   })
@@ -249,6 +249,6 @@ describe("a round read out of every Tapoo shape", () => {
     const result = sliceLogText(edited, {label: "edited"})
 
     expect(result.ok).toBe(false)
-    expect(result.ok ? "" : result.error).toMatch(/does not match its own entries checksum/)
+    expect(result.ok ? "" : result.error).toMatch(/do not match the checksum recorded for them/)
   })
 })

@@ -307,12 +307,12 @@ describe("presentation", () => {
 
   it("describes provenance without inventing missing fields", () => {
     const rows = provenanceRows(fixtureSource)
-    expect(must(rows.find((row) => row.field === "Tapoo App version"), "a matching row").value).toBe("2.6.1")
+    expect(must(rows.find((row) => row.field === "App version"), "a matching row").value).toBe("2.6.1")
 
     const withoutVersion = sliceLogText(JSON.stringify({ ...fixture, version: undefined }))
     const withoutVersionOk = expectOk(withoutVersion)
     const missing = provenanceRows(withoutVersionOk.source)
-    expect(must(missing.find((row) => row.field === "Tapoo App version"), "a matching row").value).toBe("not recorded")
+    expect(must(missing.find((row) => row.field === "App version"), "a matching row").value).toBe("not recorded")
   })
 
   it("shows device and platform provenance exactly as logged", () => {
@@ -561,8 +561,8 @@ describe("provenance names the setup a verdict depends on", () => {
     const fields = provenanceRows(result.source).map((row) => row.field)
 
     expect(fields).toEqual([
-      "Tapoo App version",
-      "Tapoo Storage version",
+      "App version",
+      "Storage version",
       "Platform",
       "Device",
       "Downloaded at",

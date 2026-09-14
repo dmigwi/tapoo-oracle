@@ -487,7 +487,7 @@ describe("payload validation", () => {
     expect(names).toEqual([
       "Log entry fields*",
       "Model responses*",
-      // The third check that covers the whole file: the entries are the ones downloaded.
+      // The third check that covers the whole file: the entries against the checksum recorded for them.
       "Entries checksum*",
       "Encoded maze",
       "Traversal payloads",
@@ -513,8 +513,10 @@ describe("payload validation", () => {
     expect(headers).toContain("VALUE")
     expect(headers).toContain("CHECK")
     expect(headers).toContain("RESULT")
-    // Eight provenance fields, each on its own row rather than each in its own column.
-    expect(headers).not.toContain("Tapoo version")
+    // Seven provenance fields, each on its own row rather than each in its own column - a field appearing
+    // as a header is the shape this guards against, so it watches a name provenance actually renders.
+    expect(headers).not.toContain("App version")
+    expect(headers).not.toContain("Storage version")
   })
 })
 

@@ -42,10 +42,10 @@ because a log is whatever the Tapoo that wrote it produced - exports from before
 exactly as they always were. A `mode` other than `agent-api` is analyzed too, with a warning that the
 rubric describes no other kind of round.
 
-`entriesChecksum` is the exception that can refuse a load: where an export states one, the entries are
-hashed and the load fails if they disagree. It is the export's own proof that its entries are the ones
-Tapoo wrote, not a signature - the algorithm is public and keyless, so it catches an accidental save or a
-hand edit rather than a deliberate rewrite.
+`entriesChecksum` is the exception that can refuse a load: where a log file records one, its entries are
+hashed and the load fails if the two disagree. It is a check, not a signature - the algorithm is public and
+keyless, so it catches an accidental save or a hand edit rather than a deliberate rewrite. A file that
+records none is read as it always was; nothing follows from the absence.
 
 Input that is not a Tapoo export is rejected. The analyzer does not guess at unknown field names.
 
