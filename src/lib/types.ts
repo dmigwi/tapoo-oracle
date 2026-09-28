@@ -239,6 +239,24 @@ export type MazeStats = {
   successPathCells: number | null;
 };
 
+/** Every cell's way to the destination, from one walk outward from it.
+ *
+ * `distances` is moves, not cells, matching successPathLength: the destination is 0 and each step out
+ * adds one. A cell absent from it is a cell no route reaches, which on an intact maze cannot happen -
+ * the structure is a spanning tree and the acyclicity proof in mazeFromEncoded says so.
+ *
+ * `next` is the cell to step to from here, so a route is read by following it. That is what makes the
+ * single walk enough for every cell: on a tree the first arrival is the only arrival, so the cell that
+ * discovered this one is the one step nearer the destination, and no later path can beat it.
+ *
+ * A route distance is not a Manhattan distance and not a count of unvisited cells: it includes the
+ * retrace out of whatever dead end the seat is standing in, which is the whole reason it is measured
+ * rather than estimated. */
+export type MazeRoutes = {
+  distances: Map<CellKey, number>;
+  next: Map<CellKey, CellKey>;
+};
+
 /** The maze as the log carries it. `structure_checksum` is Tapoo's own hash of `structure`, and it is
  * the only way to tell a maze that arrived intact from one truncated in transit. */
 export type EncodedMaze = {
@@ -248,8 +266,11 @@ export type EncodedMaze = {
   dimensions?: {numRows?: number; numCols?: number; area?: number};
 };
 
-/** A decoded maze with its grid and stats, or why decoding failed. */
-export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats}>;
+/** A decoded maze with its grid, stats and routes, or why decoding failed.
+ *
+ * `routes` is null where the round stated no destination - there is nowhere to measure a distance to,
+ * and a distance to nowhere is not a distance of 0. */
+export type MazeResult = Result<{maze: Maze; grid: string[][]; stats: MazeStats; routes: MazeRoutes | null}>;
 
 /** What reading one round's payloads turns up: its maze, and the caveats about that round.
  *
@@ -725,6 +746,9 @@ export type ReplayModel = {
   maze: Maze | null;
   error: string | null;
   stats: MazeStats | null;
+  /** Every cell's way to the destination, from the walk mazeFromEncoded already did. Null where the
+   * round stated no destination, or where the maze did not decode. */
+  routes: MazeRoutes | null;
   startCell: CellKey | null;
   destinationCell: CellKey | null;
   endCell: CellKey | null;

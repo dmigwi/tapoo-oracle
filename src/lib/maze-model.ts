@@ -40,6 +40,7 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
     maze: built.ok ? built.maze : null,
     error: built.ok ? null : built.error,
     stats: built.ok ? built.stats : null,
+    routes: built.ok ? built.routes : null,
     startCell: round.startCell,
     destinationCell: destination,
     endCell: round.endCell,
@@ -240,7 +241,7 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
 
   const stats = levelModel.stats;
   const outcome = levelModel.outcome ?? {};
-  const pathCoverage = Math.round((stats.successPathCells! / stats.cells) * 100);
+  const routeCells = stats.successPathCells;
 
   // The turn count on its own says how many attempts there were and nothing about what they cost. The
   // breakdown says both, and it is the same partition the strip under the scrubber draws - so a reader
@@ -261,7 +262,15 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
       value:
         parts.length > 1 ? `${formatCount(levelModel.turns.length)} (${parts.join(" + ")})` : formatCount(levelModel.turns.length),
     },
-    {field: "Success path", value: `${formatCount(stats.successPathCells!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
+    // Null, not zero, where the round stated no destination: the route was never computed, and "0 of 70
+    // (0%)" reads as a measured route of no length.
+    {
+      field: "Success path",
+      value:
+        routeCells === null
+          ? "not recorded"
+          : `${formatCount(routeCells)} of ${formatCount(stats.cells)} (${Math.round((routeCells / stats.cells) * 100)}%)`,
+    },
     // How much of its own history the agent could see, which bounds what any verdict about its choices
     // can fairly claim: a move that looks careless at radius 2 may have been the best available to
     // something that could not see the cell it had already exhausted.

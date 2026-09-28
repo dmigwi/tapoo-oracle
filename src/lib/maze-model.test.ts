@@ -283,6 +283,14 @@ describe("mazeLevelRows", () => {
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
   })
 
+  // A route that was never computed is not a route of no length. The row read "0 of 24 (0%)" for a round
+  // that stated no destination - a measured-looking zero, from a null the formatter turned into one.
+  it("says nothing about a route where the round stated no destination", () => {
+    const rows = mazeLevelRows(must(mazeReplayModel({...level(), destinationCell: null}), "a model"))
+
+    expect(value(rows, "Success path")).toBe("not recorded")
+  })
+
   // What the agent could see of its own history bounds what any verdict about its choices can fairly
   // claim, so it sits with the round's facts rather than with the maze's fixed shape.
   it("states how far the agent could see its own history", () => {
