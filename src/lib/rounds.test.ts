@@ -592,6 +592,16 @@ describe("agentsFromRound", () => {
     ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
       echoBackReasoning: null, requestIntervalSeconds: null, ...over})
 
+  // What a seat played, over every turn it played - the survival ledger's population, which is not the
+  // speed decomposition's. A turn that settled no applied count is still a turn the seat was charged for,
+  // so it counts as one, contributes no moves, and says so rather than disappearing into the total.
+  it("counts a turn whose applied count nothing settled, and says the total is a floor", () => {
+    const unsettled = {...seat("Kora", 1, ["1,0", "2,0"], 1), applied: null}
+    const [only] = agentsFromRound(new Map(), [seat("Kora", 0, ["0,0", "1,0"], 1), unsettled], null)
+
+    expect(only?.played).toEqual({turnsTaken: 2, movesApplied: 1, movesUnreported: 1})
+  })
+
   // The path every log takes once the upstream fix lands: the turn states its own seat and model, and
   // nothing has to be recovered from a decorated label.
   it("reads a turn that states its own seat and model", () => {
@@ -843,7 +853,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
         echoBackReasoning: [], requestIntervalSeconds: [],
         // Its own turn's charge and cell, not the round's total: the figures the replay panels read.
         // One turn each, one move landing on it, and a charge on the first: the decomposition's counts.
-        cellsEntered: 1, uniqueCells: 1, decayCharged: 3, traversalSpeed: 1, settled: {uniqueCells: 1, movesApplied: 1, turnsTaken: 1},
+        cellsEntered: 1, played: {turnsTaken: 1, movesApplied: 1, movesUnreported: 0}, uniqueCells: 1, decayCharged: 3, traversalSpeed: 1, settled: {uniqueCells: 1, movesApplied: 1, turnsTaken: 1},
       },
       {
         name: "Bumi", seatId: 2, models: ["moonshotai/Kimi-K3:baseten"], apis: ["huggingface"],
@@ -856,7 +866,9 @@ describe("agentsFromRound, on a log that states its own seats", () => {
         // And nothing settled, for the same reason: the decomposition counts only turns that stated both an
         // applied count and a charge, so a turn missing the charge is out of all three counts rather than
         // out of one - which is what keeps accuracy at or below 1.
-        cellsEntered: 1, uniqueCells: 1, decayCharged: null, traversalSpeed: 0.9591, settled: null,
+        // A move landed on this seat's one turn, so it is counted - the round-wide total asks only
+        // whether the move landed, where `settled` also needs the turn's charge, which this one lacks.
+        cellsEntered: 1, played: {turnsTaken: 1, movesApplied: 1, movesUnreported: 0}, uniqueCells: 1, decayCharged: null, traversalSpeed: 0.9591, settled: null,
       },
     ])
   })

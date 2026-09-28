@@ -306,6 +306,7 @@ export function agentsFromRound(
       decayCharged: null,
       traversalSpeed: null,
       cellsEntered: null,
+      played: null,
       settled: null,
     }
     seats.push(seat)
@@ -397,6 +398,16 @@ export function agentsFromRound(
     }
 
     if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged
+
+    // Every turn the seat played and every move that landed on one, whatever else the turn reported. A
+    // turn whose applied count was never settled is counted as a turn and as no moves, and says so in
+    // movesUnreported - the alternative is a total that silently omits it.
+    const played = seat.played ?? {turnsTaken: 0, movesApplied: 0, movesUnreported: 0}
+    seat.played = {
+      turnsTaken: played.turnsTaken + 1,
+      movesApplied: played.movesApplied + (turn.applied ?? 0),
+      movesUnreported: played.movesUnreported + (turn.applied === null ? 1 : 0),
+    }
 
     // The decomposition's counts, over the turns that settled both halves of what they need: an applied
     // move count and a charge. A turn missing either is left out of all three rather than out of one -
@@ -494,7 +505,9 @@ export function agentsFromRound(
     const roundTurns = outcome?.turnCount
     const uniqueCells = outcome?.playerUniqueCellsVisited
     const decayCharged = outcome?.decayUnitsCharged
-    const movesApplied = ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0)
+    // The seat's own total, accumulated above rather than summed again here: two sums over the same turns
+    // can only ever differ by drifting, and the one the card prints would be the one nothing checked.
+    const movesApplied = finisher.played?.movesApplied ?? 0
     if (
       typeof roundTurns === "number" &&
       Number.isInteger(roundTurns) &&

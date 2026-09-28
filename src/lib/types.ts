@@ -567,6 +567,22 @@ export type AgentSummary = {
    * landed, and the gap between the two is the retracing - the thing route efficiency measures and the one
    * quantity neither the unique count nor the speed states on its own. */
   cellsEntered: number | null;
+  /** What this seat did over every turn it played. Null for a seat with no turns of its own.
+   *
+   * A second population beside `settled` below, and deliberately so. `settled` covers the turns that
+   * stated both an applied count and a charge, because the speed's three factors have to divide one
+   * population or a share comes out above 1. The survival ledger asks a different question - what the
+   * run spent, against what the maze costs - and there `turnsTaken` must be every turn the seat was
+   * charged for, not the turns that happened to report cleanly.
+   *
+   * `movesApplied` includes the winning turn, whose outcome the log never reports: a turn's outcome
+   * reaches the log through the next turn's tool calls, and a turn that wins has no next turn.
+   * buildPlayedRound recovers it by replaying the submitted moves against the finishing cell, and
+   * without it a finished run is short by the whole batch that finished it.
+   *
+   * `movesUnreported` counts the turns whose applied count nothing settled. Where it is above zero,
+   * `movesApplied` is a floor and not a total, and a reader has to be told which of the two it is. */
+  played: {turnsTaken: number; movesApplied: number; movesUnreported: number} | null;
   /** Cells this seat entered, its decay charge, and its speed. Null where the round did not say. */
   uniqueCells: number | null;
   decayCharged: number | null;

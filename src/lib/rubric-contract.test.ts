@@ -216,7 +216,7 @@ describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
     reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
-    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
+    cellsEntered: null, played: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
   })
 
   it("passes a round whose seats each held one setup throughout", () => {

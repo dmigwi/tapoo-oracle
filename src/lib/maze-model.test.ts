@@ -409,6 +409,30 @@ describe("agentsFromRound", () => {
     expect(azula.cellsEntered).toBe(19)
   })
 
+  // What a finished run spent, over every turn it played, including the batch that finished it.
+  //
+  // The capture's won round reports its turns one at a time and then stops: a turn's outcome reaches the
+  // log through the next turn's tool calls, and the turn that wins has no next turn. Its three-move
+  // winning batch is recovered by replaying the submitted moves against the finishing cell, and without
+  // that the run is short by exactly the batch that made it a win.
+  //
+  // 69 rather than the 66 the outcome readings add up to, because one of them is stale: the reading
+  // covering turn 47 states no applied move and no charge, while the decay budget it reports falls from
+  // 23 to 22 and the player's cell moves from 6,6 to 6,7. The move happened; the record of it did not
+  // arrive. The parser reads that turn from its own prediction instead, which is what the trusted-record
+  // gate in buildPlayedRound is for.
+  it("counts every turn it played, and the winning batch the log never reports", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const round = must(firstRound(sliced).playedRound, "the fixture's first round")
+    const kora = must(round.agents[0], "the round's only seat")
+
+    expect(round.outcome?.turnCount).toBe(67)
+    expect(must(round.turns.at(-1), "the winning turn").applied).toBe(3)
+    expect(kora.played).toEqual({turnsTaken: 67, movesApplied: 69, movesUnreported: 0})
+    // Nothing went unreported, so the figure is a total rather than a floor.
+    expect(kora.played?.movesUnreported).toBe(0)
+  })
+
   // The identity, per seat, on the one round where every count is the real parser's: a speed is
   // uniqueCells/decayCharged, and that is the product of the three factors the card prints. Asserted
   // against Tapoo's own stated speed rather than against our ratio, so a parser that miscounted applied
