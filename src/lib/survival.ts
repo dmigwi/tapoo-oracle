@@ -155,3 +155,190 @@ export function survivalFlags({
       distanceToTarget !== null && batchDepth !== null && distanceToTarget > batchDepth * decayLeft,
   };
 }
+
+// --- The run, turn by turn ---
+
+/** What one turn did with the ground it stood on.
+ *
+ * The three no-progress classes are the reason this exists. Tapoo charges one unit for a turn that
+ * entered no new cell, whichever kind it was, so the budget cannot tell them apart - and one of them is
+ * what the prompt asks for at a confirmed dead end while another is a rubric violation. A rate that pools
+ * them reports a violation where there was compliance: one real run's 301 no-progress turns are 294
+ * oscillations and 7 retreats, and another's 59 are retreats and nothing else - it lost doing exactly
+ * what it was told to do.
+ *
+ * `unclassified` is a no-progress turn whose cells the log never graded. Named rather than folded into
+ * either side: a grade this module inferred would be a grade nothing could check. */
+export type TurnProgress = "advanced" | "still" | "retreat" | "oscillation" | "unclassified";
+
+/** One turn of a seat's run, with where it stood and what that meant. */
+export type SurvivalTurn = SurvivalFlags & {
+  turn: number;
+  /** Route cells this seat had still not entered once this turn ended - the monotone quantity. */
+  unvisitedRoute: number;
+  decayLeft: number | null;
+  /** Route distance from the cell it stood on. Diagnostic: a retreat cuts it, so it is never a verdict. */
+  distanceToTarget: number | null;
+  progress: TurnProgress;
+  /** The maze refused a move this turn could otherwise have made. */
+  wallContact: boolean;
+};
+
+/** A seat's whole run, and the first turn each finding held from. */
+export type SurvivalOutlook = {
+  routeCells: number;
+  visitedRouteCells: number;
+  series: SurvivalTurn[];
+  /** The first turn from which the destination was already out of reach, or null for a run that always
+   * had a way to finish. Monotone, so "from" is exact rather than "at some point". */
+  lostFrom: number | null;
+  behindObservedPaceFrom: number | null;
+  beyondDecayLeftFrom: number | null;
+  beyondOwnPaceFrom: number | null;
+  retreats: number;
+  oscillations: number;
+  unclassified: number;
+  wallContacts: number;
+};
+
+/** A turn as this module reads one: what it entered, what it was charged, and what it stood on after. */
+export type SurvivalInputTurn = {
+  turn: number;
+  /** The cells the turn walked, opening with the cell it started on - TurnSummary.cells. */
+  cells: readonly string[];
+  /** Moves that landed, and the moves the maze could read. Their difference is a refused move. */
+  applied: number | null;
+  applicable: number;
+  decayRemaining: number | null;
+};
+
+/** survivalSeries walks one seat's turns and reports where each left it.
+ *
+ * `route` is the ordered cells from the seat's start to the destination, `distances` every cell's moves
+ * from the destination, `statusesAt` the grades Tapoo put on cells as of a turn, and `batchDepth` the
+ * depth the seat averaged - the one figure here that describes the whole run rather than a turn.
+ *
+ * Null where there is no route to measure against: a round that stated no destination has no unvisited
+ * route to count, and a seat with no turns has nothing to say. Neither is a run that was doing fine. */
+export function survivalSeries({
+  turns,
+  route,
+  distances,
+  statusesAt,
+  batchDepth,
+}: {
+  turns: readonly SurvivalInputTurn[];
+  route: readonly string[] | null;
+  distances: ReadonlyMap<string, number>;
+  statusesAt: (turn: number) => ReadonlyMap<string, string> | undefined;
+  batchDepth: number | null;
+}): SurvivalOutlook | null {
+  if (!route || route.length === 0 || turns.length === 0) {
+    return null;
+  }
+
+  const routeCells = new Set(route);
+  // The cell a seat stands on before it moves is a cell it has entered - the same start-square reasoning
+  // agentsFromRound applies when it counts cells from `cells.slice(1)`.
+  const visited = new Set<string>();
+  const standing = turns[0]?.cells[0];
+  if (standing !== undefined) visited.add(standing);
+
+  const series: SurvivalTurn[] = [];
+  let cell = standing;
+  let retreats = 0;
+  let oscillations = 0;
+  let unclassified = 0;
+  let wallContacts = 0;
+
+  for (const turn of turns) {
+    const entered = turn.cells.slice(1);
+    const statuses = statusesAt(turn.turn);
+    const newCells = entered.filter((one) => !visited.has(one));
+    for (const one of entered) visited.add(one);
+    if (entered.length > 0) cell = entered.at(-1);
+
+    const progress = progressOf(entered, newCells, statuses);
+    if (progress === "retreat") retreats += 1;
+    if (progress === "oscillation") oscillations += 1;
+    if (progress === "unclassified") unclassified += 1;
+
+    // A move the maze refused, which is not the same finding as a command it could not read: an
+    // unreadable command is the model spelling a move wrong, and the rubric already reports that against
+    // the prediction. This is the wall - the turn had a move it could have made and the maze said no.
+    const wallContact = turn.applied !== null && turn.applied < turn.applicable;
+    if (wallContact) wallContacts += 1;
+
+    const unvisitedRoute = countUnvisited(routeCells, visited);
+    series.push({
+      turn: turn.turn,
+      unvisitedRoute,
+      decayLeft: turn.decayRemaining,
+      distanceToTarget: cell === undefined ? null : distances.get(cell) ?? null,
+      progress,
+      wallContact,
+      ...survivalFlags({
+        unvisitedRoute,
+        decayLeft: turn.decayRemaining,
+        distanceToTarget: cell === undefined ? null : distances.get(cell) ?? null,
+        batchDepth,
+      }),
+    });
+  }
+
+  const from = (flag: keyof SurvivalFlags): number | null =>
+    series.find((one) => one[flag])?.turn ?? null;
+
+  return {
+    routeCells: route.length,
+    visitedRouteCells: route.length - countUnvisited(routeCells, visited),
+    series,
+    lostFrom: from("lost"),
+    behindObservedPaceFrom: from("behindObservedPace"),
+    beyondDecayLeftFrom: from("beyondDecayLeft"),
+    beyondOwnPaceFrom: from("beyondOwnPace"),
+    retreats,
+    oscillations,
+    unclassified,
+    wallContacts,
+  };
+}
+
+// countUnvisited counts the route cells a seat has still to enter.
+const countUnvisited = (route: ReadonlySet<string>, visited: ReadonlySet<string>): number => {
+  let count = 0;
+  for (const cell of route) {
+    if (!visited.has(cell)) count += 1;
+  }
+  return count;
+};
+
+// progressOf grades what a turn did with the cells it entered.
+//
+// The grade belongs to the cell the turn *entered*, which is how visitStatusAfterTurn is built - Tapoo
+// states a status per open move, and the status describes where that move leads. Reading the cell a turn
+// left would grade the ground behind it.
+function progressOf(
+  entered: readonly string[],
+  newCells: readonly string[],
+  statuses: ReadonlyMap<string, string> | undefined,
+): TurnProgress {
+  if (entered.length === 0) {
+    return "still";
+  }
+  if (newCells.length > 0) {
+    return "advanced";
+  }
+
+  const graded = entered.map((cell) => statuses?.get(cell));
+  if (graded.some((status) => status === "oscillating")) {
+    return "oscillation";
+  }
+  // Every cell graded, and every grade one a retreat leaves behind it. A turn with an ungraded cell says
+  // so rather than joining whichever side happens to be reported next to it.
+  if (graded.every((status) => status === "backtracking" || status === "explored")) {
+    return "retreat";
+  }
+
+  return "unclassified";
+}

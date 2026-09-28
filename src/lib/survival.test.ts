@@ -5,7 +5,10 @@ import {
   NEW_CELLS_PER_TURN_CAP,
   decayLedger,
   survivalFlags,
+  survivalSeries,
 } from "./survival"
+import type {SurvivalInputTurn} from "./survival"
+import {must} from "./test-support"
 
 // The capture's won round, which is the one set of figures every part of this is pinned against: a
 // 70-cell maze, 67 turns, 67 units charged, 69 moves landed.
@@ -138,5 +141,120 @@ describe("survivalFlags", () => {
       decayLeft -= 1
       expect(survivalFlags({unvisitedRoute, decayLeft, distanceToTarget: null, batchDepth: null}).lost).toBe(true)
     }
+  })
+})
+
+describe("survivalSeries", () => {
+  // A corridor of six cells, the seat starting at one end and the destination at the other.
+  const ROUTE = ["0,0", "0,1", "0,2", "0,3", "0,4", "0,5"]
+  const DISTANCES = new Map(ROUTE.map((cell, index) => [cell, ROUTE.length - 1 - index]))
+  const turn = (over: Partial<SurvivalInputTurn> & {turn: number}): SurvivalInputTurn =>
+    ({cells: [], applied: 1, applicable: 1, decayRemaining: null, ...over})
+
+  const seriesOf = (
+    turns: SurvivalInputTurn[],
+    over: {statuses?: Map<number, Map<string, string>>; batchDepth?: number | null} = {},
+  ) =>
+    survivalSeries({
+      turns,
+      route: ROUTE,
+      distances: DISTANCES,
+      statusesAt: (at) => over.statuses?.get(at),
+      batchDepth: over.batchDepth ?? null,
+    })
+
+  it("counts down the route cells the seat has still to enter", () => {
+    const outlook = must(seriesOf([
+      turn({turn: 0, cells: ["0,0", "0,1"]}),
+      turn({turn: 1, cells: ["0,1", "0,2"]}),
+    ]), "an outlook")
+
+    expect(outlook.routeCells).toBe(6)
+    // The cell it started on counts as entered: it is standing there.
+    expect(outlook.series.map((one) => one.unvisitedRoute)).toEqual([4, 3])
+    expect(outlook.visitedRouteCells).toBe(3)
+  })
+
+  it("measures the distance from the cell each turn left it standing on", () => {
+    const outlook = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1", "0,2"], applied: 2, applicable: 2})]), "an outlook")
+
+    expect(outlook.series[0]?.distanceToTarget).toBe(3)
+  })
+
+  // The split the budget cannot make. Both turns below cost one unit and enter no new cell; one is the
+  // retreat the prompt asks for at a dead end, the other is the oscillation the rubric counts against a
+  // run. A report that pooled them would call these two runs the same.
+  it("splits a retreat from an oscillation, on turns charged the same", () => {
+    const statuses = new Map([
+      [1, new Map([["0,0", "backtracking"]])],
+      [2, new Map([["0,1", "oscillating"]])],
+    ])
+    const outlook = must(seriesOf([
+      // Out to a cell it had not entered, then back over its own ground twice - the same one unit each.
+      turn({turn: 0, cells: ["0,0", "0,1"], decayRemaining: 6}),
+      turn({turn: 1, cells: ["0,1", "0,0"], decayRemaining: 5}),
+      turn({turn: 2, cells: ["0,0", "0,1"], decayRemaining: 4}),
+    ], {statuses}), "an outlook")
+
+    expect(outlook.series.map((one) => one.progress)).toEqual(["advanced", "retreat", "oscillation"])
+    expect(outlook.retreats).toBe(1)
+    expect(outlook.oscillations).toBe(1)
+  })
+
+  it("grades a turn that entered a cell it had not as advanced, whatever the cells read", () => {
+    const statuses = new Map([[0, new Map([["0,1", "oscillating"]])]])
+    const outlook = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1"]})], {statuses}), "an outlook")
+
+    expect(outlook.series[0]?.progress).toBe("advanced")
+  })
+
+  it("says a turn moved nowhere rather than grading ground it never entered", () => {
+    const outlook = must(seriesOf([turn({turn: 0, cells: [], applied: 0})]), "an outlook")
+
+    expect(outlook.series[0]?.progress).toBe("still")
+  })
+
+  // A grade this module invented would be a grade nothing could check, so an ungraded cell is named as
+  // what it is. The capture has turns like this: a round records no traversal history for a turn that
+  // failed before the tools answered.
+  it("leaves a no-progress turn unclassified where the log graded nothing", () => {
+    const outlook = must(seriesOf([
+      turn({turn: 0, cells: ["0,0", "0,1"]}),
+      turn({turn: 1, cells: ["0,1", "0,0"]}),
+    ]), "an outlook")
+
+    expect(outlook.series.map((one) => one.progress)).toEqual(["advanced", "unclassified"])
+    expect(outlook.unclassified).toBe(1)
+    expect(outlook.retreats).toBe(0)
+  })
+
+  // Wall contact is a move the maze refused, not a command it could not read. The second is the model
+  // spelling a move wrong, which the rubric already reports against the prediction.
+  it("reads a refused move off what the turn could have applied", () => {
+    const outlook = must(seriesOf([
+      turn({turn: 0, cells: ["0,0", "0,1"], applied: 1, applicable: 2}),
+      turn({turn: 1, cells: ["0,1", "0,2"], applied: 1, applicable: 1}),
+    ]), "an outlook")
+
+    expect(outlook.series.map((one) => one.wallContact)).toEqual([true, false])
+    expect(outlook.wallContacts).toBe(1)
+  })
+
+  // The verdict, and the turn it held from. Monotone, so the first turn it fired on is the answer rather
+  // than "at some point": with one route cell left unentered and no budget, the run cannot finish.
+  it("names the first turn from which the run could not finish", () => {
+    const outlook = must(seriesOf([
+      turn({turn: 0, cells: ["0,0", "0,1"], decayRemaining: 4}),
+      turn({turn: 1, cells: ["0,1", "0,0"], decayRemaining: 0}),
+      turn({turn: 2, cells: ["0,0", "0,1"], decayRemaining: 0}),
+    ]), "an outlook")
+
+    expect(outlook.lostFrom).toBe(1)
+    expect(outlook.series.map((one) => one.lost)).toEqual([false, true, true])
+  })
+
+  it("has nothing to say about a round that stated no destination", () => {
+    expect(survivalSeries({turns: [turn({turn: 0})], route: null, distances: DISTANCES, statusesAt: () => undefined, batchDepth: null})).toBeNull()
+    expect(seriesOf([])).toBeNull()
   })
 })
