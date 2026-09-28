@@ -7,9 +7,11 @@
 //
 // Pure and document-free, which is why it is tested in node while the view beside it needs jsdom.
 
-import { mazeFromEncoded } from "./maze"
+import { mazeFromEncoded, routeFrom } from "./maze"
+import { decayLedger, survivalSeries } from "./survival"
 import { clamp, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, SummaryRow, TurnSummary, VisitStatus } from "./types"
+import type { DecayLedger, SurvivalOutlook } from "./survival"
 
 // --- Entry point: what maze-view calls ---
 
@@ -51,6 +53,64 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
     outcome: round.outcome,
     agents: round.agents
   };
+}
+
+/** routeCells reads the round's start-to-destination route, or null where there is none to read.
+ *
+ * From the walk mazeFromEncoded already did, so nothing here searches the maze a second time. Null where
+ * the round stated no destination, where the maze did not decode, or where the start is not on it. */
+export function routeCells(model: ReplayModel | null | undefined): CellKey[] | null {
+  if (!model?.routes) return null
+
+  return routeFrom(model.routes, model.startCell)
+}
+
+/** survivalOutlookFor reads one seat's run against that route: what it had still to enter, what budget it
+ * had left, and the first turn from which the destination was already out of reach.
+ *
+ * Per seat, because both halves are. The budget on a turn belongs to the seat that played it, and the
+ * cells still to enter are the ones *that* seat has not been to - a round where two seats share a maze
+ * has two different answers and one route.
+ *
+ * Null where there is no route, no seat at that index, or that seat took no turn. */
+export function survivalOutlookFor(
+  model: ReplayModel | null | undefined,
+  agentIndex: number,
+): SurvivalOutlook | null {
+  const route = routeCells(model)
+  const agent = model?.agents[agentIndex]
+  if (!model?.routes || !route || !agent) return null
+
+  const ledger = survivalLedgerFor(model, agentIndex)
+  return survivalSeries({
+    turns: model.turns
+      .filter((turn) => agentIndexOf(model.agents, turn) === agentIndex)
+      .map((turn) => ({
+        turn: turn.turn,
+        cells: turn.cells,
+        applied: turn.applied,
+        // What the maze could read of what the turn asked for. TurnSummary.moves is already narrowed to
+        // that prefix, so the difference from `applied` is the wall and nothing else.
+        applicable: turn.moves.length,
+        decayRemaining: turn.decayRemaining,
+      })),
+    route,
+    distances: model.routes.distances,
+    statusesAt: (turn) => model.visitStatusAfterTurn.get(turn),
+    batchDepth: ledger?.batchDepth ?? null,
+  })
+}
+
+/** survivalLedgerFor splits what one seat spent into the terms that caused it, or null where the round
+ * did not measure enough of it. The maze's cell count is the round's opening budget. */
+export function survivalLedgerFor(
+  model: ReplayModel | null | undefined,
+  agentIndex: number,
+): DecayLedger | null {
+  const agent = model?.agents[agentIndex]
+  if (!model?.stats || !agent) return null
+
+  return decayLedger({cells: model.stats.cells, decayCharged: agent.decayCharged, played: agent.played})
 }
 
 /** agentIndexOf resolves a turn to the seat that played it, as an index into `agents`, or -1 for a turn
@@ -241,7 +301,7 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
 
   const stats = levelModel.stats;
   const outcome = levelModel.outcome ?? {};
-  const routeCells = stats.successPathCells;
+  const routeLength = stats.successPathCells;
 
   // The turn count on its own says how many attempts there were and nothing about what they cost. The
   // breakdown says both, and it is the same partition the strip under the scrubber draws - so a reader
@@ -262,14 +322,31 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
       value:
         parts.length > 1 ? `${formatCount(levelModel.turns.length)} (${parts.join(" + ")})` : formatCount(levelModel.turns.length),
     },
+    // How much of the route the round actually covered, against the route's own length.
+    //
+    // Not cells entered over the maze's area, which is the figure this replaces: that one is bounded by
+    // how many dead ends a maze happens to have rather than by how close the round came to finishing, and
+    // on a branching maze the two disagree sharply - one real round reads 0.79 of the area and 0.99 of
+    // the route. They agree only on a corridor maze, where every cell is on the route anyway.
+    {
+      field: "Route coverage",
+      value: (() => {
+        const route = routeCells(levelModel)
+        if (!route) return "not recorded"
+
+        const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells))
+        const covered = route.filter((cell) => walked.has(cell)).length
+        return `${formatCount(covered)} of ${formatCount(route.length)} route cells (${Math.round((covered / route.length) * 100)}%)`
+      })(),
+    },
     // Null, not zero, where the round stated no destination: the route was never computed, and "0 of 70
     // (0%)" reads as a measured route of no length.
     {
       field: "Success path",
       value:
-        routeCells === null
+        routeLength === null
           ? "not recorded"
-          : `${formatCount(routeCells)} of ${formatCount(stats.cells)} (${Math.round((routeCells / stats.cells) * 100)}%)`,
+          : `${formatCount(routeLength)} of ${formatCount(stats.cells)} (${Math.round((routeLength / stats.cells) * 100)}%)`,
     },
     // How much of its own history the agent could see, which bounds what any verdict about its choices
     // can fairly claim: a move that looks careless at radius 2 may have been the best available to
