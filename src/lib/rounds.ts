@@ -634,6 +634,12 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       applied,
       cells,
       decayCharged: trusted && typeof record.chargedMovesCount === "number" ? record.chargedMovesCount : null,
+      // Ungated, where the charge beside it is not. What a record says about moves can belong to another
+      // attempt at the turn, which is what `trusted` guards against - but the budget it reports is the
+      // budget after the turn it is filed under, and the store files it by the turn it covers. The
+      // capture's turn 47 is the case that separates them: its record names no moves and no charge, and
+      // still reports the one unit that left the budget.
+      decayRemaining: typeof record?.decayUnitsRemaining === "number" ? record.decayUnitsRemaining : null,
       // The move that was refused, when one was: the first move past those that landed. This is the
       // wall the agent walked into, and it is the single most useful thing to draw on the grid.
       rejectedMove: typeof applied === "number" && applied < prediction.moves.length
@@ -672,6 +678,7 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
+      decayRemaining: typeof replay.decayUnitsRemaining === "number" ? replay.decayUnitsRemaining : null,
     })
     predicted.add(turn)
   }
@@ -693,6 +700,7 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: null,
+      decayRemaining: null,
     })
   }
   turns.sort((left, right) => left.turn - right.turn)

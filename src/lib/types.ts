@@ -404,6 +404,13 @@ export type Replay = {
   lastSubmittedMoves?: unknown;
   lastAppliedMoveIndex?: number | null;
   chargedMovesCount?: number;
+  /** Decay units the player had left once this turn was charged - Tapoo's own running budget.
+   *
+   * Read rather than derived. A budget worked out here as the maze's cell count less the charges seen so
+   * far would inherit every hole in those charges, and this log has one: the reading covering turn 47 of
+   * the vendored capture states a charge of 0 while this figure falls from 23 to 22. The log's own
+   * subtraction is the one that decided the round. */
+  decayUnitsRemaining?: number | null;
   /** Where replay began: where the player stood *before* those moves applied. Tapoo's own tool
    * description warns against substituting currentCell here, which is where replay ended - doing so
    * makes an applied move look like it never happened. */
@@ -463,6 +470,12 @@ export type TurnSummary = {
   /** Decay units this turn was charged, as Tapoo reported it. Null when no reading covers the turn and
    * it could not be resolved by subtraction - a cost we could not read, which is not a cost of zero. */
   decayCharged: number | null;
+  /** Decay units left once this turn was charged, as the reading filed under this turn reports them.
+   *
+   * Null where no reading covers the turn - the winning turn above all, which no later request exists to
+   * report. Null, not the last figure carried forward: a budget nothing measured is not a budget that
+   * stood still. */
+  decayRemaining: number | null;
 };
 
 /** What one round of the maze game did: the maze's structure, the path walked through it, its turns,

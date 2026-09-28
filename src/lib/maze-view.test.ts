@@ -21,8 +21,8 @@ const REAL_MAZE = {
 type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
   {
     turn: 2,
     seatId: null,
@@ -31,7 +31,7 @@ const TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null,
   },
 ]
 
@@ -873,7 +873,7 @@ describe("the per-seat metrics card", () => {
   // three moves to enter one new cell, which is what retracing looks like.
   it("approximates where the printed factors are rounded", () => {
     const base = level()
-    const turns = [{...must(base.turns[0], "the fixture's first turn"), applied: 3, decayCharged: 1}]
+    const turns = [{...must(base.turns[0], "the fixture's first turn"), applied: 3, decayCharged: 1, decayRemaining: null}]
     const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
 
     expect(card["Decomposed Traversal speed"]).toBe("1.0000x \u2248 (y0.3333 * b3.0000 * a1.0000)")
@@ -885,7 +885,7 @@ describe("the per-seat metrics card", () => {
     const base = chargedRound()
     // One cell per applied move and one charge per turn, so the product is 1.0000x - the figure the
     // fixture's outcome states.
-    const turns = base.turns.map((turn) => ({...turn, decayCharged: 1}))
+    const turns = base.turns.map((turn) => ({...turn, decayCharged: 1, decayRemaining: null}))
     const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
 
     expect(card["Decomposed Traversal speed"]).toBe("1.0000x = (y1.0000 * b1.0000 * a1.0000)")

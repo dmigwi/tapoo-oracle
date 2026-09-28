@@ -302,9 +302,9 @@ describe("reading a turn from the outcome Tapoo reported", () => {
     ))
     const turns = at(levels, 0).turns
 
-    expect(at(turns, 0)).toMatchObject({before: null, cells: [], decayCharged: null})
+    expect(at(turns, 0)).toMatchObject({before: null, cells: [], decayCharged: null, decayRemaining: null})
     expect(at(turns, 0).before).not.toBe("5,5")
-    expect(at(turns, 1)).toMatchObject({before: "5,5", applied: 1, cells: ["5,5", "6,5"], decayCharged: 2})
+    expect(at(turns, 1)).toMatchObject({before: "5,5", applied: 1, cells: ["5,5", "6,5"], decayCharged: 2, decayRemaining: null})
   })
 
   it("settles the closing turn's charge from the round total", () => {
@@ -377,7 +377,7 @@ describe("a turn that produced no prediction", () => {
   })
 
   it("carries the charge Tapoo levied for it", () => {
-    expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], submittedCount: 0, applied: 0, decayCharged: 3})
+    expect(at(roundWithEmptyTurn()[0]!.turns, 1)).toMatchObject({moves: [], submittedCount: 0, applied: 0, decayCharged: 3, decayRemaining: null})
   })
 
   it("keeps the final speed when a provider failure prevents a prediction", () => {
@@ -398,7 +398,7 @@ describe("a turn that produced no prediction", () => {
         traversalSpeed: 0.4545,
         moves: [],
         applied: 0,
-        decayCharged: null,
+        decayCharged: null, decayRemaining: null,
       }),
     ])
     expect(played.agents).toEqual([
@@ -586,7 +586,7 @@ describe("agentsFromRound", () => {
     name: string, turn: number, cells: string[], decay: number | null = null, seatId: number | null = null,
   ) => ({
     turn, seatId, playerName: name, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells, rejectedMove: null, traversalSpeed: null, decayCharged: decay,
+    cells, rejectedMove: null, traversalSpeed: null, decayCharged: decay, decayRemaining: null,
   })
   const setup = (over: Partial<RawTurnSetup> = {}): RawTurnSetup =>
     ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
@@ -975,7 +975,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
   it("counts each seat's cells against the seat, not against its name or number", () => {
     const played = (turn: number, seatId: number, cells: string[]) => ({
       turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null,
     })
 
     const stating = (seatId: number): RawTurnSetup => ({
@@ -1007,7 +1007,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     })
     const played = (turn: number, seatId: number, cells: string[]) => ({
       turn, seatId, playerName: null, before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null,
     })
 
     const seats = agentsFromRound(
@@ -1081,7 +1081,7 @@ describe("agentsFromRound, on a log that states its own seats", () => {
     })
     const played = (turn: number, seatId: number | null, cells: string[]) => ({
       turn, seatId, playerName: "Katara", before: cells[0] ?? null, moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null,
+      cells, rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null,
     })
 
     const seats = agentsFromRound(
@@ -1177,7 +1177,7 @@ describe("a replay reporting a command the maze cannot read", () => {
     ])
 
     const [only] = round.turns
-    expect(only).toMatchObject({before: "0,0", applied: 1, submittedCount: 2, decayCharged: 2})
+    expect(only).toMatchObject({before: "0,0", applied: 1, submittedCount: 2, decayCharged: 2, decayRemaining: null})
     expect(only?.moves).toEqual(["MoveDown"])
   })
 })
@@ -1350,7 +1350,7 @@ describe("a round whose totals its own turns cannot bear", () => {
     const turns: TurnSummary[] = [0, 1].map((n) => ({
       turn: n, seatId: null, playerName: "Kora", before: `${n},0`, moves: ["MoveDown"] as Move[],
       submittedCount: 1, applied: 1, cells: [`${n},0`, `${n + 1},0`] as CellKey[], rejectedMove: null,
-      traversalSpeed: null, decayCharged: 1,
+      traversalSpeed: null, decayCharged: 1, decayRemaining: null,
     }))
     const [kora] = agentsFromRound(new Map(), turns, {
       outcome: "won", agent: {playerName: "Kora"}, turnCount: 2, traversalSpeed: "2.5000",
