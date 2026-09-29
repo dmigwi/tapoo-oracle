@@ -1129,7 +1129,7 @@ const FACTOR_KEY: ReadonlyArray<readonly [string, string]> = [
 // The key to the survival table. Its rows say what a round spent; these say in what - and the identity on
 // the first line is what makes the three terms beside it worth adding up.
 const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
-  ["decay ledger", "slack + batched - error debt = headroom, in decay units. A round starts with one per cell"],
+  ["decay ledger", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
   ["error debt", "units charged beyond one per turn: what a round's mistakes cost it"],
   ["batched", "moves earned past one a turn: cells entered for no extra charge"],
   ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],

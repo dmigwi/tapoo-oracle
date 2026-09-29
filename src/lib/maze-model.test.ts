@@ -642,38 +642,25 @@ describe("agentsFromRound", () => {
       expect(roundPlayed(model)).toEqual({turnsTaken: 2, movesApplied: 2, movesUnreported: 0})
     })
 
-    // But not the budget. Tapoo states decayUnitsRemaining as what *the player* may spend, and a maze two
-    // players walk opens with two budgets - so a pooled `u` would be whichever of them reported last, and
-    // `b_min` would divide by one budget where the round had two. Every figure resting on that is refused,
-    // and the verdict with them: a round declared lost while a second seat still held the units to finish
-    // is the one error here that a reader would have no way to catch.
-    it("refuses the budget where two seats each had one of their own", () => {
+    // The budget with them. It is one pool for the round, capped at the maze's cell count, that every
+    // active agent spends from - no agent in a multi-agent round holds an allowance of its own - so the
+    // charges add and the units left are the round's however many seats drew on them.
+    it("reads one budget for the round, whichever seat drew on it", () => {
       const model = must(mazeReplayModel(level({turns: [
         turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"], decayRemaining: 4}),
-        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 1}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 3}),
       ]})), "a model")
 
-      expect(survivalLedgerFor(model)).toBeNull()
       const outlook = must(survivalOutlookFor(model), "the round's outlook")
-      expect(outlook.budgetTurns).toBe(0)
-      expect(outlook.lostFrom).toBeNull()
-      expect(survivalVerdict(outlook)).toBeNull()
-      expect(value(mazeSurvivalRows(model), "Point of no return")).toBe("not recorded")
-      expect(value(mazeSurvivalRows(model), "Pace warnings")).toBe("not recorded")
-      // What the round did on the ground is still the round's, and still counted.
+      expect(outlook.budgetTurns).toBe(2)
+      expect(outlook.series.map((one) => one.decayLeft)).toEqual([4, 3])
+      // Both seats' charges against the one budget: two turns, one unit each, so nothing paid for errors.
+      expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
+      // And the rule runs on the pooled series: 15 route cells still to enter with 3 units left is past
+      // four a unit, so the round was already beyond finishing by the turn the second seat played.
+      expect(outlook.lostFrom).toBe(1)
+      expect(survivalVerdict(outlook)?.lost).toBe(true)
       expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("3 of 18 route cells (17%)")
-    })
-
-    // One seat, and the same round reads its budget: the guard above is about a maze two players shared,
-    // not about the readings themselves.
-    it("reads the budget where one seat played the round", () => {
-      const model = must(mazeReplayModel(level({turns: [
-        turnOf({turn: 0, cells: ["0,0", "1,0"], decayRemaining: 4}),
-        turnOf({turn: 1, before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 3}),
-      ]})), "a model")
-
-      expect(must(survivalOutlookFor(model), "an outlook").budgetTurns).toBe(2)
-      expect(survivalLedgerFor(model)).not.toBeNull()
     })
 
     // A wall is a move the maze refused. A command it could not read is the model spelling a move wrong,

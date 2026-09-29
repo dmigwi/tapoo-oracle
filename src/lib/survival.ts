@@ -45,7 +45,8 @@ export type DecayLedger = {
  *
  * `cells` is the maze's cell count, which is also the round's opening budget; `decayCharged` is what the
  * round was charged over its turns; `played` is every turn taken and every move that landed. Both are the
- * round's, added across its seats, because the budget is the maze's and every seat draws on the one of it.
+ * round's, added across its seats, because the budget is one pool for the round and every active agent
+ * spends from it.
  *
  * Null rather than zeros wherever the account cannot be drawn: a round with no turns, no moves or no
  * charge has no ledger, and a zero would read as a measurement. Null too where the charge is below one

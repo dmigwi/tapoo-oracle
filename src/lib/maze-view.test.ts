@@ -1015,7 +1015,7 @@ describe("the survival table", () => {
   }
 
   it("prints the ledger as three terms and the headroom they sum to", () => {
-    expect(rowsOf(wonRound())["Decay ledger"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt \u2192 headroom +3")
+    expect(rowsOf(wonRound())["Decay ledger"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt = +3 headroom")
   })
 
   // The depth beside the counts it is a ratio of, and beside the depth the route still demanded - the
@@ -1033,7 +1033,7 @@ describe("the survival table", () => {
     expect(queryAll(node, ".maze-agent-table th").map((one) => one.textContent))
       .toEqual(["All cells", "Decay charged", "Decomposed Traversal speed", "Speed class"])
     expect(Object.keys(rowsOf(node)))
-      .toEqual(["Point of no return", "Route coverage", "Decay ledger", "Batch depth", "No progress", "Pace warnings"])
+      .toEqual(["Point of no return", "Route coverage", "Decay ledger", "Batch depth", "No-progress turns", "Pace warnings"])
   })
 
   it("says a run that finished was within reach throughout", () => {
@@ -1059,7 +1059,7 @@ describe("the survival table", () => {
     expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)
     expect(verdictOf(node).className).not.toContain("is-lost")
     // And the two moves the maze refused, which no status label reports as such.
-    expect(rowsOf(node)["No progress"]).toContain("2 refused a move")
+    expect(rowsOf(node)["No-progress turns"]).toContain("2 refused a move")
   })
 
   // The verdict the rule exists for, on a round built to cross the line: one route cell left and no

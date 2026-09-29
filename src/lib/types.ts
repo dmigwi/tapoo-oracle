@@ -404,7 +404,11 @@ export type Replay = {
   lastSubmittedMoves?: unknown;
   lastAppliedMoveIndex?: number | null;
   chargedMovesCount?: number;
-  /** Decay units the player had left once this turn was charged - Tapoo's own running budget.
+  /** Decay units the round had left once this turn was charged - Tapoo's own running budget.
+   *
+   * The round's, not the turn's player: one pool, opening at the maze's cell count, that every active agent
+   * spends from. A multi-agent round has no per-agent allowance to read, which is why the survival account
+   * pools the charges and the turns rather than splitting them by seat.
    *
    * Read rather than derived. A budget worked out here as the maze's cell count less the charges seen so
    * far would inherit every hole in those charges, and this log has one: the reading covering turn 47 of

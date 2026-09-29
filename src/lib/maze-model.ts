@@ -65,36 +65,20 @@ export function routeCells(model: ReplayModel | null | undefined): CellKey[] | n
   return routeFrom(model.routes, model.startCell)
 }
 
-/** sharesOneBudget reports whether the round's decay readings can be read as the maze's.
- *
- * They can where one seat played it, and only there. Tapoo's own tool description calls
- * decayUnitsRemaining "the maximum number of decay units *the player* can spend", and its round-end entry
- * states `playerUniqueCellsVisited` beside `allUniqueCellsVisited` - a maze several players walk gives each
- * of them their own budget and their own position. Pooled across two of those, `u` would be whichever
- * player reported last and `b_min` would divide by one budget where the round opened with two: a verdict
- * that could call a round lost while the other seat still had the units to finish it.
- *
- * Every round in the twelve captures on disk seated one player, so this guards a shape none of them takes.
- * It refuses rather than guesses, because the figure it would otherwise print is the one a reader would
- * trust most. */
-function sharesOneBudget(model: ReplayModel): boolean {
-  return model.agents.length <= 1
-}
-
 /** survivalOutlookFor reads the round's run against that route: what the maze had still to be entered,
  * what budget was left, and the first turn from which the destination was already out of reach.
  *
- * Per round, not per seat, because every term in it belongs to the maze. One decay budget is drawn down by
- * whoever moves, and a route cell a seat enters is entered for the round - the next seat inherits the
- * ground rather than starting again on it. Split per seat, the same maze would answer one question several
- * times and no answer would be about the maze.
+ * Per round, not per seat, because every term in it belongs to the maze. The decay budget is the round's -
+ * one pool, capped at the maze's cell count, that every active agent spends from - and a route cell a seat
+ * enters is entered for the round, so the next seat inherits the ground rather than starting again on it.
+ * Split per seat, the same maze would answer one question several times and no answer would be about the
+ * maze.
  *
  * Null where there is no route to measure against, or where the round played no turn. */
 export function survivalOutlookFor(model: ReplayModel | null | undefined): SurvivalOutlook | null {
   const route = routeCells(model)
   if (!model?.routes || !route) return null
 
-  const budgeted = sharesOneBudget(model)
   const ledger = survivalLedgerFor(model)
   return survivalSeries({
     turns: model.turns.map((turn) => ({
@@ -104,10 +88,7 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
       // What the maze could read of what the turn asked for. TurnSummary.moves is already narrowed to
       // that prefix, so the difference from `applied` is the wall and nothing else.
       applicable: turn.moves.length,
-      // Withheld where the round seated more than one player, because then it is one player's budget and
-      // not the round's. Every finding that reads it refuses on a null, which is the answer wanted here -
-      // the ground covered and the no-progress split are still the round's and still counted.
-      decayRemaining: budgeted ? turn.decayRemaining : null,
+      decayRemaining: turn.decayRemaining,
     })),
     route,
     distances: model.routes.distances,
@@ -120,12 +101,11 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
  * did not measure enough of it. The maze's cell count is the round's opening budget.
  *
  * The seats' charges and counts added together, for the same reason the outlook pools their turns: the
- * budget is the maze's, and a seat that spends half of it leaves the other half for the rest of the table.
- * Charges add the way agentsFromRound gathers them - the seats that stated one, and null where none did. */
+ * budget is one pool for the round, so a seat that spends half of it leaves the other half for the rest of
+ * the table. Charges add the way agentsFromRound gathers them - the seats that stated one, and null where
+ * none did. */
 export function survivalLedgerFor(model: ReplayModel | null | undefined): DecayLedger | null {
-  // No ledger for a round several players shared: `b_min` divides by the budget the round opened with, and
-  // a maze walked by two players opens with two of them. See sharesOneBudget.
-  if (!model?.stats || !sharesOneBudget(model)) return null
+  if (!model?.stats) return null
 
   let decayCharged: number | null = null
   for (const agent of model.agents) {
@@ -443,7 +423,7 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
 
         return (
           `${term(ledger.routeSlack)} slack \u00b7 ${term(ledger.batchCredit)} batched \u00b7 ` +
-          `${term(ledger.errorDebt)} error debt \u2192 headroom ${term(ledger.headroom)}`
+          `${term(ledger.errorDebt)} error debt = ${term(ledger.headroom)} headroom`
         )
       })(),
     },
@@ -458,8 +438,12 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both cost
     // one unit, so the budget cannot tell them apart - and one is what the prompt asks for at a confirmed
     // dead end while the other is a rubric violation.
+    //
+    // Turns rather than moves, because turns are what these count: a turn that applied four moves and
+    // entered no new cell is one of them, not four. The charge falls on the turn, so the unit the row is
+    // counted in has to be the unit it was paid in.
     {
-      field: "No progress",
+      field: "No-progress turns",
       value: (() => {
         if (!outlook) return "not recorded"
 
