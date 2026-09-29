@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 
-import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -250,25 +250,6 @@ describe("visit statuses across a scrub", () => {
   })
 })
 
-describe("mazeStructureRows", () => {
-  it("describes the static maze topology", () => {
-    const rows = mazeStructureRows(modelFor())
-
-    expect(value(rows, "Maze size")).toBe("4 x 6 (24 cells)")
-    expect(value(rows, "Edges")).toBe("23")
-    expect(value(rows, "Dead ends")).toBe("6")
-    expect(value(rows, "Corridors")).toBe("14")
-    expect(value(rows, "3-exit junctions (deg3)")).toBe("4")
-    expect(value(rows, "4-exit junctions (deg4)")).toBe("0")
-    expect(value(rows, "Acyclic graph proof")).toBe("Edges = Maze_size - 1 = 23")
-    expect(value(rows, "Handshaking lemma proof")).toBe("Dead ends = deg3 + 2·deg4 + 2 = 6")
-  })
-
-  it("is empty when there is no maze to describe", () => {
-    expect(mazeStructureRows(modelFor({ encodedMaze: null }))).toEqual([])
-  })
-})
-
 describe("mazeLevelRows", () => {
   it("describes the round-level facts that belong to the level as a whole", () => {
     const rows = mazeLevelRows(modelFor())
@@ -281,6 +262,39 @@ describe("mazeLevelRows", () => {
     // Agent-specific rows belong to the per-seat cards, not to this table.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
+  })
+
+  it("describes the static maze topology in the same list", () => {
+    const rows = mazeLevelRows(modelFor())
+
+    expect(value(rows, "Maze size")).toBe("4 x 6 (24 cells)")
+    expect(value(rows, "Edges")).toBe("23")
+    expect(value(rows, "Dead ends")).toBe("6")
+    expect(value(rows, "Corridors")).toBe("14")
+    expect(value(rows, "3-exit junctions (deg3)")).toBe("4")
+    expect(value(rows, "4-exit junctions (deg4)")).toBe("0")
+    expect(value(rows, "Acyclic graph proof")).toBe("Edges = Maze_size - 1 = 23")
+    expect(value(rows, "Handshaking lemma proof")).toBe("Dead ends = deg3 + 2·deg4 + 2 = 6")
+  })
+
+  // The order the rows read in, which is the point of merging the two lists: what the round did, then the
+  // ground it did it on, then the proofs that the ground was a valid maze. A success path is a fraction of
+  // the cell count directly above it, and neither figure has to be carried across a gap to check it.
+  it("lists what the round did, then the maze, then the proofs", () => {
+    expect(mazeLevelRows(modelFor()).map((row) => row.field)).toEqual([
+      "Outcome",
+      "Turns",
+      "Success path",
+      "History window",
+      "Maze size",
+      "Dead ends",
+      "Edges",
+      "Corridors",
+      "3-exit junctions (deg3)",
+      "4-exit junctions (deg4)",
+      "Acyclic graph proof",
+      "Handshaking lemma proof",
+    ])
   })
 
   // The outcome with the score the round ended on. The word alone says whether it finished and nothing

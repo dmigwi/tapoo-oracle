@@ -11,7 +11,7 @@
 
 import { cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { agentSeatLabel } from "./rounds"
-import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows, mazeSurvivalRows, survivalOutlookFor, survivalVerdict } from "./maze-model"
+import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeSurvivalRows, survivalOutlookFor, survivalVerdict } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, VisitStatus } from "./types"
 
@@ -302,15 +302,14 @@ export function createMazeReplay(round: PlayedRound | null): HTMLElement {
     movesBars = buildMovesBars(movesStrip, model);
     decayBars = buildDecayBars(decayStrip, model);
 
-    // The maze and the level in one table: what was built, then what was played on it. Two tables said the
-    // same thing in two places - the maze's shape is only interesting as the ground the round covered, and a
-    // reader checking 70 cells against a 70-cell success path had to read across a gap to do it.
+    // The round and the maze it was played on, in one table. Two tables said the same thing in two places -
+    // the maze's shape is only interesting as the ground the round covered, and a reader checking a 70-cell
+    // maze against a 70-cell success path had to read across a gap to do it.
     const levelPanel = summaryPanel(
       "Maze level",
       // The Turns row is the one cell that carries colour, so the view swaps in the rendered tally over
       // the model's plain-text form of the same numbers.
-      [...mazeStructureRows(model), ...mazeLevelRows(model)]
-        .map((row) => (row.field === "Turns" ? {...row, value: turnRow(model)} : row)),
+      mazeLevelRows(model).map((row) => (row.field === "Turns" ? {...row, value: turnRow(model)} : row)),
     );
     // The survival account, a panel of its own beside the other one. It is one reading of the round against
     // the maze's budget, where every row of the table beside it is a fact the log stated or the maze's own
@@ -1025,7 +1024,7 @@ function linkedLabel(text: string, href: string): HTMLElement {
   return a;
 }
 
-// MAZE_SUMMARY_LINKS maps the stable field keys returned by mazeStructureRows to linked labels, for the
+// MAZE_SUMMARY_LINKS maps the stable field keys returned by mazeLevelRows to linked labels, for the
 // rows whose names describe a mathematical concept worth linking to.
 const MAZE_SUMMARY_LINKS: Record<string, HTMLElement> = {
   "Acyclic graph proof": linkedLabel(

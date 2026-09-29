@@ -293,25 +293,6 @@ export function decayTally(turns: readonly TurnSummary[]): DecayTally {
   };
 }
 
-/** mazeStructureRows describes the static shape of the maze — its topology and the two structural
- * proofs that confirm it is a valid perfect maze. These facts do not change as the round is played. */
-export function mazeStructureRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
-  if (!levelModel?.stats) return [];
-
-  const stats = levelModel.stats;
-
-  return [
-    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Dead ends", value: formatCount(stats.deadEnds)},
-    {field: "Edges", value: formatCount(stats.edges)},
-    {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
-    {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
-    {field: "Acyclic graph proof", value: `Edges = Maze_size - 1 = ${formatCount(stats.cells - 1)}`},
-    {field: "Handshaking lemma proof", value: `Dead ends = deg3 + 2·deg4 + 2 = ${formatCount(stats.deg3 + 2 * stats.deg4 + 2)}`},
-  ];
-}
-
 // term writes a ledger figure with the sign it carries, because a ledger's terms are credits and debts and
 // "1 slack" reads as a quantity where "+1 slack" reads as the direction it pushed.
 function term(value: number): string {
@@ -477,9 +458,13 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
   ];
 }
 
-/** mazeLevelRows describes the round-level facts that belong to the level as a whole rather than to
- * any one agent: how it ended, how many turns it ran and what each was charged, the length of the
- * success route, and how far the agent could see its own history. */
+/** mazeLevelRows describes the level as a whole rather than any one agent: how the round ended and what it
+ * cost, then the maze it was played on and the two proofs that it was a valid perfect maze.
+ *
+ * One list rather than a structure half and a round half, because the reader's order is neither: the
+ * outcome is what a report is opened for, the success path is only meaningful beside the maze size it is a
+ * fraction of, and the proofs are the last thing anyone reads. Split across two functions, the rows could
+ * only be ordered within their half, and the two facts that belong side by side sat in different tables. */
 export function mazeLevelRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
@@ -537,5 +522,16 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
           ? "not recorded"
           : `${formatCount(levelModel.historyWindowRadius)} cells (Manhattan radius)`,
     },
+    // The maze itself, under the round that was played on it. It does not change as the round runs, which is
+    // why it sits below the rows that do - and directly under the success path, which is a fraction of the
+    // cell count on the first line of it.
+    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
+    {field: "Dead ends", value: formatCount(stats.deadEnds)},
+    {field: "Edges", value: formatCount(stats.edges)},
+    {field: "Corridors", value: formatCount(stats.corridors)},
+    {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
+    {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
+    {field: "Acyclic graph proof", value: `Edges = Maze_size - 1 = ${formatCount(stats.cells - 1)}`},
+    {field: "Handshaking lemma proof", value: `Dead ends = deg3 + 2·deg4 + 2 = ${formatCount(stats.deg3 + 2 * stats.deg4 + 2)}`},
   ];
 }
