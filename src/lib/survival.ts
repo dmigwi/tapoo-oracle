@@ -6,7 +6,7 @@
 // arithmetic of that account, and the rule for when a run could no longer finish.
 //
 // Its own module rather than geometry.ts, which holds the derivations a maze admits on its own: these
-// read a round - its turns, its seats, the grades Tapoo put on the cells they entered. And not
+// read a round - its turns, and the grades Tapoo put on the cells those turns entered. And not
 // rubric-contract.ts either, which answers whether a round can be compared at all. This answers what the
 // round did, in the unit the round was scored in.
 //
@@ -41,12 +41,13 @@ export type DecayLedger = {
   neededDepth: number;
 };
 
-/** decayLedger splits what a seat spent into the three terms that caused it.
+/** decayLedger splits what a round spent into the three terms that caused it.
  *
  * `cells` is the maze's cell count, which is also the round's opening budget; `decayCharged` is what the
- * seat was charged over the round; `played` is every turn it took and every move that landed.
+ * round was charged over its turns; `played` is every turn taken and every move that landed. Both are the
+ * round's, added across its seats, because the budget is the maze's and every seat draws on the one of it.
  *
- * Null rather than zeros wherever the account cannot be drawn: a seat with no turns, no moves or no
+ * Null rather than zeros wherever the account cannot be drawn: a round with no turns, no moves or no
  * charge has no ledger, and a zero would read as a measurement. Null too where the charge is below one
  * per turn, which is a log disagreeing with itself rather than a run that found a discount -
  * roundTotalsCheck is where that is reported. */
@@ -118,7 +119,7 @@ export type SurvivalFlags = {
 
 /** survivalFlags reads one turn's position against the budget it has left.
  *
- * `unvisitedRoute` is the route cells the seat has still not entered; `decayLeft` is the units it has
+ * `unvisitedRoute` is the route cells the round has still not entered; `decayLeft` is the units it has
  * left to spend; `distanceToTarget` is how far along the route it stands; `batchDepth` is the depth it
  * has been averaging.
  *
@@ -171,10 +172,10 @@ export function survivalFlags({
  * either side: a grade this module inferred would be a grade nothing could check. */
 export type TurnProgress = "advanced" | "still" | "retreat" | "oscillation" | "unclassified";
 
-/** One turn of a seat's run, with where it stood and what that meant. */
+/** One turn of a round's run, with where it stood and what that meant. */
 export type SurvivalTurn = SurvivalFlags & {
   turn: number;
-  /** Route cells this seat had still not entered once this turn ended - the monotone quantity. */
+  /** Route cells nobody had entered once this turn ended - the monotone quantity. */
   unvisitedRoute: number;
   decayLeft: number | null;
   /** Route distance from the cell it stood on. Diagnostic: a retreat cuts it, so it is never a verdict. */
@@ -184,7 +185,7 @@ export type SurvivalTurn = SurvivalFlags & {
   wallContact: boolean;
 };
 
-/** A seat's whole run, and the first turn each finding held from. */
+/** A round's whole run, and the first turn each finding held from. */
 export type SurvivalOutlook = {
   routeCells: number;
   visitedRouteCells: number;
@@ -212,14 +213,18 @@ export type SurvivalInputTurn = {
   decayRemaining: number | null;
 };
 
-/** survivalSeries walks one seat's turns and reports where each left it.
+/** survivalSeries walks a round's turns in order and reports where each left it.
  *
- * `route` is the ordered cells from the seat's start to the destination, `distances` every cell's moves
+ * `route` is the ordered cells from the round's start to the destination, `distances` every cell's moves
  * from the destination, `statusesAt` the grades Tapoo put on cells as of a turn, and `batchDepth` the
- * depth the seat averaged - the one figure here that describes the whole run rather than a turn.
+ * depth the round averaged - the one figure here that describes the whole run rather than a turn.
+ *
+ * Every turn of the round, whoever played it: one budget is drawn down by whoever moves, and a route cell
+ * entered by one seat is entered for the round, so a second seat continues the walk rather than starting
+ * one of its own.
  *
  * Null where there is no route to measure against: a round that stated no destination has no unvisited
- * route to count, and a seat with no turns has nothing to say. Neither is a run that was doing fine. */
+ * route to count, and a round with no turns has nothing to say. Neither is a run that was doing fine. */
 export function survivalSeries({
   turns,
   route,
@@ -238,7 +243,7 @@ export function survivalSeries({
   }
 
   const routeCells = new Set(route);
-  // The cell a seat stands on before it moves is a cell it has entered - the same start-square reasoning
+  // The cell the first turn stands on before it moves is a cell entered - the same start-square reasoning
   // agentsFromRound applies when it counts cells from `cells.slice(1)`.
   const visited = new Set<string>();
   const standing = turns[0]?.cells[0];
@@ -304,7 +309,7 @@ export function survivalSeries({
   };
 }
 
-// countUnvisited counts the route cells a seat has still to enter.
+// countUnvisited counts the route cells the round has still to enter.
 const countUnvisited = (route: ReadonlySet<string>, visited: ReadonlySet<string>): number => {
   let count = 0;
   for (const cell of route) {

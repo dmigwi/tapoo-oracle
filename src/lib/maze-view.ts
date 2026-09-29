@@ -335,17 +335,19 @@ export function createMazeReplay(round: PlayedRound | null): HTMLElement {
 
     // The two tables in a grid of their own, and the seats under it rather than in it. A grid item that
     // spans every column keeps every column alive, so a full-width panel inside the grid stopped auto-fit
-    // collapsing the tracks it had no panels for: at 1,440 pixels the summary laid out five tracks, filled
-    // the ones it had panels for and left the tables at 269 pixels each - a width they never grew out of
-    // however wide the window got. Nested, the grid collapses what it does not need and gives them the room.
+    // collapsing the tracks it had no panels for: the summary laid out five tracks, filled the ones it had
+    // panels for and left the tables at 269 pixels each - a width they never grew out of however wide the
+    // window got. Nested, the grid collapses what it does not need: two tables at 447 pixels in a 918-pixel
+    // summary, and 708 when the window gives it 1,440.
     const tables = createHtmlElement("div", "maze-summary-grid");
     tables.append(levelPanel, survivalPanel);
     summary.append(tables);
 
-    // The seats get the width of the whole summary rather than one column of it. A seat's card is four
-    // measurements wide - 663 pixels of them, the speed decomposition being the wide one - and a column
-    // sized for "Dead ends: 2" is 290, so in a panel beside the tables the card showed under half of itself
-    // at a time. It still scrolls on a narrow viewport; it no longer scrolls on a wide one.
+    // The seats get the width of the whole summary rather than one column of it. A seat's card carries a
+    // 34rem floor - 544 pixels, the speed decomposition being the wide cell - where a column of the grid
+    // beside it is 447 in a 918-pixel summary, so in a panel up there the card would scroll at every width.
+    // Down here it is 918 and scrolls at none of them, until a narrow viewport takes the summary below the
+    // floor and the card's own scroller takes over.
     if (model.stats && model.agents.length > 0) {
       const seats = createHtmlElement("div", "maze-summary-panel");
       seats.append(createHtmlElement("h3", "maze-summary-heading", "Seats"), agentStatsRow(model));
@@ -1112,11 +1114,6 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
   return table;
 }
 
-// agentStatsRow builds a vertical stack of per-agent cards. Each card spans the full panel width so
-// five active seats are as legible as one: the card never shrinks to fit beside its neighbours.
-// Within the card, metrics are presented as a single-row horizontal table — column headers on top,
-// values below — so the label and its value share a column rather than a row.
-//
 // The two ceilings are stated because they are what makes the decomposition worth reading: y and a can
 // only be lost, so batching is the one factor that can carry the product over 1 - which is why a 1.0000
 // speed is the boundary it is, and why a perfectly accurate seat moving one cell at a time cannot pass it.
@@ -1136,11 +1133,22 @@ const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
   ["error debt", "units charged beyond one per turn: what a round's mistakes cost it"],
   ["batched", "moves earned past one a turn: cells entered for no extra charge"],
   ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],
+  // The one pair a reader can collide with elsewhere on this page: the grid's legend grades a *cell* by its
+  // visits against its exits, and "oscillating" there is a cell entered again past exhaustion. These two
+  // grade a *turn* by the cells it entered, so a turn into those exhausted cells is the retreat. Said here,
+  // beside the row that prints them, rather than left for a reader to reconcile from two legends.
+  ["retreating", "turns that entered no new cell, back over ground already exhausted - what the prompt asks for at a confirmed dead end"],
+  ["oscillating", "turns that entered no new cell, among cells that still had an exit to spend. Not the grid legend's cell status of the same name"],
   ["could not finish", "route cells left over four per decay unit, the most any turn has ever entered"],
 ];
 
 // keyList writes a list of symbols and what they mean, one line each: the symbol mono and spaced off its
-// gloss, the gloss prose that wraps the way prose does.
+// gloss, the gloss prose that wraps the way prose does. Two of these are built - the factor key under the
+// seat cards and the survival key under the survival table - and they differ only in the class they carry.
+//
+// Their own classes, not .maze-legend: that rule lays out the swatch strips beside the scrubber - a row
+// flex, indented by half a thumb so it lines up with them - and neither key is beside the scrubber nor a row
+// of swatches. Borrowing it meant fighting it.
 function keyList(entries: ReadonlyArray<readonly [string, string]>, className: string): HTMLElement {
   const key = createHtmlElement("ul", className);
   for (const [symbol, gloss] of entries) {
@@ -1152,6 +1160,10 @@ function keyList(entries: ReadonlyArray<readonly [string, string]>, className: s
   return key;
 }
 
+// agentStatsRow builds a vertical stack of per-agent cards. Each card spans the full panel width so five
+// active seats are as legible as one: the card never shrinks to fit beside its neighbours. Within the card,
+// metrics are presented as a single-row horizontal table - column headers on top, values below - so the
+// label and its value share a column rather than a row.
 function agentStatsRow(model: ReplayModel): HTMLElement {
   const container = createHtmlElement("div", "maze-agent-stats");
 
@@ -1185,7 +1197,7 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
   // A metric reads as text, or as a list of text and elements where it carries markup - which only the
   // decomposition does. Kept as one list so every column is still declared in one place, in the order a
   // reader meets them.
-  const metrics: Array<{label: string; read: (agent: AgentSummary, index: number) => string | Array<string | HTMLElement>}> = [
+  const metrics: Array<{label: string; read: (agent: AgentSummary) => string | Array<string | HTMLElement>}> = [
     // Every cell entry attributed to the seat, a cell counted again each time it was re-entered, with its
     // share of what the seats entered between them.
     //
@@ -1268,7 +1280,7 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
 
     for (const {label, read} of metrics) {
       headRow.append(createHtmlElement("th", null, label));
-      const content = read(agent, i);
+      const content = read(agent);
       const cell = createHtmlElement("td");
       if (typeof content === "string") cell.textContent = content;
       else cell.append(...content);
@@ -1286,18 +1298,15 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
     container.append(panel);
   });
 
-  // Once, under every card: the letters mean nothing on their own, and a key per card would repeat what a
-  // reader needs to read once. Its first item is the identity - a reader who sees that the three multiply
-  // to the speed knows what the columns are for before reading what any letter stands for.
-  // Its own classes, not .maze-legend: that rule lays out the swatch strips beside the scrubber - a row
-  // flex, indented by half a thumb so it lines up with them - and this key is neither beside the scrubber
-  // nor a row of swatches. Borrowing it meant fighting it.
-  // The wholes the shares are of, stated once here rather than inside every card's two cells. Left out where
-  // there is nothing to divide - a round that moved nobody has no total worth naming.
+  // The wholes the shares are of, stated once rather than inside every card's cells. Left out where there is
+  // nothing to divide - a round that moved nobody has no total worth naming.
   const totals: Array<readonly [string, string]> = allCells === 0 ? [] : [[
     "%",
     `a share of the ${formatCount(allCells)} cell entries the seats traversed between them`,
   ]];
+  // Once, under every card: the letters mean nothing on their own, and a key per card would repeat what a
+  // reader needs to read once. Its first item is the identity - a reader who sees that the three multiply to
+  // the speed knows what the columns are for before reading what any letter stands for.
   container.append(keyList([...FACTOR_KEY, ...totals], "maze-agent-key"));
 
   return container;

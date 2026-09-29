@@ -261,17 +261,6 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
  * outcome should not have to build a rubric context to name the seats that played them.
  *
  * Seats are ordered by the seat the log stated, and by who acted first where it stated none. */
-// scoreFrom reads a stated score, which Tapoo writes as a number in a turn's outcome and as a numeric
-// string in some round-end entries. Null for anything else: a score that cannot be read is not a score of
-// zero, and "0" is a real score a round can end on.
-function scoreFrom(value: number | string | null | undefined): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null
-  if (typeof value !== "string" || value.trim() === "") return null
-
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 export function agentsFromRound(
   rawSetupByTurn: ReadonlyMap<number, RawTurnSetup>,
   turns: readonly TurnSummary[],
@@ -558,6 +547,17 @@ export function agentsFromRound(
   return seats.sort((first, second) =>
     first.seatId !== null && second.seatId !== null ? first.seatId - second.seatId : 0,
   )
+}
+
+// scoreFrom reads a stated score, which Tapoo writes as a number in a turn's outcome and as a numeric
+// string in some round-end entries. Null for anything else: a score that cannot be read is not a score of
+// zero, and "0" is a real score a round can end on.
+function scoreFrom(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string" || value.trim() === "") return null
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 /** buildPlayedRound derives what the replay draws for one round: its maze, the path walked through it,

@@ -26,6 +26,13 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
   return null
 }
 
+/** One capability group named on a card: its rubric id and the name a reader reads. */
+export type ProfileCardGroup = {id: string; label: string};
+
+/** One profile card: its heading, the `met/total` it scored, the groups it met, and the tone the view
+ * paints it in. */
+export type ProfileCard = {label: string; value: string; groups: ProfileCardGroup[]; tone: string};
+
 /** profileCards: the two fractions, each naming the groups it counted.
  *
  * Two fractions, never one. The rubric is explicit that capabilities and violations must not collapse
@@ -43,13 +50,6 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
  *
  * Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
  * the test can then assert on the groups themselves rather than on punctuation. */
-/** One capability group named on a card: its rubric id and the name a reader reads. */
-export type ProfileCardGroup = {id: string; label: string};
-
-/** One profile card: its heading, the `met/total` it scored, the groups it met, and the tone the view
- * paints it in. */
-export type ProfileCard = {label: string; value: string; groups: ProfileCardGroup[]; tone: string};
-
 export function profileCards(report: Report): ProfileCard[] {
   const card = (label: string, groups: GroupResult[], tone: string) => {
     const met = groups.filter((group) => group.met);
@@ -120,6 +120,10 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
   )
 }
 
+/** One diagnostics line: what went wrong, how often, and the rubric question that scores it - null
+ * when nothing does. */
+export type DiagnosticRow = {signal: string; count: number; scoredBy: string | null};
+
 /** diagnosticRows reports operational signals, some of which the violation profile deliberately excludes.
  *
  * Named by what was counted and at which layer, because three of them would otherwise all be "responses"
@@ -133,10 +137,6 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
  *   problem. Each of these has a rubric question behind it.
  *
  *   Times disabled - the round stopped. It bounds what every figure beside it covers. */
-/** One diagnostics line: what went wrong, how often, and the rubric question that scores it - null
- * when nothing does. */
-export type DiagnosticRow = {signal: string; count: number; scoredBy: string | null};
-
 export function diagnosticRows(report: Report): DiagnosticRow[] {
   // scoredBy is the rubric question this signal answers, or null when nothing scores it. A nullable id
   // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code

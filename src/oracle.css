@@ -1857,8 +1857,8 @@ td {
 /* The summary stacks: the tables in a grid, then the seats under them at the full width. A stack rather
    than one grid holding both, because a grid item spanning every column keeps every column alive - and with
    the seats' panel inside it, auto-fit could not collapse the tracks it had no panels for. The tables sat at
-   269 pixels in a 1,440-pixel summary, three filled tracks beside two empty ones, and no window was ever
-   wide enough to widen them. */
+   269 pixels in a 1,440-pixel summary, the filled tracks beside empty ones, and no window was ever wide
+   enough to widen them. */
 .maze-summary {
   display: flex;
   flex-direction: column;
@@ -1886,10 +1886,10 @@ td {
 
 /* A grid item defaults to min-width: auto, which is its content's min-content width - so a panel holding
    anything that refuses to shrink widens its column instead, and the grid widens the page. The metrics table
-   carries a 38rem floor for exactly that reason, and without this the floor reached all the way out here:
+   carries a 34rem floor for exactly that reason, and without this the floor reached all the way out here:
    the whole summary grew wide rather than the table scrolling inside its own scroller.
    
-   On every panel, not just the one holding the cards: any panel is free to hold a wide table later, and the
+   On every panel, not just the one holding the seat cards: any panel is free to hold a wide table later, and the
    answer is always the same - the panel takes the width it is given and whatever is inside it scrolls. */
 .maze-summary-panel {
   min-width: 0;
@@ -1992,9 +1992,12 @@ td {
   color: var(--oracle-rose);
 }
 
-/* The factor key under the per-seat cards. Its own rules rather than .maze-legend's: that class lays out
-   the swatch strips beside the scrubber, as a wrapping row indented by half a thumb to line up with them,
-   and this is a stack of sentences under a card.
+/* The two keys: the factor key under the per-seat cards, and the survival key under the survival table.
+   One rule for both, because they are the same thing twice - a stack of sentences under the thing whose
+   symbols they gloss.
+
+   Their own rules rather than .maze-legend's: that class lays out the swatch strips beside the scrubber, as
+   a wrapping row indented by half a thumb to line up with them, and neither of these is that.
 
    One line per symbol, and no flex: the item is a symbol followed by prose, so its parts should sit inline
    and the prose should wrap the way prose does. Nothing here scrolls. */

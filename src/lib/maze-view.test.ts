@@ -1090,6 +1090,21 @@ describe("the survival table", () => {
     const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
 
     expect(queryAll(key, ".maze-agent-symbol").map((one) => one.textContent))
-      .toEqual(["decay ledger", "error debt", "batched", "batch depth", "could not finish"])
+      .toEqual(["decay ledger", "error debt", "batched", "batch depth", "retreating", "oscillating", "could not finish"])
+  })
+
+  // "oscillating" names a turn here and a cell in the legend beside the grid, and the two are not the same
+  // claim - a turn into an exhausted cell is the retreat. The gloss has to say so, or a reader carrying the
+  // word across from one legend to the other reads a compliant retreat as a rubric violation.
+  it("keeps its two turn grades apart from the grid's cell status of the same name", () => {
+    const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
+    const glosses = Object.fromEntries(
+      queryAll<HTMLElement>(key, ".maze-agent-key-item")
+        .map((item) => [query<HTMLElement>(item, ".maze-agent-symbol").textContent ?? "", item.textContent ?? ""]),
+    )
+
+    expect(glosses["retreating"]).toContain("already exhausted")
+    expect(glosses["oscillating"]).toContain("still had an exit to spend")
+    expect(glosses["oscillating"]).toContain("Not the grid legend's cell status")
   })
 })

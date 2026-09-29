@@ -68,7 +68,9 @@ Input that is not a Tapoo export is rejected. The analyzer does not guess at unk
 
 `src/lib/log-contract.ts` validates Tapoo JSON, `share-link.ts` handles remote URLs and share tokens,
 `maze.ts` decodes mazes, and `rubric-context.ts` reads a round into the facts `rubric-report.ts`
-answers the rubric against. `report-adapters.ts` prepares those results for the views. `staged/` is generated and gitignored.
+answers the rubric against. `survival.ts` reads a round against the maze's decay budget - what it spent,
+and whether the destination was still within what remained. `report-adapters.ts` prepares those results
+for the views. `staged/` is generated and gitignored.
 
 ## Commands
 

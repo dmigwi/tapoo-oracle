@@ -575,7 +575,8 @@ export type AgentSummary = {
   /** The seat the log stated, or null when it never did - see agentSeatLabel.
    *
    * One id per seat, as one player name per seat, so either identifies it. This is the one the log states
-   * outright, which is why it is what a seat is gathered by - see seatFor. */
+   * outright, which is why it is what a seat is gathered by - see seatInfoAt in rounds.ts, which matches on
+   * it first and falls back to the name. */
   seatId: number | null;
   models: string[];
   apis: string[];
@@ -599,7 +600,9 @@ export type AgentSummary = {
    * stated both an applied count and a charge, because the speed's three factors have to divide one
    * population or a share comes out above 1. The survival ledger asks a different question - what the
    * run spent, against what the maze costs - and there `turnsTaken` must be every turn the seat was
-   * charged for, not the turns that happened to report cleanly.
+   * charged for, not the turns that happened to report cleanly. That ledger adds these across the seats
+   * into one account for the maze: the budget is the maze's, and every seat at the table draws on the one
+   * of it.
    *
    * `movesApplied` includes the winning turn, whose outcome the log never reports: a turn's outcome
    * reaches the log through the next turn's tool calls, and a turn that wins has no next turn.
