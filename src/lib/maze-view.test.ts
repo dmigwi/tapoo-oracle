@@ -4,11 +4,13 @@
 
 import { describe, expect, it } from "vitest"
 
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
+import {roundReportFor} from "./rubric-report"
 import {agentsFromRound} from "./rounds"
 import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, TurnSummary, VisitStatus} from "./types"
-import {at, must, query, queryAll} from "./test-support";
+import {at, expectOk, firstRound, must, query, queryAll, sliceLogText} from "./test-support";
 
 const REAL_MAZE = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -922,6 +924,11 @@ describe("the per-seat metrics card", () => {
         "yroute efficiency - unique cells per applied move, lost to retracing. always <= 1",
         "bbatching - applied moves per turn, the only factor that can exceed 1",
         "aaccuracy - turns per decay unit, lost to penalties. always <= 1",
+        "decay ledgerslack + batched - error debt = headroom, in decay units. A round starts with one per cell",
+        "error debtunits charged beyond one per turn: what a run's mistakes cost it",
+        "batchedmoves earned past one a turn: cells entered for no extra charge",
+        "batch depthmoves per turn, over every turn played - beside the depth the route still needed",
+        "could not finishroute cells left over four per decay unit, the most any turn has ever entered",
         "%a share of the 3 cell entries the seats traversed between them",
       ])
   })
@@ -983,5 +990,88 @@ describe("the per-seat metrics card", () => {
 
     expect(card["Decomposed Traversal speed"]).toBe("not recorded")
     expect(card["Speed class"]).toBe("not recorded")
+  })
+})
+
+// What a run spent and whether it could still have finished, as a reader meets them: four cells beside
+// the speed decomposition and one sentence under the card.
+describe("the survival account on the card", () => {
+  const cellsOf = (node: ParentNode): Record<string, string> => {
+    const labels = queryAll<HTMLElement>(node, ".maze-agent-table th").map((cell) => cell.textContent ?? "")
+    const values = queryAll<HTMLElement>(node, ".maze-agent-table td").map((cell) => cell.textContent ?? "")
+    return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? ""]))
+  }
+  const verdictOf = (node: ParentNode) => query<HTMLElement>(node, ".maze-agent-verdict")
+  // The two accounts under the card, read by their labels rather than by position.
+  const accountOf = (node: ParentNode): Record<string, string> => {
+    const labels = queryAll<HTMLElement>(node, ".maze-agent-account dt").map((one) => one.textContent ?? "")
+    const values = queryAll<HTMLElement>(node, ".maze-agent-account dd").map((one) => one.textContent ?? "")
+    return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? ""]))
+  }
+
+  // The capture's won round: every turn cost one unit, so it paid nothing for errors, and the two moves
+  // it earned by batching are what carried it past the maze's own size.
+  const wonRound = () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    return build(must(firstRound(sliced).playedRound, "the won round"))
+  }
+
+  it("prints the ledger as three terms and the headroom they sum to", () => {
+    expect(accountOf(wonRound())["Decay ledger"]).toBe("+1 slack · +2 batched · 0 error debt → headroom +3")
+  })
+
+  // The depth beside the counts it is a ratio of, and beside the depth the route still demanded - the
+  // claim the whole account is for: this run needed less than a move a turn and managed slightly more.
+  it("prints the depth reached beside the depth the route needed", () => {
+    expect(accountOf(wonRound())["Batch depth"])
+      .toBe("1.0299 (69 moves / 67 turns) · needed 0.9857 (surplus 0.0441)")
+  })
+
+  it("says a run that finished was within reach throughout", () => {
+    const verdict = verdictOf(wonRound())
+
+    expect(verdict.textContent).toBe("Within reach throughout: the destination stayed inside what the decay could reach.")
+    expect(verdict.className).toContain("is-clear")
+    expect(verdict.className).not.toContain("is-lost")
+  })
+
+  // A warning is not a verdict, and the two keep different words. This round was cut off by a provider
+  // failure with budget still unspent: its pace warnings fire, and the sentence under the card does not
+  // say it could not have finished.
+  it("warns about pace without letting the warning become the verdict", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const node = build(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))
+
+    expect(query<HTMLElement>(node, ".maze-agent-warnings").textContent).toBe(
+      "Pace warnings: the target was further than the budget from turn 1 · " +
+      "further than its own batching could reach from turn 0",
+    )
+    // The verdict beside them says the opposite, and says it in its own words.
+    expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)
+    expect(verdictOf(node).className).not.toContain("is-lost")
+    // And the two moves the maze refused, which no status label reports as such.
+    expect(cellsOf(node)["No progress"]).toContain("2 refused a move")
+  })
+
+  // The verdict the rule exists for, on a round built to cross the line: one route cell left and no
+  // budget to reach it with.
+  it("names the turn a run could no longer finish from", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayRemaining: index === 0 ? 4 : 0}))
+    const node = build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)})
+
+    expect(verdictOf(node).textContent).toMatch(/^Could not finish from turn 1:/)
+    expect(verdictOf(node).className).toContain("is-lost")
+  })
+
+  // Nothing at all where the round stated no destination. There is no route to be out of reach of, and a
+  // reassurance drawn from no route would be the worst of the three things this could say.
+  it("says nothing about reach where the round stated no destination", () => {
+    const node = build({...level(), destinationCell: null})
+
+    expect(queryAll(node, ".maze-agent-verdict")).toHaveLength(0)
+    expect(queryAll(node, ".maze-agent-warnings")).toHaveLength(0)
+    // No route, so no account either: the terms are measured against the maze a route crosses.
+    expect(queryAll(node, ".maze-agent-account")).toHaveLength(0)
   })
 })

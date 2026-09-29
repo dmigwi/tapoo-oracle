@@ -1945,14 +1945,14 @@ td {
 
    Two rules that only work together: overflow-x does nothing to a table at width: 100%, which by definition
    has no overflow, and it is the min-width that creates it. The same pairing the wide summary tables use.
-   34rem is the four columns at a legible size, the decomposition being the wide one; above that width the
-   table is still width: 100% and nothing moves. */
+   40rem is the five columns at a legible size, the speed decomposition being the wide one; above that
+   width the table is still width: 100% and nothing moves. */
 .maze-agent-scroll {
   overflow-x: auto;
 }
 
 .maze-agent-table {
-  min-width: 34rem;
+  min-width: 40rem;
 }
 
 /* The horizontal metrics table: column headers above, one value row below. Every value cell is
@@ -1964,6 +1964,51 @@ td {
   font-family: var(--oracle-mono);
   font-size: var(--fs-micro);
   white-space: nowrap;
+}
+
+/* The verdict under one card: one sentence about the whole run, outside the scroller so a reader swiping
+   the metrics cannot swipe it away. Sage where the destination stayed in reach and rose where it did not -
+   the two colours this page already uses for a result that held and one that did not. */
+.maze-agent-verdict {
+  margin: 0.4rem 0 0;
+  font-size: var(--fs-micro);
+}
+
+/* The two accounts under one card: label and value on a line each, which is how the survival framework
+   writes them. A definition list rather than two more table columns - as columns they took half the
+   card's width between them, to say the two things a reader came for. */
+.maze-agent-account {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.1rem 0.6rem;
+  margin: 0.45rem 0 0;
+  font-size: var(--fs-micro);
+}
+
+.maze-agent-account dt {
+  color: var(--oracle-muted);
+}
+
+.maze-agent-account dd {
+  margin: 0;
+  font-family: var(--oracle-mono);
+}
+
+/* The paces under the same card, muted and wrapping: they are sentences, where everything in the table
+   above is a measurement. A warning must not read as the verdict, so it keeps its own words, its own
+   colour and its own line. */
+.maze-agent-warnings {
+  margin: 0.35rem 0 0;
+  font-size: var(--fs-micro);
+  color: var(--oracle-muted);
+}
+
+.maze-agent-verdict.is-clear {
+  color: var(--oracle-sage);
+}
+
+.maze-agent-verdict.is-lost {
+  color: var(--oracle-rose);
 }
 
 /* The factor key under the per-seat cards. Its own rules rather than .maze-legend's: that class lays out

@@ -11,6 +11,8 @@
 
 import { cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { agentSeatLabel } from "./rounds"
+import { survivalLedgerFor, survivalOutlookFor } from "./maze-model"
+import type { DecayLedger } from "./survival"
 import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeStructureRows } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, SummaryRow, VisitStatus } from "./types"
@@ -312,12 +314,20 @@ export function createMazeReplay(round: PlayedRound | null): HTMLElement {
         ["Property", "Value"],
       ),
     );
-    if (model.stats && model.agents.length > 0) levelPanel.append(agentStatsRow(model));
-
     summary.append(
       summaryPanel("Maze", mazeStructureRows(model)),
       levelPanel,
     );
+
+    // The seats get the width of the whole summary rather than half of one column of it. A seat's card is
+    // eight measurements wide where the panels beside it are two, and in a column sized for "Dead ends: 6"
+    // it showed a fifth of itself at a time - scrolling a reader past seven columns to reach the verdict
+    // that the round turned on. It still scrolls on a narrow viewport; it no longer scrolls on a wide one.
+    if (model.stats && model.agents.length > 0) {
+      const seats = createHtmlElement("div", "maze-summary-panel maze-summary-panel--full");
+      seats.append(createHtmlElement("h3", "maze-summary-heading", "Seats"), agentStatsRow(model));
+      summary.append(seats);
+    }
 
     paint();
   };
@@ -1079,6 +1089,22 @@ function summaryTable(rows: Array<Record<string, string | number | Node>>, heade
   return table;
 }
 
+// batchDepthOf writes the depth a seat reached beside the depth the route still demanded of it.
+//
+// Not the decomposition's `b`, though it measures the same thing: that one divides the turns that settled
+// both an applied count and a charge, and this one every turn the seat played. Two denominators under one
+// letter would read as one figure printed twice, so this one carries its counts instead.
+function batchDepthOf(ledger: DecayLedger, agent: AgentSummary): string {
+  const depth = (value: number): string => value.toFixed(4);
+  const margin = ledger.batchDepth - ledger.neededDepth;
+  const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
+  const counts = agent.played === null
+    ? ""
+    : ` (${formatCount(agent.played.movesApplied)} moves / ${formatCount(agent.played.turnsTaken)} turns)`;
+
+  return `${depth(ledger.batchDepth)}${counts} \u00b7 needed ${depth(ledger.neededDepth)} (${standing})`;
+}
+
 // agentStatsRow builds a vertical stack of per-agent cards. Each card spans the full panel width so
 // five active seats are as legible as one: the card never shrinks to fit beside its neighbours.
 // Within the card, metrics are presented as a single-row horizontal table — column headers on top,
@@ -1094,6 +1120,11 @@ const FACTOR_KEY: ReadonlyArray<readonly [string, string]> = [
   ["y", "route efficiency - unique cells per applied move, lost to retracing. always <= 1"],
   ["b", "batching - applied moves per turn, the only factor that can exceed 1"],
   ["a", "accuracy - turns per decay unit, lost to penalties. always <= 1"],
+  ["decay ledger", "slack + batched - error debt = headroom, in decay units. A round starts with one per cell"],
+  ["error debt", "units charged beyond one per turn: what a run's mistakes cost it"],
+  ["batched", "moves earned past one a turn: cells entered for no extra charge"],
+  ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],
+  ["could not finish", "route cells left over four per decay unit, the most any turn has ever entered"],
 ];
 
 function agentStatsRow(model: ReplayModel): HTMLElement {
@@ -1117,6 +1148,9 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
   // speed - its labels write "Katara the Navigator - 1.0000x" - so putting it on the factors would state
   // three more speeds per seat, when a factor is a share of moves, a count per turn and a share of turns.
   // The absence reads the same in every column, matching the counts beside them.
+  // Whole units, signed, because a ledger term is a count of decay units and a negative one is a real
+  // reading: a branching maze costs two moves per cell of a dead end, so slack goes below zero.
+  const term = (value: number): string => (value > 0 ? `+${formatCount(value)}` : formatCount(value));
   const factor = (value: number | undefined): string => (value === undefined ? "not recorded" : value.toFixed(4));
   const speed = (value: number | undefined): string => (value === undefined ? "not recorded" : `${value.toFixed(4)}x`);
 
@@ -1127,7 +1161,7 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
   // A metric reads as text, or as a list of text and elements where it carries markup - which only the
   // decomposition does. Kept as one list so every column is still declared in one place, in the order a
   // reader meets them.
-  const metrics: Array<{label: string; read: (agent: AgentSummary) => string | Array<string | HTMLElement>}> = [
+  const metrics: Array<{label: string; read: (agent: AgentSummary, index: number) => string | Array<string | HTMLElement>}> = [
     // Every cell entry attributed to the seat, a cell counted again each time it was re-entered, with its
     // share of what the seats entered between them.
     //
@@ -1196,6 +1230,24 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
       label: "Speed class",
       read: (agent) => (agent.traversalSpeed === null ? "not recorded" : classifyTraversalSpeed(agent.traversalSpeed)),
     },
+    // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both
+    // cost one unit, so the budget cannot tell them apart - and one is what the prompt asks for at a
+    // confirmed dead end while the other is a rubric violation.
+    {
+      label: "No progress",
+      read: (_agent, index) => {
+        const outlook = survivalOutlookFor(model, index);
+        if (!outlook) return "not recorded";
+
+        const parts = [
+          `${formatCount(outlook.retreats)} retreating`,
+          `${formatCount(outlook.oscillations)} oscillating`,
+          outlook.unclassified > 0 ? `${formatCount(outlook.unclassified)} ungraded` : "",
+          outlook.wallContacts > 0 ? `${formatCount(outlook.wallContacts)} refused a move` : "",
+        ].filter((part) => part !== "");
+        return parts.join(" \u00b7 ");
+      },
+    },
   ];
 
   model.agents.forEach((agent, i) => {
@@ -1210,7 +1262,7 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
 
     for (const {label, read} of metrics) {
       headRow.append(createHtmlElement("th", null, label));
-      const content = read(agent);
+      const content = read(agent, i);
       const cell = createHtmlElement("td");
       if (typeof content === "string") cell.textContent = content;
       else cell.append(...content);
@@ -1225,6 +1277,58 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
     const scroller = createHtmlElement("div", "maze-agent-scroll");
     scroller.append(table);
     panel.append(scroller);
+
+    // The verdict, under the card rather than in it: it is one sentence about the whole run, where every
+    // cell above is a measurement, and a reader swiping the metrics sideways must not swipe it away.
+    //
+    // Two things it can say and no more. "Could not finish" is the only verdict here - the monotone rule,
+    // which cannot switch off once it holds - and the pace warnings in the cell above are a different
+    // claim in a different vocabulary, so neither can be read as the other. Nothing at all where the
+    // round stated no destination: there is no route to be out of reach of, and silence is the honest
+    // answer rather than "within reach".
+    // The account, under the table rather than in it: these are two sentences of arithmetic, and the
+    // table above is single measurements. As columns they took 940 of the card's 1,849 pixels between
+    // them - half the card, to say the two things a reader came for, pushed off the right-hand edge.
+    //
+    // Label and value on one line each, which is how the survival framework writes them.
+    const ledger = survivalLedgerFor(model, i);
+    if (ledger) {
+      const account = createHtmlElement("dl", "maze-agent-account");
+      account.append(
+        createHtmlElement("dt", null, "Decay ledger"),
+        createHtmlElement("dd", null,
+          `${term(ledger.routeSlack)} slack \u00b7 ${term(ledger.batchCredit)} batched \u00b7 ` +
+          `${term(ledger.errorDebt)} error debt \u2192 headroom ${term(ledger.headroom)}`),
+        createHtmlElement("dt", null, "Batch depth"),
+        createHtmlElement("dd", null, batchDepthOf(ledger, agent)),
+      );
+      panel.append(account);
+    }
+
+    const outlook = survivalOutlookFor(model, i);
+    // The paces, under the card and not in it. They are sentences, and the table beside them is
+    // measurements: a cell that cannot wrap turned one of these into a column twice the width of the
+    // viewport. Muted, and prefixed so neither of the two lines below can be read as the other - each
+    // says the run was behind where it would have to be, which is a thing a run can still recover from.
+    const warnings = outlook === null ? [] : [
+      outlook.beyondDecayLeftFrom === null ? "" : `the target was further than the budget from turn ${formatCount(outlook.beyondDecayLeftFrom)}`,
+      outlook.beyondOwnPaceFrom === null ? "" : `further than its own batching could reach from turn ${formatCount(outlook.beyondOwnPaceFrom)}`,
+      outlook.behindObservedPaceFrom === null ? "" : `new ground needed faster than any run has sustained, from turn ${formatCount(outlook.behindObservedPaceFrom)}`,
+    ].filter((one) => one !== "");
+    if (warnings.length > 0) {
+      panel.append(createHtmlElement("p", "maze-agent-warnings", `Pace warnings: ${warnings.join(" \u00b7 ")}`));
+    }
+
+    if (outlook) {
+      const lostFrom = outlook.lostFrom;
+      const verdict = createHtmlElement("p", `maze-agent-verdict ${lostFrom === null ? "is-clear" : "is-lost"}`);
+      verdict.textContent =
+        lostFrom === null
+          ? "Within reach throughout: the destination stayed inside what the decay could reach."
+          : `Could not finish from turn ${formatCount(lostFrom)}: more route cells left than the decay could reach.`;
+      panel.append(verdict);
+    }
+
     container.append(panel);
   });
 
