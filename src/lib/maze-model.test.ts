@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 
-import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor, survivalVerdict} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -338,6 +338,40 @@ describe("mazeLevelRows", () => {
     expect(value(mazeLevelRows(model), "Outcome")).toBe("won")
   })
 
+  // A reassurance is a finding, and it needs evidence. Where no turn reported a budget there is nothing to
+  // test the rule against, so `lostFrom` is null for want of a reading - and printing "within reach
+  // throughout" off that is the same measured-looking zero as a success path of "0 of 70".
+  it("says nothing about reach where no turn reported a budget", () => {
+    const model = must(mazeReplayModel(level()), "a model")
+    const outlook = must(survivalOutlookFor(model), "an outlook")
+
+    expect(outlook.budgetTurns).toBe(0)
+    expect(outlook.lostFrom).toBeNull()
+    expect(survivalVerdict(outlook)).toBeNull()
+    expect(value(mazeSurvivalRows(model), "Point of no return")).toBe("not recorded")
+    // And no "none" for the paces either: each compares a distance against the units left.
+    expect(value(mazeSurvivalRows(model), "Pace warnings")).toBe("not recorded")
+  })
+
+  // A round that walked none of a route it had covered none of it, which is a measurement. "not recorded"
+  // belongs to the round whose route was never computed, and the two must not read alike.
+  it("counts no coverage rather than none recorded where a round took no turn", () => {
+    const model = must(mazeReplayModel({...level(), turns: []}), "a model")
+
+    expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("0 of 18 route cells (0%)")
+  })
+
+  // A turn whose applied count nothing settled contributes a turn and no moves, so the depth is a floor.
+  // The row has to say which of the two it is printing.
+  it("marks the batch depth as a floor where a turn never reported its moves", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: 1, applied: index === 1 ? null : turn.applied}))
+    const model = must(mazeReplayModel({...base, turns, agents: agentsFromRound(new Map(), turns, null)}), "a model")
+
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("at least")
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("1 never reported")
+  })
+
   // A route that was never computed is not a route of no length. The row read "0 of 24 (0%)" for a round
   // that stated no destination - a measured-looking zero, from a null the formatter turned into one.
   it("says nothing about a route where the round stated no destination", () => {
@@ -591,10 +625,10 @@ describe("agentsFromRound", () => {
       expect(value(mazeSurvivalRows(model), "Route coverage")).toBe(`2 of ${route.length} route cells (11%)`)
     })
 
-    // Two seats, one maze, one account. The budget is the maze's and the route is covered by whoever walks
-    // it, so a second seat continues the first's run rather than starting a run of its own - and the ledger
-    // adds what both were charged against the one budget they drew it from.
-    it("reads every seat's turns as one run against the maze", () => {
+    // Two seats, one maze. The ground is the round's - a route cell one seat enters is entered for the
+    // round, and the second seat continues the walk rather than starting one of its own - so coverage and
+    // the no-progress split read every turn, whoever played it.
+    it("reads every seat's turns as one walk over the maze", () => {
       const model = must(mazeReplayModel(level({turns: [
         turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"]}),
         turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"]}),
@@ -605,8 +639,41 @@ describe("agentsFromRound", () => {
       expect(outlook.series.map((one) => one.turn)).toEqual([0, 1])
       // Three cells between them, all on the route, and neither seat counted twice.
       expect(outlook.visitedRouteCells).toBe(3)
-      expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
       expect(roundPlayed(model)).toEqual({turnsTaken: 2, movesApplied: 2, movesUnreported: 0})
+    })
+
+    // But not the budget. Tapoo states decayUnitsRemaining as what *the player* may spend, and a maze two
+    // players walk opens with two budgets - so a pooled `u` would be whichever of them reported last, and
+    // `b_min` would divide by one budget where the round had two. Every figure resting on that is refused,
+    // and the verdict with them: a round declared lost while a second seat still held the units to finish
+    // is the one error here that a reader would have no way to catch.
+    it("refuses the budget where two seats each had one of their own", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"], decayRemaining: 4}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 1}),
+      ]})), "a model")
+
+      expect(survivalLedgerFor(model)).toBeNull()
+      const outlook = must(survivalOutlookFor(model), "the round's outlook")
+      expect(outlook.budgetTurns).toBe(0)
+      expect(outlook.lostFrom).toBeNull()
+      expect(survivalVerdict(outlook)).toBeNull()
+      expect(value(mazeSurvivalRows(model), "Point of no return")).toBe("not recorded")
+      expect(value(mazeSurvivalRows(model), "Pace warnings")).toBe("not recorded")
+      // What the round did on the ground is still the round's, and still counted.
+      expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("3 of 18 route cells (17%)")
+    })
+
+    // One seat, and the same round reads its budget: the guard above is about a maze two players shared,
+    // not about the readings themselves.
+    it("reads the budget where one seat played the round", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, cells: ["0,0", "1,0"], decayRemaining: 4}),
+        turnOf({turn: 1, before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 3}),
+      ]})), "a model")
+
+      expect(must(survivalOutlookFor(model), "an outlook").budgetTurns).toBe(2)
+      expect(survivalLedgerFor(model)).not.toBeNull()
     })
 
     // A wall is a move the maze refused. A command it could not read is the model spelling a move wrong,

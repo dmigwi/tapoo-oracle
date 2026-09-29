@@ -193,6 +193,12 @@ export type SurvivalOutlook = {
   /** The first turn from which the destination was already out of reach, or null for a run that always
    * had a way to finish. Monotone, so "from" is exact rather than "at some point". */
   lostFrom: number | null;
+  /** Turns whose budget the log actually reported.
+   *
+   * Zero means every finding below it is false for want of a reading, not true: `lostFrom` is null there
+   * because nothing could be tested, and a reader told "within reach throughout" on that basis would be
+   * given a reassurance drawn from no evidence. survivalVerdict refuses it. */
+  budgetTurns: number;
   behindObservedPaceFrom: number | null;
   beyondDecayLeftFrom: number | null;
   beyondOwnPaceFrom: number | null;
@@ -299,6 +305,7 @@ export function survivalSeries({
     visitedRouteCells: route.length - countUnvisited(routeCells, visited),
     series,
     lostFrom: from("lost"),
+    budgetTurns: series.filter((one) => one.decayLeft !== null).length,
     behindObservedPaceFrom: from("behindObservedPace"),
     beyondDecayLeftFrom: from("beyondDecayLeft"),
     beyondOwnPaceFrom: from("beyondOwnPace"),

@@ -153,9 +153,9 @@ export function buildContext(
   // Which turn an entry belongs to is the index's answer, not a cursor's.
   //
   // `turnsAreStated` means every entry carries a turn, so the index places each of them in a span: each
-  // entry's own turn number is authoritative and the spans tile the array with no gap or overlap. A cursor is the weaker
-  // answer: tracking the turn on request entries alone leaves everything between two requests inheriting
-  // whatever the last one set.
+  // entry's own turn number is authoritative and the spans tile the array with no gap or overlap. A
+  // cursor is the weaker answer: tracking the turn on request entries alone leaves everything between
+  // two requests inheriting whatever the last one set.
   //
   // Two weaker cases remain, and neither can be answered by a map:
   //

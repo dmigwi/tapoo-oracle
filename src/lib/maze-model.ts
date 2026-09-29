@@ -65,6 +65,22 @@ export function routeCells(model: ReplayModel | null | undefined): CellKey[] | n
   return routeFrom(model.routes, model.startCell)
 }
 
+/** sharesOneBudget reports whether the round's decay readings can be read as the maze's.
+ *
+ * They can where one seat played it, and only there. Tapoo's own tool description calls
+ * decayUnitsRemaining "the maximum number of decay units *the player* can spend", and its round-end entry
+ * states `playerUniqueCellsVisited` beside `allUniqueCellsVisited` - a maze several players walk gives each
+ * of them their own budget and their own position. Pooled across two of those, `u` would be whichever
+ * player reported last and `b_min` would divide by one budget where the round opened with two: a verdict
+ * that could call a round lost while the other seat still had the units to finish it.
+ *
+ * Every round in the twelve captures on disk seated one player, so this guards a shape none of them takes.
+ * It refuses rather than guesses, because the figure it would otherwise print is the one a reader would
+ * trust most. */
+function sharesOneBudget(model: ReplayModel): boolean {
+  return model.agents.length <= 1
+}
+
 /** survivalOutlookFor reads the round's run against that route: what the maze had still to be entered,
  * what budget was left, and the first turn from which the destination was already out of reach.
  *
@@ -78,6 +94,7 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
   const route = routeCells(model)
   if (!model?.routes || !route) return null
 
+  const budgeted = sharesOneBudget(model)
   const ledger = survivalLedgerFor(model)
   return survivalSeries({
     turns: model.turns.map((turn) => ({
@@ -87,7 +104,10 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
       // What the maze could read of what the turn asked for. TurnSummary.moves is already narrowed to
       // that prefix, so the difference from `applied` is the wall and nothing else.
       applicable: turn.moves.length,
-      decayRemaining: turn.decayRemaining,
+      // Withheld where the round seated more than one player, because then it is one player's budget and
+      // not the round's. Every finding that reads it refuses on a null, which is the answer wanted here -
+      // the ground covered and the no-progress split are still the round's and still counted.
+      decayRemaining: budgeted ? turn.decayRemaining : null,
     })),
     route,
     distances: model.routes.distances,
@@ -103,7 +123,9 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
  * budget is the maze's, and a seat that spends half of it leaves the other half for the rest of the table.
  * Charges add the way agentsFromRound gathers them - the seats that stated one, and null where none did. */
 export function survivalLedgerFor(model: ReplayModel | null | undefined): DecayLedger | null {
-  if (!model?.stats) return null
+  // No ledger for a round several players shared: `b_min` divides by the budget the round opened with, and
+  // a maze walked by two players opens with two of them. See sharesOneBudget.
+  if (!model?.stats || !sharesOneBudget(model)) return null
 
   let decayCharged: number | null = null
   for (const agent of model.agents) {
@@ -308,10 +330,20 @@ function batchDepthOf(ledger: DecayLedger, played: AgentSummary["played"]): stri
   const depth = (value: number): string => value.toFixed(4);
   const margin = ledger.batchDepth - ledger.neededDepth;
   const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
-  const counts =
-    played === null ? "" : ` (${formatCount(played.movesApplied)} moves / ${formatCount(played.turnsTaken)} turns)`;
 
-  return `${depth(ledger.batchDepth)}${counts} \u00b7 needed ${depth(ledger.neededDepth)} (${standing})`;
+  // A turn whose applied count nothing settled still counts as a turn and contributes no moves, so where
+  // there are any, the moves are a floor and the depth with them. Said rather than left for the reader to
+  // work out: the row is a ratio, and a ratio quietly missing part of its numerator is the one shape of
+  // wrong figure that looks exactly like a right one.
+  const unreported = played?.movesUnreported ?? 0;
+  const floor = unreported > 0 ? "at least " : "";
+  const counts =
+    played === null
+      ? ""
+      : ` (${formatCount(played.movesApplied)} moves${unreported > 0 ? ` over ${formatCount(played.turnsTaken - unreported)} of ` : " / "}` +
+        `${formatCount(played.turnsTaken)} turns${unreported > 0 ? `, ${formatCount(unreported)} never reported` : ""})`;
+
+  return `${floor}${depth(ledger.batchDepth)}${counts} \u00b7 needed ${depth(ledger.neededDepth)} (${standing})`;
 }
 
 /** survivalVerdict states the one thing the decay budget settles: whether the destination was still inside
@@ -322,7 +354,10 @@ function batchDepthOf(ledger: DecayLedger, played: AgentSummary["played"]): stri
  * those are a different claim in a different vocabulary, and each of them describes a run that can still
  * recover. This one cannot switch off once it holds. */
 export function survivalVerdict(outlook: SurvivalOutlook | null): {text: string; lost: boolean} | null {
-  if (!outlook) return null;
+  // Nothing at all where no turn reported a budget. The rule cannot hold without one, so `lostFrom` is null
+  // there for want of a reading rather than because the destination stayed in reach - and "within reach
+  // throughout" off the back of that is the same measured-looking zero as a success path of "0 of 70".
+  if (!outlook || outlook.budgetTurns === 0) return null;
 
   return outlook.lostFrom === null
     ? {text: "Within reach throughout: the destination stayed inside what the decay could reach.", lost: false}
@@ -385,10 +420,15 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     {
       field: "Route coverage",
       value: (() => {
-        if (!outlook) return "not recorded"
+        const route = routeCells(levelModel)
+        if (!route) return "not recorded"
 
-        const {visitedRouteCells: covered, routeCells: length} = outlook
-        return `${formatCount(covered)} of ${formatCount(length)} route cells (${Math.round((covered / length) * 100)}%)`
+        // From the route and the cells walked rather than from the outlook, which declines a round with no
+        // turns. A round that has a route and walked none of it covered none of it, and 0 of 70 is the
+        // measurement - where "not recorded" belongs to the round whose route was never computed.
+        const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells))
+        const covered = route.filter((cell) => walked.has(cell)).length
+        return `${formatCount(covered)} of ${formatCount(route.length)} route cells (${Math.round((covered / route.length) * 100)}%)`
       })(),
     },
     // What the round spent, in the one unit that measures a maze: a round opens with a decay unit per cell
@@ -438,7 +478,9 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     {
       field: "Pace warnings",
       value: (() => {
-        if (!outlook) return "not recorded"
+        // "none" is a finding, and it needs a budget to have been read: every pace compares a distance
+        // against the units left, so with nothing to compare them to the answer is that nothing was read.
+        if (!outlook || outlook.budgetTurns === 0) return "not recorded"
 
         const warnings = [
           outlook.beyondDecayLeftFrom === null
