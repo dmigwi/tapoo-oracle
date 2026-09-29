@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 
-import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -23,8 +23,8 @@ type RoundOverrides = {encodedMaze?: EncodedMaze | null; turns?: TurnSummary[]; 
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
 const DEFAULT_TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
   {
     turn: 2,
     seatId: null,
@@ -33,7 +33,7 @@ const DEFAULT_TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   },
 ]
 
@@ -74,7 +74,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
 const charged = (charges: Array<number | null>): TurnSummary[] =>
   charges.map((decayCharged, turn) => ({
     turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged, decayRemaining: null,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged, decayRemaining: null, score: null,
   }))
 
 const modelFor = (overrides: RoundOverrides = {}) =>
@@ -141,8 +141,8 @@ describe("mazeFrameAt", () => {
   it("keeps two seats apart when neither states a player", () => {
     const nameless = modelFor({
       turns: [
-        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
-        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
       ],
       outcome: null,
     })
@@ -157,8 +157,8 @@ describe("mazeFrameAt", () => {
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
       ],
     })
 
@@ -281,6 +281,47 @@ describe("mazeLevelRows", () => {
     // Agent-specific rows belong to the per-seat cards, not to this table.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
+  })
+
+  // The outcome with the score the round ended on. The word alone says whether it finished and nothing
+  // about how it went - two unfinished rounds, one stopped at 6,700 and one at 0, read identically.
+  it("states the score the round ended on beside how it ended", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const won = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
+
+    // The entry that closed the round states 300, where the last turn's own reading still said 400: the
+    // closing figure is the settled one, so it wins over the running total that preceded it.
+    expect(value(mazeLevelRows(won), "Outcome")).toBe("won (final scores: 300)")
+    expect(finalScore(won)).toBe(300)
+  })
+
+  // An unfinished round has no closing entry, so the last turn that reported a score is the only score
+  // there is. Later turns that reported nothing cannot lower it and do not stand in for it.
+  it("falls back to the last turn that reported a score where the round never closed", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const stopped = must(
+      mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round")),
+      "a model",
+    )
+
+    expect(value(mazeLevelRows(stopped), "Outcome")).toBe("unfinished (final scores: 3,700)")
+  })
+
+  // Zero is a score a round can genuinely end on - both rounds that ended at a standstill in the captures
+  // recorded exactly that - so it is printed rather than read as an absence.
+  it("prints a final score of zero rather than treating it as none", () => {
+    const model = must(mazeReplayModel({...level(), outcome: {outcome: "lost", score: "0"}}), "a model")
+
+    expect(value(mazeLevelRows(model), "Outcome")).toBe("lost (final scores: 0)")
+  })
+
+  // And nothing in parentheses where no reading states a score at all: the v2.4.8 shape has rounds that
+  // state none anywhere, and an invented 0 there would be a measurement nothing took.
+  it("says only how the round ended where nothing stated a score", () => {
+    const model = must(mazeReplayModel(level()), "a model")
+
+    expect(finalScore(model)).toBeNull()
+    expect(value(mazeLevelRows(model), "Outcome")).toBe("won")
   })
 
   // A route that was never computed is not a route of no length. The row read "0 of 24 (0%)" for a round
@@ -516,7 +557,7 @@ describe("agentsFromRound", () => {
     const turnOf = (over: Partial<TurnSummary> & {turn: number}): TurnSummary => ({
       seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1,
       applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1,
-      decayRemaining: null, ...over,
+      decayRemaining: null, score: null, ...over,
     })
 
     // Coverage counts the cells of the route, not the cells walked: a round that wandered off it covers
@@ -641,7 +682,7 @@ describe("agentsFromRound", () => {
       turn: index, seatId: null, playerName: "Kora", before: `${index},0`,
       moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
       cells: [`${index},0`, `${index + 1},0`] as CellKey[], rejectedMove: null,
-      traversalSpeed: 1, decayCharged: index === 47 ? null : 1, decayRemaining: null,
+      traversalSpeed: 1, decayCharged: index === 47 ? null : 1, decayRemaining: null, score: null,
     }))
     const kora = must(agentsFromRound(new Map(), turns, null)[0], "the round's only seat")
     const factors = must(decomposeTraversalSpeed(kora), "the seat's factors")
@@ -673,8 +714,8 @@ describe("agentsFromRound", () => {
   it("accumulates per-turn decay per agent", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null },
-        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null , score: null},
       ],
     })
 
@@ -684,8 +725,8 @@ describe("agentsFromRound", () => {
   it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null , score: null},
       ],
       outcome: {
         outcome: "won",
@@ -709,7 +750,7 @@ describe("agentsFromRound", () => {
 
   it("names no seat for a round whose turns name no player", () => {
     const anonymous = [
-      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
     ]
 
     expect(seatsOf({turns: anonymous})).toEqual([])

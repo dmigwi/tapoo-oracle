@@ -318,6 +318,18 @@ const countUnvisited = (route: ReadonlySet<string>, visited: ReadonlySet<string>
 // The grade belongs to the cell the turn *entered*, which is how visitStatusAfterTurn is built - Tapoo
 // states a status per open move, and the status describes where that move leads. Reading the cell a turn
 // left would grade the ground behind it.
+//
+// Tapoo grades a cell by its visit count against its open-exit count, as its own prompt sets out:
+// `explored` is below that count, `backtracking` is equal to it - "this direction is spent" - and a dead
+// end goes to `backtracking` on its first visit and `oscillating` when it is entered again after that. So
+// an `oscillating` cell is one the run has already been through and exhausted, and a turn that enters only
+// such cells is withdrawing back out of a region it has finished with: a **retreat**. A turn that enters
+// cells still carrying unspent exits, gaining no ground by it, is **oscillating** between live options -
+// which is the rubric violation of the two, where the retreat is what the prompt asks for at a confirmed
+// dead end.
+//
+// Measured on the deepseek-v4-pro capture: 292 retreats against 7 oscillations over its 301 no-progress
+// turns, with 2 more left ungraded.
 function progressOf(
   entered: readonly string[],
   newCells: readonly string[],
@@ -332,12 +344,12 @@ function progressOf(
 
   const graded = entered.map((cell) => statuses?.get(cell));
   if (graded.some((status) => status === "oscillating")) {
-    return "oscillation";
-  }
-  // Every cell graded, and every grade one a retreat leaves behind it. A turn with an ungraded cell says
-  // so rather than joining whichever side happens to be reported next to it.
-  if (graded.every((status) => status === "backtracking" || status === "explored")) {
     return "retreat";
+  }
+  // Every cell graded, and every grade one that still had an exit to spend. A turn with an ungraded cell
+  // says so rather than joining whichever side happens to be reported next to it.
+  if (graded.every((status) => status === "backtracking" || status === "explored")) {
+    return "oscillation";
   }
 
   return "unclassified";

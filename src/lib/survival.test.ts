@@ -184,10 +184,15 @@ describe("survivalSeries", () => {
   // The split the budget cannot make. Both turns below cost one unit and enter no new cell; one is the
   // retreat the prompt asks for at a dead end, the other is the oscillation the rubric counts against a
   // run. A report that pooled them would call these two runs the same.
+  //
+  // Which is which follows Tapoo's own grading: a cell goes to `oscillating` only after a dead end has been
+  // entered again past exhaustion, so a turn into one is a withdrawal back out of finished ground. A turn
+  // into cells that still have an exit to spend, gaining nothing by it, is the dithering between live
+  // options that the rubric counts.
   it("splits a retreat from an oscillation, on turns charged the same", () => {
     const statuses = new Map([
-      [1, new Map([["0,0", "backtracking"]])],
-      [2, new Map([["0,1", "oscillating"]])],
+      [1, new Map([["0,0", "oscillating"]])],
+      [2, new Map([["0,1", "backtracking"]])],
     ])
     const outlook = must(seriesOf([
       // Out to a cell it had not entered, then back over its own ground twice - the same one unit each.

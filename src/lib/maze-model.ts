@@ -351,6 +351,29 @@ export function survivalVerdict(outlook: SurvivalOutlook | null): {text: string;
       };
 }
 
+/** finalScore reads the score the round ended on, or null where nothing stated one.
+ *
+ * The entry that closed the round states it, and an unfinished round has no such entry - so the fallback is
+ * the last turn that reported a score, which is Tapoo's own figure "after that outcome" for the last turn
+ * anything was reported for. Later turns that reported nothing cannot lower it and do not stand in for it.
+ *
+ * Null rather than 0 where no reading states one, because 0 is a score a round can genuinely end on: it is
+ * what the two rounds that ended at a standstill in the captures both recorded. */
+export function finalScore(levelModel: ReplayModel | null | undefined): number | null {
+  if (!levelModel) return null
+
+  const stated = levelModel.outcome?.score
+  if (typeof stated === "number" && Number.isFinite(stated)) return stated
+  if (typeof stated === "string" && stated.trim() !== "" && Number.isFinite(Number(stated))) return Number(stated)
+
+  for (let index = levelModel.turns.length - 1; index >= 0; index--) {
+    const score = levelModel.turns[index]?.score
+    if (typeof score === "number") return score
+  }
+
+  return null
+}
+
 /** mazeSurvivalRows reads the round against the maze's own budget: what it spent, what that left it, and
  * whether the destination was still inside what remained.
  *
@@ -477,7 +500,19 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
   if (tally.unreported > 0) parts.push(`${formatCount(tally.unreported)} unreported`);
 
   return [
-    {field: "Outcome", value: outcome.outcome ?? "unfinished"},
+    // The outcome with the score it ended on, which is the figure the game itself reports a round by. On
+    // its own the word says whether the round finished and nothing about how it went: two unfinished
+    // rounds, one stopped at 6,700 and one at 0, read identically without it.
+    //
+    // "final scores", plural, is Tapoo's own label for it and stays plural whatever the round holds.
+    {
+      field: "Outcome",
+      value: (() => {
+        const outcomeName = outcome.outcome ?? "unfinished"
+        const score = finalScore(levelModel)
+        return score === null ? outcomeName : `${outcomeName} (final scores: ${formatCount(score)})`
+      })(),
+    },
     {
       field: "Turns",
       value:

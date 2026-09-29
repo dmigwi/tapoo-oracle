@@ -261,6 +261,17 @@ export function groupEntriesByRound(entries: LogEntry[]): RoundGroup[] {
  * outcome should not have to build a rubric context to name the seats that played them.
  *
  * Seats are ordered by the seat the log stated, and by who acted first where it stated none. */
+// scoreFrom reads a stated score, which Tapoo writes as a number in a turn's outcome and as a numeric
+// string in some round-end entries. Null for anything else: a score that cannot be read is not a score of
+// zero, and "0" is a real score a round can end on.
+function scoreFrom(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string" || value.trim() === "") return null
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 export function agentsFromRound(
   rawSetupByTurn: ReadonlyMap<number, RawTurnSetup>,
   turns: readonly TurnSummary[],
@@ -640,6 +651,7 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       // capture's turn 47 is the case that separates them: its record names no moves and no charge, and
       // still reports the one unit that left the budget.
       decayRemaining: typeof record?.decayUnitsRemaining === "number" ? record.decayUnitsRemaining : null,
+      score: scoreFrom(record?.score),
       // The move that was refused, when one was: the first move past those that landed. This is the
       // wall the agent walked into, and it is the single most useful thing to draw on the grid.
       rejectedMove: typeof applied === "number" && applied < prediction.moves.length
@@ -679,6 +691,7 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       rejectedMove: null,
       decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
       decayRemaining: typeof replay.decayUnitsRemaining === "number" ? replay.decayUnitsRemaining : null,
+      score: scoreFrom(replay.score),
     })
     predicted.add(turn)
   }
@@ -701,6 +714,9 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       rejectedMove: null,
       decayCharged: null,
       decayRemaining: null,
+      // Nothing reported this turn at all - the request failed before Tapoo answered it - so there is no
+      // score to carry either.
+      score: null,
     })
   }
   turns.sort((left, right) => left.turn - right.turn)

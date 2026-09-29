@@ -69,7 +69,7 @@ describe("roundTotalsCheck", () => {
   const turn = (n: number, cells: CellKey[], applied: number, decay: number | null): TurnSummary => ({
     turn: n, seatId: null, playerName: "Kora", before: cells[0] ?? null, moves: ["MoveDown"] as Move[],
     submittedCount: 1, applied, cells, rejectedMove: null, traversalSpeed: null,
-    decayCharged: decay, decayRemaining: null,
+    decayCharged: decay, decayRemaining: null, score: null,
   })
   const walked = [turn(0, ["0,0", "1,0"], 1, 1), turn(1, ["1,0", "2,0"], 1, 1)]
   const totals = (over: Partial<Outcome> = {}): Outcome => ({
@@ -169,7 +169,7 @@ describe("roundTotalsCheck", () => {
 describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
     turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   })
 
   it("passes a round where each seat kept one player", () => {

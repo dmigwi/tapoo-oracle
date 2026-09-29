@@ -411,6 +411,10 @@ export type Replay = {
    * the vendored capture states a charge of 0 while this figure falls from 23 to 22. The log's own
    * subtraction is the one that decided the round. */
   decayUnitsRemaining?: number | null;
+  /** The score as of this turn's outcome. Tapoo's own tool description: "score is the current score after
+   * that outcome". Stated as a number here and as a numeric string in some round-end entries, so both are
+   * read and anything else is refused. */
+  score?: number | string | null;
   /** Where replay began: where the player stood *before* those moves applied. Tapoo's own tool
    * description warns against substituting currentCell here, which is where replay ended - doing so
    * makes an applied move look like it never happened. */
@@ -429,6 +433,9 @@ export type Outcome = {
   playerPosition?: {x?: number; y?: number};
   playerUniqueCellsVisited?: number;
   decayUnitsCharged?: number;
+  /** The final score, from the entry that closed the round. Absent from a round that never closed - an
+   * unfinished round has no end entry, so its last turn's reading is the only score there is. */
+  score?: number | string;
   /** Turns the round recorded. Used to check that a reading exists for every one of them before the
    * closing turn's charge is settled by subtraction. */
   turnCount?: number;
@@ -476,6 +483,12 @@ export type TurnSummary = {
    * report. Null, not the last figure carried forward: a budget nothing measured is not a budget that
    * stood still. */
   decayRemaining: number | null;
+  /** The score once this turn was charged, as the reading filed under this turn reports it.
+   *
+   * Null where no reading covers the turn, on the same terms as the budget above: a score nothing measured
+   * is not a score that stood still. The last turn that states one is the round's final score where the
+   * round never reached an end entry to state its own. */
+  score: number | null;
 };
 
 /** What one round of the maze game did: the maze's structure, the path walked through it, its turns,

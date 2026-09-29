@@ -23,8 +23,8 @@ const REAL_MAZE = {
 type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
   {
     turn: 2,
     seatId: null,
@@ -33,7 +33,7 @@ const TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   },
 ]
 
