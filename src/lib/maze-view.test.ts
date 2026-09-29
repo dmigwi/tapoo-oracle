@@ -924,11 +924,6 @@ describe("the per-seat metrics card", () => {
         "yroute efficiency - unique cells per applied move, lost to retracing. always <= 1",
         "bbatching - applied moves per turn, the only factor that can exceed 1",
         "aaccuracy - turns per decay unit, lost to penalties. always <= 1",
-        "decay ledgerslack + batched - error debt = headroom, in decay units. A round starts with one per cell",
-        "error debtunits charged beyond one per turn: what a run's mistakes cost it",
-        "batchedmoves earned past one a turn: cells entered for no extra charge",
-        "batch depthmoves per turn, over every turn played - beside the depth the route still needed",
-        "could not finishroute cells left over four per decay unit, the most any turn has ever entered",
         "%a share of the 3 cell entries the seats traversed between them",
       ])
   })
@@ -995,19 +990,22 @@ describe("the per-seat metrics card", () => {
 
 // What a run spent and whether it could still have finished, as a reader meets them: four cells beside
 // the speed decomposition and one sentence under the card.
-describe("the survival account on the card", () => {
-  const cellsOf = (node: ParentNode): Record<string, string> => {
-    const labels = queryAll<HTMLElement>(node, ".maze-agent-table th").map((cell) => cell.textContent ?? "")
-    const values = queryAll<HTMLElement>(node, ".maze-agent-table td").map((cell) => cell.textContent ?? "")
-    return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? ""]))
+describe("the survival table", () => {
+  // The panel by its heading, not by its position: the summary grows panels, and a test that counted them
+  // would pass for the wrong one.
+  const panelOf = (node: ParentNode): HTMLElement => {
+    const panel = queryAll<HTMLElement>(node, ".maze-summary-panel")
+      .find((one) => query<HTMLElement>(one, ".maze-summary-heading").textContent === "Survival")
+    return must(panel, "the Survival panel")
   }
-  const verdictOf = (node: ParentNode) => query<HTMLElement>(node, ".maze-agent-verdict")
-  // The two accounts under the card, read by their labels rather than by position.
-  const accountOf = (node: ParentNode): Record<string, string> => {
-    const labels = queryAll<HTMLElement>(node, ".maze-agent-account dt").map((one) => one.textContent ?? "")
-    const values = queryAll<HTMLElement>(node, ".maze-agent-account dd").map((one) => one.textContent ?? "")
-    return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? ""]))
+  const rowsOf = (node: ParentNode): Record<string, string> => {
+    const rows = queryAll<HTMLElement>(panelOf(node), ".maze-summary-table tbody tr")
+    return Object.fromEntries(rows.map((row) => [
+      query<HTMLElement>(row, "th, td").textContent ?? "",
+      queryAll<HTMLElement>(row, "td").at(-1)?.textContent ?? "",
+    ]))
   }
+  const verdictOf = (node: ParentNode) => query<HTMLElement>(node, ".maze-summary-verdict")
 
   // The capture's won round: every turn cost one unit, so it paid nothing for errors, and the two moves
   // it earned by batching are what carried it past the maze's own size.
@@ -1017,14 +1015,25 @@ describe("the survival account on the card", () => {
   }
 
   it("prints the ledger as three terms and the headroom they sum to", () => {
-    expect(accountOf(wonRound())["Decay ledger"]).toBe("+1 slack · +2 batched · 0 error debt → headroom +3")
+    expect(rowsOf(wonRound())["Decay ledger"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt \u2192 headroom +3")
   })
 
   // The depth beside the counts it is a ratio of, and beside the depth the route still demanded - the
   // claim the whole account is for: this run needed less than a move a turn and managed slightly more.
   it("prints the depth reached beside the depth the route needed", () => {
-    expect(accountOf(wonRound())["Batch depth"])
-      .toBe("1.0299 (69 moves / 67 turns) · needed 0.9857 (surplus 0.0441)")
+    expect(rowsOf(wonRound())["Batch depth"])
+      .toBe("1.0299 (69 moves / 67 turns) \u00b7 needed 0.9857 (surplus 0.0441)")
+  })
+
+  // Its own panel, and not a column on a seat's card: the budget is the maze's, so a reader looking for what
+  // the round cost finds it in one place however many seats played.
+  it("stands on its own rather than on a seat's card", () => {
+    const node = wonRound()
+
+    expect(queryAll(node, ".maze-agent-table th").map((one) => one.textContent))
+      .toEqual(["All cells", "Decay charged", "Decomposed Traversal speed", "Speed class"])
+    expect(Object.keys(rowsOf(node)))
+      .toEqual(["Point of no return", "Route coverage", "Decay ledger", "Batch depth", "No progress", "Pace warnings"])
   })
 
   it("says a run that finished was within reach throughout", () => {
@@ -1036,21 +1045,21 @@ describe("the survival account on the card", () => {
   })
 
   // A warning is not a verdict, and the two keep different words. This round was cut off by a provider
-  // failure with budget still unspent: its pace warnings fire, and the sentence under the card does not
-  // say it could not have finished.
+  // failure with budget still unspent: its pace warnings fire, and the verdict above them does not say it
+  // could not have finished.
   it("warns about pace without letting the warning become the verdict", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
     const node = build(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))
 
-    expect(query<HTMLElement>(node, ".maze-agent-warnings").textContent).toBe(
-      "Pace warnings: the target was further than the budget from turn 1 · " +
+    expect(rowsOf(node)["Pace warnings"]).toBe(
+      "the target was further than the budget from turn 1 \u00b7 " +
       "further than its own batching could reach from turn 0",
     )
     // The verdict beside them says the opposite, and says it in its own words.
     expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)
     expect(verdictOf(node).className).not.toContain("is-lost")
     // And the two moves the maze refused, which no status label reports as such.
-    expect(cellsOf(node)["No progress"]).toContain("2 refused a move")
+    expect(rowsOf(node)["No progress"]).toContain("2 refused a move")
   })
 
   // The verdict the rule exists for, on a round built to cross the line: one route cell left and no
@@ -1064,14 +1073,23 @@ describe("the survival account on the card", () => {
     expect(verdictOf(node).className).toContain("is-lost")
   })
 
-  // Nothing at all where the round stated no destination. There is no route to be out of reach of, and a
+  // Nothing measured where the round stated no destination. There is no route to be out of reach of, and a
   // reassurance drawn from no route would be the worst of the three things this could say.
-  it("says nothing about reach where the round stated no destination", () => {
+  it("records nothing about reach where the round stated no destination", () => {
     const node = build({...level(), destinationCell: null})
 
-    expect(queryAll(node, ".maze-agent-verdict")).toHaveLength(0)
-    expect(queryAll(node, ".maze-agent-warnings")).toHaveLength(0)
-    // No route, so no account either: the terms are measured against the maze a route crosses.
-    expect(queryAll(node, ".maze-agent-account")).toHaveLength(0)
+    expect(queryAll(node, ".maze-summary-verdict")).toHaveLength(0)
+    // Every row present and every one saying the same thing: the panel keeps its shape, and no cell of it
+    // reads as a measurement that was taken.
+    expect(Object.values(rowsOf(node))).toEqual(Array.from({length: 6}, () => "not recorded"))
+  })
+
+  // The key under the table, once: the rows print "error debt" and "+2 batched", and neither means anything
+  // to a reader who has not been told what a decay unit is.
+  it("glosses its own terms under the table", () => {
+    const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
+
+    expect(queryAll(key, ".maze-agent-symbol").map((one) => one.textContent))
+      .toEqual(["decay ledger", "error debt", "batched", "batch depth", "could not finish"])
   })
 })

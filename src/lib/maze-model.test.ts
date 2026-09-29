@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 
-import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
+import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -468,16 +468,16 @@ describe("agentsFromRound", () => {
     )
 
     expect(routeCells(won)).toHaveLength(70)
-    expect(value(mazeLevelRows(won), "Route coverage")).toBe("70 of 70 route cells (100%)")
+    expect(value(mazeSurvivalRows(won), "Route coverage")).toBe("70 of 70 route cells (100%)")
     // The round that was cut off had entered under a quarter of it.
-    expect(value(mazeLevelRows(stopped), "Route coverage")).toBe("16 of 70 route cells (23%)")
+    expect(value(mazeSurvivalRows(stopped), "Route coverage")).toBe("16 of 70 route cells (23%)")
   })
 
   it("measures no coverage where the round stated no destination", () => {
     const model = must(mazeReplayModel({...level(), destinationCell: null}), "a model")
 
     expect(routeCells(model)).toBeNull()
-    expect(value(mazeLevelRows(model), "Route coverage")).toBe("not recorded")
+    expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("not recorded")
   })
 
   // What the won round spent, in the unit it was scored in: every turn cost one unit, so it paid nothing
@@ -486,19 +486,19 @@ describe("agentsFromRound", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
     const model = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
 
-    expect(survivalLedgerFor(model, 0)).toMatchObject({errorDebt: 0, routeSlack: 1, batchCredit: 2, headroom: 3})
+    expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, routeSlack: 1, batchCredit: 2, headroom: 3})
     // It needed less than a move a turn and managed slightly more.
-    expect(survivalLedgerFor(model, 0)!.neededDepth).toBeCloseTo(69 / 70, 12)
-    expect(survivalLedgerFor(model, 0)!.batchDepth).toBeCloseTo(69 / 67, 12)
+    expect(survivalLedgerFor(model)!.neededDepth).toBeCloseTo(69 / 70, 12)
+    expect(survivalLedgerFor(model)!.batchDepth).toBeCloseTo(69 / 67, 12)
   })
 
   // A run that finished is never flagged, and a run that was cut off short of the target is not thereby
   // a run that could not finish: the warnings fire, the verdict does not.
   it("flags nothing on the won round, and warns without a verdict on the stopped one", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
-    const won = must(survivalOutlookFor(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), 0), "an outlook")
+    const won = must(survivalOutlookFor(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round"))), "an outlook")
     const stopped = must(
-      survivalOutlookFor(mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round")), 0),
+      survivalOutlookFor(mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))),
       "an outlook",
     )
 
@@ -533,20 +533,25 @@ describe("agentsFromRound", () => {
       ]})), "a model")
 
       // Three cells walked, two of them on the route.
-      expect(value(mazeLevelRows(model), "Route coverage")).toBe(`2 of ${route.length} route cells (11%)`)
+      expect(value(mazeSurvivalRows(model), "Route coverage")).toBe(`2 of ${route.length} route cells (11%)`)
     })
 
-    // A seat's outlook is its own. Feeding it another seat's turns would credit it with ground it never
-    // covered and a budget it never spent.
-    it("reads one seat's turns and not the other's", () => {
+    // Two seats, one maze, one account. The budget is the maze's and the route is covered by whoever walks
+    // it, so a second seat continues the first's run rather than starting a run of its own - and the ledger
+    // adds what both were charged against the one budget they drew it from.
+    it("reads every seat's turns as one run against the maze", () => {
       const model = must(mazeReplayModel(level({turns: [
         turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"]}),
         turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"]}),
       ]})), "a model")
 
       expect(model.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
-      expect(must(survivalOutlookFor(model, 0), "Katara's outlook").series.map((one) => one.turn)).toEqual([0])
-      expect(must(survivalOutlookFor(model, 1), "Bumi's outlook").series.map((one) => one.turn)).toEqual([1])
+      const outlook = must(survivalOutlookFor(model), "the round's outlook")
+      expect(outlook.series.map((one) => one.turn)).toEqual([0, 1])
+      // Three cells between them, all on the route, and neither seat counted twice.
+      expect(outlook.visitedRouteCells).toBe(3)
+      expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
+      expect(roundPlayed(model)).toEqual({turnsTaken: 2, movesApplied: 2, movesUnreported: 0})
     })
 
     // A wall is a move the maze refused. A command it could not read is the model spelling a move wrong,
@@ -558,7 +563,7 @@ describe("agentsFromRound", () => {
         turnOf({turn: 1, before: "1,0", moves: ["MoveDown", "MoveUp"] as Move[], submittedCount: 2, applied: 1, cells: ["1,0", "2,0"]}),
       ]})), "a model")
 
-      expect(must(survivalOutlookFor(model, 0), "an outlook").series.map((one) => one.wallContact)).toEqual([false, true])
+      expect(must(survivalOutlookFor(model), "an outlook").series.map((one) => one.wallContact)).toEqual([false, true])
     })
   })
 
