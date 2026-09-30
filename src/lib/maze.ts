@@ -11,7 +11,7 @@
 //
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
-import {MOVES, getCellKey, isMove, stepFrom} from "./geometry";
+import {MOVES, OPPOSITE_MOVES, getCellKey, isMove, stepFrom} from "./geometry";
 import {fnv1a64Checksum} from "./utils";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeRoutes, MazeStats, Move, OpenCellExits, Result} from "./types";
 
@@ -181,7 +181,7 @@ function mazeFromDecodedGrid(
 // --- Reading the maze ---
 
 /** routeToDestination walks the maze breadth-first **from the destination**, and keeps both what it
- * measured and how it got there: every cell's distance, and the step that cell should take next.
+ * measured and how it got there: every cell's distance, and the next neighbour along a move nearer.
  *
  * Outward from the destination rather than inward from a start, because every cell needs an answer.
  * A seat's distance changes each turn and a report asks for it at every one of them, so one walk that
@@ -198,8 +198,8 @@ export function routeToDestination(maze: Maze, destination: CellKey | null | und
     return null;
   }
 
-  const distances = new Map<CellKey, number>([[destination, 0]]);
-  const next = new Map<CellKey, CellKey>();
+  const distanceFromDestination = new Map<CellKey, number>([[destination, 0]]);
+  const nextNeighbour = new Map<CellKey, Move>();
   const queue: CellKey[] = [destination];
   // An index rather than shift(): shift() is linear in the queue, so a 600-cell maze pays for the
   // whole queue on every cell it visits. The queue is never re-read behind the cursor.
@@ -207,22 +207,23 @@ export function routeToDestination(maze: Maze, destination: CellKey | null | und
     // The loop condition guarantees an element; the assertion states that rather than widening the
     // type to include undefined at every use below.
     const cell = queue[cursor]!;
-    const distance = distances.get(cell)!;
+    const distance = distanceFromDestination.get(cell)!;
     for (const move of maze.exits.get(cell) ?? []) {
       const neighbour = stepFrom(cell, move);
-      if (!maze.exits.has(neighbour) || distances.has(neighbour)) {
+      if (!maze.exits.has(neighbour) || distanceFromDestination.has(neighbour)) {
         continue;
       }
 
-      distances.set(neighbour, distance + 1);
-      // The cell that discovered this one is the one step nearer the destination, so it is also the
-      // way out of it. Following `next` from any cell walks the route the maze admits.
-      next.set(neighbour, cell);
+      distanceFromDestination.set(neighbour, distance + 1);
+      // The cell that discovered this one is the one step nearer the destination, so the way out of the
+      // neighbour is the move that undoes the one that reached it. Held as the move rather than the cell:
+      // a cell key is derivable from a cell and a move, and the move is the smaller of the two facts.
+      nextNeighbour.set(neighbour, OPPOSITE_MOVES[move]);
       queue.push(neighbour);
     }
   }
 
-  return {distances, next};
+  return {distanceFromDestination, nextNeighbour};
 }
 
 /** routeFrom reads the ordered cells from one cell to the destination, that cell and the destination
@@ -231,39 +232,27 @@ export function routeToDestination(maze: Maze, destination: CellKey | null | und
  * The list, not just its length: a coverage figure asks which cells are on the route, and a verdict
  * asks how many of them are still unvisited. Both need the cells themselves. */
 export function routeFrom(routes: MazeRoutes, cell: CellKey | null | undefined): CellKey[] | null {
-  if (!cell || !routes.distances.has(cell)) {
+  if (!cell || !routes.distanceFromDestination.has(cell)) {
     return null;
   }
 
   const route: CellKey[] = [cell];
-  // Bounded by the distance it started from, which falls by one at every step - a tree admits no loop
-  // for this to walk forever in, and the bound says so without trusting that.
-  for (let step = routes.next.get(cell); step !== undefined; step = routes.next.get(step)) {
-    route.push(step);
+  // Each step rebuilds the neighbour from the cell it is standing on and the move stored for it, rather
+  // than reading a neighbour the walk saved: two facts that could drift apart are one fact that cannot.
+  //
+  // Bounded by the distance it started from, which falls by one at every step - a tree admits no loop for
+  // this to walk forever in, and the bound says so without trusting that.
+  let standing = cell;
+  for (
+    let move = routes.nextNeighbour.get(standing);
+    move !== undefined;
+    move = routes.nextNeighbour.get(standing)
+  ) {
+    standing = stepFrom(standing, move);
+    route.push(standing);
   }
 
   return route;
-}
-
-/** successPathLength returns the fewest **moves** between two cells, or null when no route exists -
- * the shortest run a player could make without a wasted step.
- *
- * Moves, not cells: the start cell is distance 0, so a route of N moves passes through N + 1 cells.
- * A caller presenting this beside a cell count has to add one or say "moves".
- *
- * A lookup into the walk above rather than a walk of its own, so the two cannot disagree about what
- * the shortest route is. */
-export function successPathLength(
-  maze: Maze,
-  fromCell: CellKey | null | undefined,
-  toCell: CellKey | null | undefined,
-): number | null {
-  const routes = routeToDestination(maze, toCell);
-  if (!routes || !fromCell) {
-    return null;
-  }
-
-  return routes.distances.get(fromCell) ?? null;
 }
 
 // mazeStats summarizes the shape of the maze itself, independently of how the agent played it.
@@ -306,7 +295,7 @@ function mazeStats(
     // count, so a move count there is one short in both the figure and its percentage. Converted here
     // rather than at the view, so every reader of the stat gets the same unit.
     successPathCells: (() => {
-      const moves = startCell && routes ? routes.distances.get(startCell) : undefined;
+      const moves = startCell && routes ? routes.distanceFromDestination.get(startCell) : undefined;
       return moves === undefined ? null : moves + 1;
     })(),
   };

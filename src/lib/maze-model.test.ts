@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
+import {routeFrom} from "./maze"
 
-import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, routeCells, survivalLedgerFor, survivalOutlookFor, survivalVerdict} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, survivalLedgerFor, survivalOutlookFor, survivalVerdict} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -556,7 +557,7 @@ describe("agentsFromRound", () => {
       "a model",
     )
 
-    expect(routeCells(won)).toHaveLength(70)
+    expect(must(survivalOutlookFor(won), "an outlook").routeCells).toBe(70)
     expect(value(mazeSurvivalRows(won), "Route coverage")).toBe("70 of 70 route cells (100%)")
     // The round that was cut off had entered under a quarter of it.
     expect(value(mazeSurvivalRows(stopped), "Route coverage")).toBe("16 of 70 route cells (23%)")
@@ -565,7 +566,7 @@ describe("agentsFromRound", () => {
   it("measures no coverage where the round stated no destination", () => {
     const model = must(mazeReplayModel({...level(), destinationCell: null}), "a model")
 
-    expect(routeCells(model)).toBeNull()
+    expect(survivalOutlookFor(model)).toBeNull()
     expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("not recorded")
   })
 
@@ -611,7 +612,8 @@ describe("agentsFromRound", () => {
     // Coverage counts the cells of the route, not the cells walked: a round that wandered off it covers
     // less of the route than it entered cells.
     it("counts only the cells of the route, not every cell walked", () => {
-      const route = must(routeCells(must(mazeReplayModel(level()), "a model")), "a route")
+      const built = must(mazeReplayModel(level()), "a model")
+      const route = must(routeFrom(must(built.routes, "routes"), built.startCell), "a route")
       const offRoute = must(
         [...Array(24).keys()].map((index) => `${Math.floor(index / 6)},${index % 6}`).find((cell) => !route.includes(cell)),
         "a cell off the route",

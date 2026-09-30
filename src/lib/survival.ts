@@ -121,7 +121,7 @@ export type SurvivalFlags = {
 /** survivalFlags reads one turn's position against the budget it has left.
  *
  * `unvisitedRoute` is the route cells the round has still not entered; `decayLeft` is the units it has
- * left to spend; `distanceToTarget` is how far along the route it stands; `batchDepth` is the depth it
+ * left to spend; `distanceToDestination` is how far along the route it stands; `batchDepth` is the depth it
  * has been averaging.
  *
  * The verdict is `U > 4u`, and it is monotone by construction: `U` falls by at most four per turn - see
@@ -137,12 +137,12 @@ export type SurvivalFlags = {
 export function survivalFlags({
   unvisitedRoute,
   decayLeft,
-  distanceToTarget,
+  distanceToDestination,
   batchDepth,
 }: {
   unvisitedRoute: number;
   decayLeft: number | null;
-  distanceToTarget: number | null;
+  distanceToDestination: number | null;
   batchDepth: number | null;
 }): SurvivalFlags {
   if (decayLeft === null) {
@@ -152,9 +152,9 @@ export function survivalFlags({
   return {
     lost: unvisitedRoute > NEW_CELLS_PER_TURN_CAP * decayLeft,
     behindObservedPace: unvisitedRoute > FASTEST_SUSTAINED_PACE * decayLeft,
-    beyondDecayLeft: distanceToTarget !== null && distanceToTarget > decayLeft,
+    beyondDecayLeft: distanceToDestination !== null && distanceToDestination > decayLeft,
     beyondOwnPace:
-      distanceToTarget !== null && batchDepth !== null && distanceToTarget > batchDepth * decayLeft,
+      distanceToDestination !== null && batchDepth !== null && distanceToDestination > batchDepth * decayLeft,
   };
 }
 
@@ -179,8 +179,12 @@ export type SurvivalTurn = SurvivalFlags & {
   /** Route cells nobody had entered once this turn ended - the monotone quantity. */
   unvisitedRoute: number;
   decayLeft: number | null;
-  /** Route distance from the cell it stood on. Diagnostic: a retreat cuts it, so it is never a verdict. */
-  distanceToTarget: number | null;
+  /** Route moves from the cell this turn left the round standing on to the destination - the same figure
+   * `MazeRoutes.distanceFromDestination` holds for that cell, read from where the round now stands.
+   *
+   * Diagnostic only: a retreat cuts it for one decay unit, so a rule built on it switches off again and it
+   * is never a verdict. */
+  distanceToDestination: number | null;
   progress: TurnProgress;
   /** The maze refused a move this turn could otherwise have made. */
   wallContact: boolean;
@@ -222,8 +226,8 @@ export type SurvivalInputTurn = {
 
 /** survivalSeries walks a round's turns in order and reports where each left it.
  *
- * `route` is the ordered cells from the round's start to the destination, `distances` every cell's moves
- * from the destination, `statusesAt` the grades Tapoo put on cells as of a turn, and `batchDepth` the
+ * `route` is the ordered cells from the round's start to the destination, `distanceFromDestination` every
+ * cell's moves from it, `statusesAt` the grades Tapoo put on cells as of a turn, and `batchDepth` the
  * depth the round averaged - the one figure here that describes the whole run rather than a turn.
  *
  * Every turn of the round, whoever played it: one budget is drawn down by whoever moves, and a route cell
@@ -231,21 +235,25 @@ export type SurvivalInputTurn = {
  * one of its own.
  *
  * Null where there is no route to measure against: a round that stated no destination has no unvisited
- * route to count, and a round with no turns has nothing to say. Neither is a run that was doing fine. */
+ * route to count, and that is not a run that was doing fine.
+ *
+ * A round with no turns is not null, though. It covered none of the route, which is a measurement and reads
+ * as one - where "not recorded" belongs to the round whose route was never computed. Its series is empty,
+ * so every finding below refuses for want of a reading rather than answering. */
 export function survivalSeries({
   turns,
   route,
-  distances,
+  distanceFromDestination,
   statusesAt,
   batchDepth,
 }: {
   turns: readonly SurvivalInputTurn[];
   route: readonly string[] | null;
-  distances: ReadonlyMap<string, number>;
+  distanceFromDestination: ReadonlyMap<string, number>;
   statusesAt: (turn: number) => ReadonlyMap<string, string> | undefined;
   batchDepth: number | null;
 }): SurvivalOutlook | null {
-  if (!route || route.length === 0 || turns.length === 0) {
+  if (!route || route.length === 0) {
     return null;
   }
 
@@ -286,13 +294,13 @@ export function survivalSeries({
       turn: turn.turn,
       unvisitedRoute,
       decayLeft: turn.decayRemaining,
-      distanceToTarget: cell === undefined ? null : distances.get(cell) ?? null,
+      distanceToDestination: cell === undefined ? null : distanceFromDestination.get(cell) ?? null,
       progress,
       wallContact,
       ...survivalFlags({
         unvisitedRoute,
         decayLeft: turn.decayRemaining,
-        distanceToTarget: cell === undefined ? null : distances.get(cell) ?? null,
+        distanceToDestination: cell === undefined ? null : distanceFromDestination.get(cell) ?? null,
         batchDepth,
       }),
     });

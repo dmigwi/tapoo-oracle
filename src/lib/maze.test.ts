@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, routeFrom, routeToDestination, successPathLength} from "./maze"
+import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, routeFrom, routeToDestination} from "./maze"
 import {expectErr, expectOk, must} from "./test-support";
 
 // The exact maze block from a real Tapoo export (v2.5.1, 6x4). Using the shipped bytes rather than a
@@ -95,30 +95,6 @@ describe("mazeFromEncoded", () => {
   })
 })
 
-describe("successPathLength", () => {
-  const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
-
-  it("is zero between a cell and itself", () => {
-    expect(successPathLength(maze, START, START)).toBe(0)
-  })
-
-  it("is null for a cell outside the maze", () => {
-    expect(successPathLength(maze, START, "99,99")).toBeNull()
-  })
-
-  // The two units, pinned against each other. successPathLength counts moves - a cell to itself is
-  // zero of them - while the stat the report displays counts the cells those moves pass through, which
-  // is one more. The report prints it beside the maze's cell count, so a move count there understates
-  // both the figure and its coverage percentage by exactly one cell.
-  it("is one move fewer than the cells the stat counts", () => {
-    const {stats} = expectOk(mazeFromEncoded(REAL_MAZE, {startCell: START, destinationCell: DESTINATION}))
-    const moves = successPathLength(maze, START, DESTINATION)
-
-    expect(moves).not.toBeNull()
-    expect(stats.successPathCells).toBe((moves as number) + 1)
-  })
-})
-
 describe("cellFromGridPoint", () => {
   it.each([
     [{ x: 1, y: 1 }, "0,0"],
@@ -142,9 +118,9 @@ describe("routeToDestination", () => {
   it("measures the destination as zero moves from itself", () => {
     const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
 
-    expect(routes.distances.get(DESTINATION)).toBe(0)
+    expect(routes.distanceFromDestination.get(DESTINATION)).toBe(0)
     // And it is the one cell with nowhere further to step.
-    expect(routes.next.has(DESTINATION)).toBe(false)
+    expect(routes.nextNeighbour.has(DESTINATION)).toBe(false)
   })
 
   // Every cell, not the reachable few: the maze is a spanning tree, so a cell missing from this would be
@@ -152,7 +128,7 @@ describe("routeToDestination", () => {
   it("answers for every cell of the maze", () => {
     const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
 
-    expect(routes.distances.size).toBe(maze.exits.size)
+    expect(routes.distanceFromDestination.size).toBe(maze.exits.size)
   })
 
   // The distance is the route's, not the grid's. "0,3" sits two columns from the destination on the same
@@ -161,8 +137,8 @@ describe("routeToDestination", () => {
   it("measures along the maze rather than across the grid", () => {
     const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
 
-    expect(routes.distances.get("0,3")).toBe(10)
-    expect(routes.distances.get(START)).toBe(17)
+    expect(routes.distanceFromDestination.get("0,3")).toBe(10)
+    expect(routes.distanceFromDestination.get(START)).toBe(17)
   })
 
   it("has no routes where the round stated no destination", () => {
@@ -176,7 +152,7 @@ describe("routeToDestination", () => {
     const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
     const {stats} = expectOk(mazeFromEncoded(REAL_MAZE, {startCell: START, destinationCell: DESTINATION}))
 
-    expect(stats.successPathCells).toBe(must(routes.distances.get(START), "the start's distance") + 1)
+    expect(stats.successPathCells).toBe(must(routes.distanceFromDestination.get(START), "the start's distance") + 1)
   })
 })
 
@@ -195,7 +171,7 @@ describe("routeFrom", () => {
     expect(route).toHaveLength(18)
     // Every step is a move the maze allows, and every cell is one nearer than the last.
     for (const [index, cell] of route.entries()) {
-      expect(routes.distances.get(cell)).toBe(route.length - 1 - index)
+      expect(routes.distanceFromDestination.get(cell)).toBe(route.length - 1 - index)
     }
   })
 

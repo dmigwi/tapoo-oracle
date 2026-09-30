@@ -21,6 +21,19 @@ export const MOVES: Record<Move, readonly [number, number]> = {
   MoveRight: [0, 1],
 };
 
+/** OPPOSITE_MOVES names the move that undoes each one, so `stepFrom(stepFrom(cell, move),
+ * OPPOSITE_MOVES[move])` is `cell` again.
+ *
+ * A walk that discovers a cell holds the move that got there; a reader standing on that cell wants the one
+ * back. Stated as a table rather than derived from MOVES' negated delta, because the four pairings are the
+ * whole of it and a table cannot disagree with itself about a sign. */
+export const OPPOSITE_MOVES: Record<Move, Move> = {
+  MoveUp: "MoveDown",
+  MoveDown: "MoveUp",
+  MoveLeft: "MoveRight",
+  MoveRight: "MoveLeft",
+};
+
 /** isMove narrows a string out of a log to a command the maze can actually apply.
  *
  * This guard is why stepFrom can take a Move rather than a string. A log's openMoves field is prose

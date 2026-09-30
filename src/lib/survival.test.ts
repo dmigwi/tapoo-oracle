@@ -81,8 +81,8 @@ describe("decayLedger", () => {
 })
 
 describe("survivalFlags", () => {
-  const flagsFor = (unvisitedRoute: number, decayLeft: number | null, over: {distanceToTarget?: number | null; batchDepth?: number | null} = {}) =>
-    survivalFlags({unvisitedRoute, decayLeft, distanceToTarget: null, batchDepth: null, ...over})
+  const flagsFor = (unvisitedRoute: number, decayLeft: number | null, over: {distanceToDestination?: number | null; batchDepth?: number | null} = {}) =>
+    survivalFlags({unvisitedRoute, decayLeft, distanceToDestination: null, batchDepth: null, ...over})
 
   // The boundary is where the rule is: at exactly four cells per unit the run can still finish, and one
   // cell more is what it cannot.
@@ -100,7 +100,7 @@ describe("survivalFlags", () => {
   // unit spent, so a verdict reading distance would fire and then switch off again as the seat walks
   // back out; the route cells it has not entered cannot fall when it retraces ground it already covered.
   it("never lets distance decide whether a run is lost", () => {
-    const stranded = flagsFor(1, 10, {distanceToTarget: 500, batchDepth: 1})
+    const stranded = flagsFor(1, 10, {distanceToDestination: 500, batchDepth: 1})
 
     expect(stranded.lost).toBe(false)
     expect(stranded.behindObservedPace).toBe(false)
@@ -110,17 +110,17 @@ describe("survivalFlags", () => {
   })
 
   it("reads distance against the budget and against the run's own depth", () => {
-    expect(flagsFor(1, 10, {distanceToTarget: 10}).beyondDecayLeft).toBe(false)
-    expect(flagsFor(1, 10, {distanceToTarget: 11}).beyondDecayLeft).toBe(true)
+    expect(flagsFor(1, 10, {distanceToDestination: 10}).beyondDecayLeft).toBe(false)
+    expect(flagsFor(1, 10, {distanceToDestination: 11}).beyondDecayLeft).toBe(true)
     // A run batching two moves a turn reaches twice as far on the same budget.
-    expect(flagsFor(1, 10, {distanceToTarget: 20, batchDepth: 2}).beyondOwnPace).toBe(false)
-    expect(flagsFor(1, 10, {distanceToTarget: 21, batchDepth: 2}).beyondOwnPace).toBe(true)
+    expect(flagsFor(1, 10, {distanceToDestination: 20, batchDepth: 2}).beyondOwnPace).toBe(false)
+    expect(flagsFor(1, 10, {distanceToDestination: 21, batchDepth: 2}).beyondOwnPace).toBe(true)
   })
 
   // An unmeasured budget is not a finding. The capture has a turn like this - the one that won, which no
   // later request exists to report - and a run is not lost because its last turn went unreported.
   it("finds nothing where the budget was never reported", () => {
-    expect(flagsFor(500, null, {distanceToTarget: 500, batchDepth: 1})).toEqual({
+    expect(flagsFor(500, null, {distanceToDestination: 500, batchDepth: 1})).toEqual({
       lost: false,
       behindObservedPace: false,
       beyondDecayLeft: false,
@@ -134,12 +134,12 @@ describe("survivalFlags", () => {
   it("stays lost once lost, at the fastest discovery any turn has managed", () => {
     let unvisitedRoute = 4 * 12 + 1
     let decayLeft = 12
-    expect(survivalFlags({unvisitedRoute, decayLeft, distanceToTarget: null, batchDepth: null}).lost).toBe(true)
+    expect(survivalFlags({unvisitedRoute, decayLeft, distanceToDestination: null, batchDepth: null}).lost).toBe(true)
 
     while (decayLeft > 0) {
       unvisitedRoute = Math.max(0, unvisitedRoute - NEW_CELLS_PER_TURN_CAP)
       decayLeft -= 1
-      expect(survivalFlags({unvisitedRoute, decayLeft, distanceToTarget: null, batchDepth: null}).lost).toBe(true)
+      expect(survivalFlags({unvisitedRoute, decayLeft, distanceToDestination: null, batchDepth: null}).lost).toBe(true)
     }
   })
 })
@@ -158,7 +158,7 @@ describe("survivalSeries", () => {
     survivalSeries({
       turns,
       route: ROUTE,
-      distances: DISTANCES,
+      distanceFromDestination: DISTANCES,
       statusesAt: (at) => over.statuses?.get(at),
       batchDepth: over.batchDepth ?? null,
     })
@@ -178,7 +178,7 @@ describe("survivalSeries", () => {
   it("measures the distance from the cell each turn left it standing on", () => {
     const outlook = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1", "0,2"], applied: 2, applicable: 2})]), "an outlook")
 
-    expect(outlook.series[0]?.distanceToTarget).toBe(3)
+    expect(outlook.series[0]?.distanceToDestination).toBe(3)
   })
 
   // The split the budget cannot make. Both turns below cost one unit and enter no new cell; one is the
@@ -259,7 +259,19 @@ describe("survivalSeries", () => {
   })
 
   it("has nothing to say about a round that stated no destination", () => {
-    expect(survivalSeries({turns: [turn({turn: 0})], route: null, distances: DISTANCES, statusesAt: () => undefined, batchDepth: null})).toBeNull()
-    expect(seriesOf([])).toBeNull()
+    expect(survivalSeries({turns: [turn({turn: 0})], route: null, distanceFromDestination: DISTANCES, statusesAt: () => undefined, batchDepth: null})).toBeNull()
+  })
+
+  // A round that took no turn is not a round with no route. It covered none of the route, which is a
+  // measurement and reads as one - and every finding over an empty series refuses for want of a reading,
+  // so none of them can claim the destination stayed in reach.
+  it("measures a round that took no turn as having covered none of the route", () => {
+    const outlook = must(seriesOf([]), "an outlook")
+
+    expect(outlook.routeCells).toBe(6)
+    expect(outlook.visitedRouteCells).toBe(0)
+    expect(outlook.series).toEqual([])
+    expect(outlook.budgetTurns).toBe(0)
+    expect(outlook.lostFrom).toBeNull()
   })
 })

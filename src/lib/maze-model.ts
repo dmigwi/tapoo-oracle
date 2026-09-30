@@ -55,18 +55,12 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
   };
 }
 
-/** routeCells reads the round's start-to-destination route, or null where there is none to read.
- *
- * From the walk mazeFromEncoded already did, so nothing here searches the maze a second time. Null where
- * the round stated no destination, where the maze did not decode, or where the start is not on it. */
-export function routeCells(model: ReplayModel | null | undefined): CellKey[] | null {
-  if (!model?.routes) return null
-
-  return routeFrom(model.routes, model.startCell)
-}
-
-/** survivalOutlookFor reads the round's run against that route: what the maze had still to be entered,
+/** survivalOutlookFor reads the round against its route: the route itself, what of it the round entered,
  * what budget was left, and the first turn from which the destination was already out of reach.
+ *
+ * It walks the route here rather than leaving that to a caller, because every answer it gives is measured
+ * against the route and a second reading of it could only disagree with this one. The walk is a lookup into
+ * the breadth-first pass mazeFromEncoded already made, so nothing searches the maze twice.
  *
  * Per round, not per seat, because every term in it belongs to the maze. The decay budget is the round's -
  * one pool, capped at the maze's cell count, that every active agent spends from - and a route cell a seat
@@ -76,8 +70,10 @@ export function routeCells(model: ReplayModel | null | undefined): CellKey[] | n
  *
  * Null where there is no route to measure against, or where the round played no turn. */
 export function survivalOutlookFor(model: ReplayModel | null | undefined): SurvivalOutlook | null {
-  const route = routeCells(model)
-  if (!model?.routes || !route) return null
+  if (!model?.routes) return null
+
+  const route = routeFrom(model.routes, model.startCell)
+  if (!route) return null
 
   const ledger = survivalLedgerFor(model)
   return survivalSeries({
@@ -91,7 +87,7 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
       decayRemaining: turn.decayRemaining,
     })),
     route,
-    distances: model.routes.distances,
+    distanceFromDestination: model.routes.distanceFromDestination,
     statusesAt: (turn) => model.visitStatusAfterTurn.get(turn),
     batchDepth: ledger?.batchDepth ?? null,
   })
@@ -400,15 +396,10 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     {
       field: "Route coverage",
       value: (() => {
-        const route = routeCells(levelModel)
-        if (!route) return "not recorded"
+        if (!outlook) return "not recorded"
 
-        // From the route and the cells walked rather than from the outlook, which declines a round with no
-        // turns. A round that has a route and walked none of it covered none of it, and 0 of 70 is the
-        // measurement - where "not recorded" belongs to the round whose route was never computed.
-        const walked = new Set(levelModel.turns.flatMap((turn) => turn.cells))
-        const covered = route.filter((cell) => walked.has(cell)).length
-        return `${formatCount(covered)} of ${formatCount(route.length)} route cells (${Math.round((covered / route.length) * 100)}%)`
+        const {visitedRouteCells: covered, routeCells: length} = outlook
+        return `${formatCount(covered)} of ${formatCount(length)} route cells (${Math.round((covered / length) * 100)}%)`
       })(),
     },
     // What the round spent, in the one unit that measures a maze: a round opens with a decay unit per cell
@@ -469,7 +460,7 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
         const warnings = [
           outlook.beyondDecayLeftFrom === null
             ? ""
-            : `the target was further than the budget from turn ${formatCount(outlook.beyondDecayLeftFrom)}`,
+            : `the destination was further than the budget from turn ${formatCount(outlook.beyondDecayLeftFrom)}`,
           outlook.beyondOwnPaceFrom === null
             ? ""
             : `further than its own batching could reach from turn ${formatCount(outlook.beyondOwnPaceFrom)}`,

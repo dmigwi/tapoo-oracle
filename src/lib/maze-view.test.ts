@@ -1052,7 +1052,7 @@ describe("the survival table", () => {
     const node = build(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))
 
     expect(rowsOf(node)["Pace warnings"]).toBe(
-      "the target was further than the budget from turn 1 \u00b7 " +
+      "the destination was further than the budget from turn 1 \u00b7 " +
       "further than its own batching could reach from turn 0",
     )
     // The verdict beside them says the opposite, and says it in its own words.

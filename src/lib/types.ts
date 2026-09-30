@@ -224,8 +224,9 @@ export type Maze = {rows: number; cols: number; exits: OpenCellExits};
 /** Structural counts over a decoded maze.
  *
  * `successPathCells` counts **cells** on the shortest start-to-destination route, start and destination
- * included - one more than the move count `successPathLength` returns, and the unit the report compares
- * against `cells`. Null when no route exists in the decoded structure, which is a finding, not a zero. */
+ * included - one more than the start's `MazeRoutes.distanceFromDestination`, and the unit the report
+ * compares against `cells`. Null when no route exists in the decoded structure, which is a finding, not a
+ * zero. */
 export type MazeStats = {
   rows: number;
   cols: number;
@@ -239,22 +240,29 @@ export type MazeStats = {
   successPathCells: number | null;
 };
 
-/** Every cell's way to the destination, from one walk outward from it.
+/** Every cell's way to the destination, from one walk outward from it. Both maps are keyed by the cell a
+ * reader is standing on and answer for it - the distance it stands at, and the neighbour it moves to.
  *
- * `distances` is moves, not cells, matching successPathLength: the destination is 0 and each step out
- * adds one. A cell absent from it is a cell no route reaches, which on an intact maze cannot happen -
+ * `distanceFromDestination` values are moves, not cells: the destination is 0 and each step out adds one,
+ * so a route of N moves passes through N + 1 cells - which is the unit `MazeStats.successPathCells`
+ * converts to. A cell absent from it is a cell no route reaches, which on an intact maze cannot happen:
  * the structure is a spanning tree and the acyclicity proof in mazeFromEncoded says so.
  *
- * `next` is the cell to step to from here, so a route is read by following it. That is what makes the
- * single walk enough for every cell: on a tree the first arrival is the only arrival, so the cell that
- * discovered this one is the one step nearer the destination, and no later path can beat it.
+ * `nextNeighbour` values are the move from the key to the one neighbouring cell whose
+ * `distanceFromDestination` is a move lower - a step to take, never a landmark to head for - so a route is
+ * read by looking up the cell you are on, applying the move it gives you with `stepFrom`, and looking up
+ * where that leaves you, until a lookup comes back empty. The move rather than the neighbour itself,
+ * because a cell key is derivable from the two and two stored facts can drift apart where one cannot. That is what makes the single walk enough for
+ * every cell: on a tree the first arrival is the only arrival, so the cell that discovered this one is the
+ * one step nearer, and no later path can beat it. Only the destination is absent as a key, having no cell
+ * nearer than itself, which is what ends the walk.
  *
  * A route distance is not a Manhattan distance and not a count of unvisited cells: it includes the
  * retrace out of whatever dead end the seat is standing in, which is the whole reason it is measured
  * rather than estimated. */
 export type MazeRoutes = {
-  distances: Map<CellKey, number>;
-  next: Map<CellKey, CellKey>;
+  distanceFromDestination: Map<CellKey, number>;
+  nextNeighbour: Map<CellKey, Move>;
 };
 
 /** The maze as the log carries it. `structure_checksum` is Tapoo's own hash of `structure`, and it is
