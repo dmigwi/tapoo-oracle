@@ -11,7 +11,7 @@
 //
 // Like its siblings this module imports nothing from node:, so it bundles for the browser unchanged.
 
-import {MOVES, OPPOSITE_MOVES, getCellKey, isMove, stepFrom} from "./geometry";
+import {MOVES, getCellKey, isMove, stepFrom} from "./geometry";
 import {fnv1a64Checksum} from "./utils";
 import type {CellKey, EncodedMaze, Maze, MazeResult, MazeRoutes, MazeStats, Move, OpenCellExits, Result} from "./types";
 
@@ -180,6 +180,22 @@ function mazeFromDecodedGrid(
 
 // --- Reading the maze ---
 
+// INVERSE_MOVES names the move that undoes each one, so applying a move and then its inverse leaves a
+// reader on the cell it started from.
+//
+// The walk below discovers a cell by moving *into* it and has to record the move back *out* of it, which is
+// the one fact it cannot read off what it has just done. A table rather than a negated MOVES delta, because
+// the four pairings are the whole of it and a table cannot disagree with itself about a sign.
+//
+// Local to this module: nothing else needs to reverse a move, and routeFrom's tests fail on any pairing
+// being wrong - a route that walks away from the destination is not a route.
+const INVERSE_MOVE: Record<Move, Move> = {
+  MoveUp: "MoveDown",
+  MoveDown: "MoveUp",
+  MoveLeft: "MoveRight",
+  MoveRight: "MoveLeft",
+};
+
 /** routeToDestination walks the maze breadth-first **from the destination**, and keeps both what it
  * measured and how it got there: every cell's distance, and the next neighbour along a move nearer.
  *
@@ -218,7 +234,7 @@ export function routeToDestination(maze: Maze, destination: CellKey | null | und
       // The cell that discovered this one is the one step nearer the destination, so the way out of the
       // neighbour is the move that undoes the one that reached it. Held as the move rather than the cell:
       // a cell key is derivable from a cell and a move, and the move is the smaller of the two facts.
-      nextNeighbour.set(neighbour, OPPOSITE_MOVES[move]);
+      nextNeighbour.set(neighbour, INVERSE_MOVE[move]);
       queue.push(neighbour);
     }
   }

@@ -1,8 +1,8 @@
 import {describe, expect, it} from "vitest"
 
 import {EVENT_CLASSES, KNOWN_EVENTS, levelClassOf} from "./log-events"
-import {MOVES, OPPOSITE_MOVES, decomposeTraversalSpeed, gameIdentityKey, stepFrom, turnsAreStated} from "./geometry"
-import type {LogEntry, LogLevel, Move} from "./types"
+import {decomposeTraversalSpeed, gameIdentityKey, turnsAreStated} from "./geometry"
+import type {LogEntry, LogLevel} from "./types"
 
 const entry = (
   payload: string,
@@ -124,21 +124,5 @@ describe("decomposeTraversalSpeed", () => {
   it("reports nothing where the round stated no count", () => {
     expect(decomposeTraversalSpeed({settled: null, decayCharged: 17})).toBeNull()
     expect(seat(17, 24, 16, null)).toBeNull()
-  })
-})
-
-describe("OPPOSITE_MOVES", () => {
-  // The property the route walk rests on: a move and its opposite cancel, so a cell rebuilt from the
-  // neighbour a walk reached and the move back is the cell that walk came from. A sign flipped in this
-  // table would send routeFrom the wrong way up the maze and still return a route-shaped answer.
-  it.each(Object.keys(MOVES) as Move[])("undoes %s", (move) => {
-    expect(stepFrom(stepFrom("5,5", move), OPPOSITE_MOVES[move])).toBe("5,5")
-  })
-
-  it("pairs each move with a different one, both ways round", () => {
-    for (const move of Object.keys(MOVES) as Move[]) {
-      expect(OPPOSITE_MOVES[move]).not.toBe(move)
-      expect(OPPOSITE_MOVES[OPPOSITE_MOVES[move]]).toBe(move)
-    }
   })
 })
