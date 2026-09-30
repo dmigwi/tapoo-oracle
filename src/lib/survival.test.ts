@@ -3,29 +3,29 @@ import {describe, expect, it} from "vitest"
 import {
   FASTEST_SUSTAINED_PACE,
   NEW_CELLS_PER_TURN_CAP,
-  decayLedger,
+  decomposeSurvival,
   survivalFlags,
   survivalSeries,
 } from "./survival"
-import type {SurvivalInputTurn} from "./survival"
+import type {SurvivalInputTurn} from "./types"
 import {must} from "./test-support"
 
 // The capture's won round, which is the one set of figures every part of this is pinned against: a
 // 70-cell maze, 67 turns, 67 units charged, 69 moves landed.
 const CAPTURE = {cells: 70, decayCharged: 67, played: {turnsTaken: 67, movesApplied: 69, movesUnreported: 0}}
 
-describe("decayLedger", () => {
+describe("decomposeSurvival", () => {
   it("splits the capture's round into the terms that caused it", () => {
-    const ledger = decayLedger(CAPTURE)
+    const decomposed = decomposeSurvival(CAPTURE)
 
     // Every turn cost exactly one unit, so the run paid nothing for errors.
-    expect(ledger?.errorDebt).toBe(0)
-    expect(ledger?.batchDepth).toBeCloseTo(69 / 67, 12)
+    expect(decomposed?.errorDebt).toBe(0)
+    expect(decomposed?.batchDepth).toBeCloseTo(69 / 67, 12)
     // One cell of the maze it never had to pay for, two moves earned back by batching.
-    expect(ledger?.routeSlack).toBe(1)
-    expect(ledger?.batchCredit).toBe(2)
-    expect(ledger?.headroom).toBe(3)
-    expect(ledger?.neededDepth).toBeCloseTo(69 / 70, 12)
+    expect(decomposed?.routeSlack).toBe(1)
+    expect(decomposed?.batchCredit).toBe(2)
+    expect(decomposed?.headroom).toBe(3)
+    expect(decomposed?.neededDepth).toBeCloseTo(69 / 70, 12)
   })
 
   // The identity the report rests on: the three terms are the headroom, so a card may print them and
@@ -37,10 +37,10 @@ describe("decayLedger", () => {
     ["a run that never batched", {cells: 24, decayCharged: 20, played: {turnsTaken: 18, movesApplied: 18, movesUnreported: 0}}],
     ["a run on a branching maze, where slack goes negative", {cells: 70, decayCharged: 70, played: {turnsTaken: 41, movesApplied: 96, movesUnreported: 0}}],
   ])("reconciles the terms with the headroom for %s", (_what, counts) => {
-    const ledger = decayLedger(counts)
+    const decomposed = decomposeSurvival(counts)
 
-    expect(ledger).not.toBeNull()
-    const {routeSlack, batchCredit, errorDebt, headroom, batchDepth} = ledger!
+    expect(decomposed).not.toBeNull()
+    const {routeSlack, batchCredit, errorDebt, headroom, batchDepth} = decomposed!
     expect(routeSlack + batchCredit - errorDebt).toBe(headroom)
     // And the formula the terms stand in for: A - moves/b - p, at the depth the run achieved.
     expect(counts.cells - counts.played.movesApplied / batchDepth - errorDebt).toBeCloseTo(headroom, 9)
@@ -48,7 +48,7 @@ describe("decayLedger", () => {
 
   // What the needed depth is for: the run's own b against the b the maze still demanded.
   it("states the depth the maze demanded beside the depth the run reached", () => {
-    const short = decayLedger({cells: 600, decayCharged: 624, played: {turnsTaken: 470, movesApplied: 620, movesUnreported: 0}})
+    const short = decomposeSurvival({cells: 600, decayCharged: 624, played: {turnsTaken: 470, movesApplied: 620, movesUnreported: 0}})
 
     expect(short?.errorDebt).toBe(154)
     // 620 moves over the 446 units its errors left it - a depth well past what it managed.
@@ -56,27 +56,27 @@ describe("decayLedger", () => {
     expect(short!.neededDepth).toBeGreaterThan(short!.batchDepth)
   })
 
-  // Null, not a record of zeros: a seat with nothing measured has no account, and a zeroed ledger reads
+  // Null, not a record of zeros: a seat with nothing measured has no account, and a zeroed decomposition reads
   // as a run that spent nothing.
   it.each([
     ["no turns at all", {cells: 70, decayCharged: 3, played: null}],
     ["no turn that moved", {cells: 70, decayCharged: 3, played: {turnsTaken: 3, movesApplied: 0, movesUnreported: 3}}],
     ["no charge reported", {cells: 70, decayCharged: null, played: {turnsTaken: 3, movesApplied: 3, movesUnreported: 0}}],
-  ])("draws no ledger where the round did not say: %s", (_what, counts) => {
-    expect(decayLedger(counts)).toBeNull()
+  ])("draws no decomposed where the round did not say: %s", (_what, counts) => {
+    expect(decomposeSurvival(counts)).toBeNull()
   })
 
   // A charge below one per turn is the log disagreeing with itself - Tapoo charges every turn - and a
   // negative debt would print as a credit the run never earned. roundTotalsCheck is where that is
   // reported; here it is simply not an account.
-  it("draws no ledger where the charge is below one per turn", () => {
-    expect(decayLedger({cells: 70, decayCharged: 2, played: {turnsTaken: 3, movesApplied: 3, movesUnreported: 0}})).toBeNull()
+  it("draws no decomposed where the charge is below one per turn", () => {
+    expect(decomposeSurvival({cells: 70, decayCharged: 2, played: {turnsTaken: 3, movesApplied: 3, movesUnreported: 0}})).toBeNull()
   })
 
   // And none where the errors already cost more than the maze holds: there is no depth that covers a
   // budget of nothing, and the division would answer with a sign rather than a depth.
-  it("draws no ledger where the debt exceeds the maze", () => {
-    expect(decayLedger({cells: 24, decayCharged: 60, played: {turnsTaken: 30, movesApplied: 30, movesUnreported: 0}})).toBeNull()
+  it("draws no decomposed where the debt exceeds the maze", () => {
+    expect(decomposeSurvival({cells: 24, decayCharged: 60, played: {turnsTaken: 30, movesApplied: 30, movesUnreported: 0}})).toBeNull()
   })
 })
 
@@ -164,21 +164,21 @@ describe("survivalSeries", () => {
     })
 
   it("counts down the route cells the seat has still to enter", () => {
-    const outlook = must(seriesOf([
+    const survival = must(seriesOf([
       turn({turn: 0, cells: ["0,0", "0,1"]}),
       turn({turn: 1, cells: ["0,1", "0,2"]}),
-    ]), "an outlook")
+    ]), "a survival summary")
 
-    expect(outlook.routeCells).toBe(6)
+    expect(survival.routeCells).toBe(6)
     // The cell it started on counts as entered: it is standing there.
-    expect(outlook.series.map((one) => one.unvisitedRoute)).toEqual([4, 3])
-    expect(outlook.visitedRouteCells).toBe(3)
+    expect(survival.series.map((one) => one.unvisitedRoute)).toEqual([4, 3])
+    expect(survival.visitedRouteCells).toBe(3)
   })
 
   it("measures the distance from the cell each turn left it standing on", () => {
-    const outlook = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1", "0,2"], applied: 2, applicable: 2})]), "an outlook")
+    const survival = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1", "0,2"], applied: 2, applicable: 2})]), "a survival summary")
 
-    expect(outlook.series[0]?.distanceToDestination).toBe(3)
+    expect(survival.series[0]?.distanceToDestination).toBe(3)
   })
 
   // The split the budget cannot make. Both turns below cost one unit and enter no new cell; one is the
@@ -194,68 +194,68 @@ describe("survivalSeries", () => {
       [1, new Map([["0,0", "oscillating"]])],
       [2, new Map([["0,1", "backtracking"]])],
     ])
-    const outlook = must(seriesOf([
+    const survival = must(seriesOf([
       // Out to a cell it had not entered, then back over its own ground twice - the same one unit each.
       turn({turn: 0, cells: ["0,0", "0,1"], decayRemaining: 6}),
       turn({turn: 1, cells: ["0,1", "0,0"], decayRemaining: 5}),
       turn({turn: 2, cells: ["0,0", "0,1"], decayRemaining: 4}),
-    ], {statuses}), "an outlook")
+    ], {statuses}), "a survival summary")
 
-    expect(outlook.series.map((one) => one.progress)).toEqual(["advanced", "retreat", "oscillation"])
-    expect(outlook.retreats).toBe(1)
-    expect(outlook.oscillations).toBe(1)
+    expect(survival.series.map((one) => one.progress)).toEqual(["advanced", "retreat", "oscillation"])
+    expect(survival.retreats).toBe(1)
+    expect(survival.oscillations).toBe(1)
   })
 
   it("grades a turn that entered a cell it had not as advanced, whatever the cells read", () => {
     const statuses = new Map([[0, new Map([["0,1", "oscillating"]])]])
-    const outlook = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1"]})], {statuses}), "an outlook")
+    const survival = must(seriesOf([turn({turn: 0, cells: ["0,0", "0,1"]})], {statuses}), "a survival summary")
 
-    expect(outlook.series[0]?.progress).toBe("advanced")
+    expect(survival.series[0]?.progress).toBe("advanced")
   })
 
   it("says a turn moved nowhere rather than grading ground it never entered", () => {
-    const outlook = must(seriesOf([turn({turn: 0, cells: [], applied: 0})]), "an outlook")
+    const survival = must(seriesOf([turn({turn: 0, cells: [], applied: 0})]), "a survival summary")
 
-    expect(outlook.series[0]?.progress).toBe("still")
+    expect(survival.series[0]?.progress).toBe("still")
   })
 
   // A grade this module invented would be a grade nothing could check, so an ungraded cell is named as
   // what it is. The capture has turns like this: a round records no traversal history for a turn that
   // failed before the tools answered.
   it("leaves a no-progress turn unclassified where the log graded nothing", () => {
-    const outlook = must(seriesOf([
+    const survival = must(seriesOf([
       turn({turn: 0, cells: ["0,0", "0,1"]}),
       turn({turn: 1, cells: ["0,1", "0,0"]}),
-    ]), "an outlook")
+    ]), "a survival summary")
 
-    expect(outlook.series.map((one) => one.progress)).toEqual(["advanced", "unclassified"])
-    expect(outlook.unclassified).toBe(1)
-    expect(outlook.retreats).toBe(0)
+    expect(survival.series.map((one) => one.progress)).toEqual(["advanced", "unclassified"])
+    expect(survival.unclassified).toBe(1)
+    expect(survival.retreats).toBe(0)
   })
 
   // Wall contact is a move the maze refused, not a command it could not read. The second is the model
   // spelling a move wrong, which the rubric already reports against the prediction.
   it("reads a refused move off what the turn could have applied", () => {
-    const outlook = must(seriesOf([
+    const survival = must(seriesOf([
       turn({turn: 0, cells: ["0,0", "0,1"], applied: 1, applicable: 2}),
       turn({turn: 1, cells: ["0,1", "0,2"], applied: 1, applicable: 1}),
-    ]), "an outlook")
+    ]), "a survival summary")
 
-    expect(outlook.series.map((one) => one.wallContact)).toEqual([true, false])
-    expect(outlook.wallContacts).toBe(1)
+    expect(survival.series.map((one) => one.wallContact)).toEqual([true, false])
+    expect(survival.wallContacts).toBe(1)
   })
 
   // The verdict, and the turn it held from. Monotone, so the first turn it fired on is the answer rather
   // than "at some point": with one route cell left unentered and no budget, the run cannot finish.
   it("names the first turn from which the run could not finish", () => {
-    const outlook = must(seriesOf([
+    const survival = must(seriesOf([
       turn({turn: 0, cells: ["0,0", "0,1"], decayRemaining: 4}),
       turn({turn: 1, cells: ["0,1", "0,0"], decayRemaining: 0}),
       turn({turn: 2, cells: ["0,0", "0,1"], decayRemaining: 0}),
-    ]), "an outlook")
+    ]), "a survival summary")
 
-    expect(outlook.lostFrom).toBe(1)
-    expect(outlook.series.map((one) => one.lost)).toEqual([false, true, true])
+    expect(survival.lostFrom).toBe(1)
+    expect(survival.series.map((one) => one.lost)).toEqual([false, true, true])
   })
 
   it("has nothing to say about a round that stated no destination", () => {
@@ -266,12 +266,12 @@ describe("survivalSeries", () => {
   // measurement and reads as one - and every finding over an empty series refuses for want of a reading,
   // so none of them can claim the destination stayed in reach.
   it("measures a round that took no turn as having covered none of the route", () => {
-    const outlook = must(seriesOf([]), "an outlook")
+    const survival = must(seriesOf([]), "a survival summary")
 
-    expect(outlook.routeCells).toBe(6)
-    expect(outlook.visitedRouteCells).toBe(0)
-    expect(outlook.series).toEqual([])
-    expect(outlook.budgetTurns).toBe(0)
-    expect(outlook.lostFrom).toBeNull()
+    expect(survival.routeCells).toBe(6)
+    expect(survival.visitedRouteCells).toBe(0)
+    expect(survival.series).toEqual([])
+    expect(survival.budgetTurns).toBe(0)
+    expect(survival.lostFrom).toBeNull()
   })
 })

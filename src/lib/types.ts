@@ -216,6 +216,16 @@ export type PayloadResult = Result<{payload: string}>;
  * forwarding that failure a compile error instead. */
 export type DecodedPayload = {ok: true; url: string} | {ok: false; error: string; link: string | null};
 
+/** What loadTapooLogFromUrl returns. Stated exactly rather than as an intersection: a success always
+ * carries the parsed log and the URL it came from, while a failure carries the URL only when there was
+ * one to report - a URL that never validated has none. */
+export type LoadedLog =
+  | {ok: true; source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]; url: string}
+  | {ok: false; error: string; url?: string};
+
+/** Only the parts of Location share-link.ts reads, so a test can pass a plain object. */
+export type AppLocation = {origin: string; pathname: string};
+
 // --- Maze ---
 
 /** A decoded maze: its dimensions and, per cell, the moves that lead out of it. */
@@ -610,9 +620,9 @@ export type AgentSummary = {
    *
    * A second population beside `settled` below, and deliberately so. `settled` covers the turns that
    * stated both an applied count and a charge, because the speed's three factors have to divide one
-   * population or a share comes out above 1. The survival ledger asks a different question - what the
+   * population or a share comes out above 1. The survival decomposition asks a different question - what the
    * run spent, against what the maze costs - and there `turnsTaken` must be every turn the seat was
-   * charged for, not the turns that happened to report cleanly. That ledger adds these across the seats
+   * charged for, not the turns that happened to report cleanly. It adds these across the seats
    * into one account for the maze: the budget is the maze's, and every seat at the table draws on the one
    * of it.
    *
@@ -795,6 +805,14 @@ export type SlicedLog = ParsedLog & {rounds: [RoundSlice, ...RoundSlice[]]};
 /** One log cut into rounds, or the reason it could not be read. */
 export type SlicedLogResult = Result<SlicedLog>;
 
+/** One played round's entries, with the identity the log stamped on them. */
+export type RoundGroup = {
+  /** Which round these entries belong to. */
+  identity: GameIdentity;
+  entries: LogEntry[];
+};
+
+
 // --- Maze replay ---
 
 /** The view's own model of a round. */
@@ -841,6 +859,126 @@ export type Frame = {
   turn: TurnSummary | null;
 };
 
+/** How a round's turns divide across the three charges, plus the turns no reading covered. */
+export type DecayTally = {
+  /** One entry per charge the round actually incurred, ascending. A charge that never happened is
+   * absent rather than zero: naming a penalty nobody paid describes the rules, not the run. */
+  counts: Array<{charge: number; count: number}>;
+  /** Turns whose charge no reading settled. Not zero-cost turns - unmeasured ones. */
+  unreported: number;
+};
+
+
+// --- Survival ---
+
+// What a round spent against the maze's decay budget, and what that left it. The arithmetic over these is
+// survival.ts; the shapes are here, with the rest of the app's vocabulary.
+
+/** Whether a round could survive its own mistakes, split into the terms that decide it.
+ *
+ * Three terms and two depths, in decay units: what the route left it, what batching earned it back, what
+ * its errors cost, and the depth it reached against the depth the route still demanded. Headroom is the
+ * three added up - what remained after the ground it walked and the mistakes it paid for.
+ *
+ * Reported as terms, never as the headroom alone. Headroom is a function of the batch depth achieved, so a
+ * bare figure invites being read as a property of the run; the terms name different causes, and which one
+ * moved is the whole question. */
+export type SurvivalDecomposition = {
+  /** `p` - decay units charged beyond one per turn: what the run's errors cost it. */
+  errorDebt: number;
+  /** `b` - applied moves per turn: how deep the run's batches actually ran. */
+  batchDepth: number;
+  /** `A - moves` - units the maze's size leaves over the moves that were spent. Negative on a branching
+   * maze, where a dead end costs two moves per cell. */
+  routeSlack: number;
+  /** `moves - turns` - what batching earned back: every move past the first in a turn is a cell entered
+   * for no extra charge. */
+  batchCredit: number;
+  /** `A - moves/b - p`, which at the depth achieved is the three terms above summed. */
+  headroom: number;
+  /** `b_min` - the batch depth the run would have needed to cover the maze on the budget its errors
+   * left it. Under 1 means it could have crawled; over 1 means it had to batch or lose. */
+  neededDepth: number;
+};
+
+/** What one turn's position says about whether the destination is still reachable.
+ *
+ * `lost` is the only one of these that is a verdict. The other three are paces: they say a run is behind
+ * where it would need to be, which is a warning about a run that may still recover. */
+export type SurvivalFlags = {
+  lost: boolean;
+  behindObservedPace: boolean;
+  beyondDecayLeft: boolean;
+  beyondOwnPace: boolean;
+};
+
+/** What one turn did with the ground it stood on.
+ *
+ * The three no-progress classes are the reason this exists. Tapoo charges one unit for a turn that
+ * entered no new cell, whichever kind it was, so the budget cannot tell them apart - and one of them is
+ * what the prompt asks for at a confirmed dead end while another is a rubric violation. A rate that pools
+ * them reports a violation where there was compliance: one real run's 301 no-progress turns are 292
+ * retreats and 7 oscillations, with 2 the log never graded - it spent them doing very largely what it was
+ * told to do at a dead end.
+ *
+ * `unclassified` is a no-progress turn whose cells the log never graded. Named rather than folded into
+ * either side: a grade survival.ts inferred would be a grade nothing could check. */
+export type TurnProgress = "advanced" | "still" | "retreat" | "oscillation" | "unclassified";
+
+/** One turn of a round's run, with where it stood and what that meant. */
+export type SurvivalTurn = SurvivalFlags & {
+  turn: number;
+  /** Route cells nobody had entered once this turn ended - the monotone quantity. */
+  unvisitedRoute: number;
+  decayLeft: number | null;
+  /** Route moves from the cell this turn left the round standing on to the destination - the same figure
+   * `MazeRoutes.distanceFromDestination` holds for that cell, read from where the round now stands.
+   *
+   * Diagnostic only: a retreat cuts it for one decay unit, so a rule built on it switches off again and it
+   * is never a verdict. */
+  distanceToDestination: number | null;
+  progress: TurnProgress;
+  /** The maze refused a move this turn could otherwise have made. */
+  wallContact: boolean;
+};
+
+
+/** A round read against its route: what it covered, what each turn left it, and the first turn each
+ * finding held from. The per-turn series is here in full, so a reader can check any tally against the
+ * turns that produced it. */
+export type SurvivalSummary = {
+  routeCells: number;
+  visitedRouteCells: number;
+  series: SurvivalTurn[];
+  /** The first turn from which the destination was already out of reach, or null for a run that always
+   * had a way to finish. Monotone, so "from" is exact rather than "at some point". */
+  lostFrom: number | null;
+  /** Turns whose budget the log actually reported.
+   *
+   * Zero means every finding below it is false for want of a reading, not true: `lostFrom` is null there
+   * because nothing could be tested, and a reader told "within reach throughout" on that basis would be
+   * given a reassurance drawn from no evidence. survivalVerdict refuses it. */
+  budgetTurns: number;
+  behindObservedPaceFrom: number | null;
+  beyondDecayLeftFrom: number | null;
+  beyondOwnPaceFrom: number | null;
+  retreats: number;
+  oscillations: number;
+  unclassified: number;
+  wallContacts: number;
+};
+
+/** A turn as survivalSeries reads one: what it entered, what it was charged, and what it stood on after. */
+export type SurvivalInputTurn = {
+  turn: number;
+  /** The cells the turn walked, opening with the cell it started on - TurnSummary.cells. */
+  cells: readonly string[];
+  /** Moves that landed, and the moves the maze could read. Their difference is a refused move. */
+  applied: number | null;
+  applicable: number;
+  decayRemaining: number | null;
+};
+
 // --- Log tabs ---
 
 /** Where a tab stands: nothing loaded, a report ready, or a load that failed. */
@@ -880,6 +1018,29 @@ export type LogTabsState = {
  * Two columns rather than a column per fact, because a wide table trims its own values on a narrow
  * viewport. Every summary panel on the page - provenance, model output, validation, the maze's own
  * figures - is built from these, so they cannot disagree about what a row is. */
+/** What the rendered controls may ask the workspace to do.
+ *
+ * Every member of it is a reducer call in log-tabs-state.ts or the state those reducers act on: the view
+ * holds the document, this is the contract between them. The render helpers are handed this rather than
+ * the state setter alone, because several of them dispatch a state change derived from the state at click
+ * time, not at render time. */
+export type LogTabActions = {
+  getState: () => LogTabsState
+  setState: (next: LogTabsState) => void
+  updateDraftUrl: (draftUrl: string) => void
+  loadNewTab: () => void | Promise<void>
+  retryTab: (tabId: string) => void | Promise<void>
+}
+
+/** The three things every async workspace action needs: the current state, a way to replace it, and
+ * the fetcher tests substitute. */
+export type WorkspaceSync = {
+  getState: () => LogTabsState
+  setState: (next: LogTabsState) => void
+  fetchText?: (url: string) => Promise<string>
+}
+
+
 export type SummaryRow = {field: string; value: string};
 
 /** The Observable "viewof" protocol: the element the page binds to carries the current value. */
@@ -905,3 +1066,54 @@ export type ReportUi = {html: Html; Inputs: InputsApi};
 
 /** A rendered region: an element, or the empty string when a section renders nothing. */
 export type RegionView = Element | "";
+
+// --- What the report renders ---
+
+/** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */
+export type ReportRegions = {
+  emptyState: RegionView;
+  notices: RegionView;
+  methodology: RegionView;
+  profile: RegionView;
+  detail: RegionView;
+};
+
+/** One capability group named on a card: its rubric id and the name a reader reads. */
+export type ProfileCardGroup = {id: string; label: string};
+
+/** One profile card: its heading, the `met/total` it scored, the groups it met, and the tone the view
+ * paints it in. */
+export type ProfileCard = {label: string; value: string; groups: ProfileCardGroup[]; tone: string};
+
+/** One diagnostics line: what went wrong, how often, and the rubric question that scores it - null
+ * when nothing does. */
+export type DiagnosticRow = {signal: string; count: number; scoredBy: string | null};
+
+/** The values one seat was running, each already rendered for reading - names capitalized, lists
+ * joined, credentials stripped - and each "" where the round stated none.
+ *
+ * Kept unjoined beside the sentence built from them because these four are the whole of what a reader
+ * comparing two seats compares, and a view that can weight them differently should not have to take the
+ * sentence apart again to find them. */
+export type AgentRunning = {
+  models: string[];
+  /** The API families the request was made in - "Ollama", "OpenAI" - which is a wire protocol and not the
+   * company that served the model. Hugging Face has no API of its own and answers on OpenAI's, so a seat
+   * running there reports "OpenAI" here and names Hugging Face only in its endpoint. Printing this as
+   * the provider read as a claim about who ran the model, which this field does not make. */
+  api: string[];
+  endpoint: string[];
+  effort: string[];
+  /** Whether the harness echoed the model's reasoning back to it, and how long it waited between
+   * requests. Both are stated from v2.6.1 and empty before it, so a row on an older log simply does not
+   * mention them - which is the honest rendering of a setting the log never named. */
+  echo: string[];
+  interval: string[];
+};
+
+/** One seat's row: the sentence to read, and the values it was built from. */
+export type AgentRow = {
+  field: string;
+  value: string;
+  running: AgentRunning;
+};

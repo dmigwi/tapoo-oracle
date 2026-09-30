@@ -8,38 +8,15 @@
 // imports this one - a lint rule in eslint.config.mjs keeps it that way, and the view re-exports
 // what other modules need.
 //
-// In the order a tab lives: the contracts the view is handed, the state reducers, then loading a log
-// into a tab. What a loaded log holds is rounds.ts (sliceLogIntoRounds) and rubric-report.ts
-// (roundReportFor); a tab only keeps what those return.
+// In the order a tab lives: the state reducers, then loading a log into a tab. The contracts the view is
+// handed - LogTabActions and WorkspaceSync - are stated in types.ts with the state they act on. What a
+// loaded log holds is rounds.ts (sliceLogIntoRounds) and rubric-report.ts (roundReportFor); a tab only
+// keeps what those return.
 
 import { loadTapooLogFromUrl } from "./share-link"
 import { sliceLogIntoRounds } from "./rounds"
 import type { LogTab, LogTabsState } from "./types"
 import {asTrimmedText, clamp} from "./utils";
-
-// --- What the view is handed ---
-
-/** What the rendered controls may ask the workspace to do.
- *
- * Declared here rather than in log-tabs-view.ts because every member of it is a reducer call or the
- * state those reducers act on: the view holds the document, this holds the contract. The render
- * helpers are handed this rather than the state setter alone, because several of them dispatch a state
- * change derived from the state at click time, not at render time. */
-export type LogTabActions = {
-  getState: () => LogTabsState
-  setState: (next: LogTabsState) => void
-  updateDraftUrl: (draftUrl: string) => void
-  loadNewTab: () => void | Promise<void>
-  retryTab: (tabId: string) => void | Promise<void>
-}
-
-/** The three things every async workspace action needs: the current state, a way to replace it, and
- * the fetcher tests substitute. */
-export type WorkspaceSync = {
-  getState: () => LogTabsState
-  setState: (next: LogTabsState) => void
-  fetchText?: (url: string) => Promise<string>
-}
 
 // --- Entry points: what log-tabs-view calls ---
 //

@@ -23,6 +23,7 @@ import type {
   EncodedMaze,
   GameIdentity,
   PlayedRound,
+  RoundGroup,
   LogEntry,
   Move,
   Outcome,
@@ -162,13 +163,6 @@ function reportedMoves(record: Replay | null): {moves: Move[]; count: number} | 
 
   return {moves, count: record.lastSubmittedMoves.length}
 }
-
-/** One played round's entries, with the identity the log stamped on them. */
-export type RoundGroup = {
-  /** Which round these entries belong to. */
-  identity: GameIdentity;
-  entries: LogEntry[];
-};
 
 /** roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
  * "2/1" beside a filename reads as a fraction or a date before it reads as a round. */

@@ -11,7 +11,7 @@
 
 import { cellFromKey, classifyTraversalSpeed, decomposeTraversalSpeed, getCellKey, isMove } from "./log-contract"
 import { agentSeatLabel } from "./rounds"
-import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeSurvivalRows, survivalOutlookFor, survivalVerdict } from "./maze-model"
+import { MOST_DECAY, agentIndexOf, decayTally, mazeFrameAt, mazeLevelRows, mazeReplayModel, mazeSurvivalRows, survivalSummaryFor, survivalVerdict } from "./maze-model"
 import { capitalize, formatCount } from "./utils"
 import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, Maze, Move, VisitStatus } from "./types"
 
@@ -321,7 +321,7 @@ export function createMazeReplay(round: PlayedRound | null): HTMLElement {
         // sage where the destination stayed in reach and rose where it did not - the two colours this page
         // already uses for a result that held and one that did not.
         if (row.field !== "Point of no return") return row;
-        const verdict = survivalVerdict(survivalOutlookFor(model));
+        const verdict = survivalVerdict(survivalSummaryFor(model));
         if (!verdict) return row;
 
         const line = createHtmlElement("span", `maze-summary-verdict ${verdict.lost ? "is-lost" : "is-clear"}`);
@@ -1129,7 +1129,7 @@ const FACTOR_KEY: ReadonlyArray<readonly [string, string]> = [
 // The key to the survival table. Its rows say what a round spent; these say in what - and the identity on
 // the first line is what makes the three terms beside it worth adding up.
 const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
-  ["decay ledger", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
+  ["decay decomposed", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
   ["error debt", "units charged beyond one per turn: what a round's mistakes cost it"],
   ["batched", "moves earned past one a turn: cells entered for no extra charge"],
   ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],
@@ -1185,7 +1185,7 @@ function agentStatsRow(model: ReplayModel): HTMLElement {
   // speed - its labels write "Katara the Navigator - 1.0000x" - so putting it on the factors would state
   // three more speeds per seat, when a factor is a share of moves, a count per turn and a share of turns.
   // The absence reads the same in every column, matching the counts beside them.
-  // Whole units, signed, because a ledger term is a count of decay units and a negative one is a real
+  // Whole units, signed, because each term is a count of decay units and a negative one is a real
   // reading: a branching maze costs two moves per cell of a dead end, so slack goes below zero.
   const factor = (value: number | undefined): string => (value === undefined ? "not recorded" : value.toFixed(4));
   const speed = (value: number | undefined): string => (value === undefined ? "not recorded" : `${value.toFixed(4)}x`);

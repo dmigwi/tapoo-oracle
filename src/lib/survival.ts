@@ -14,34 +14,19 @@
 // is a reader's afterwards and never something the model could have consulted mid-run. The wording keeps
 // to that: a run "could not finish from turn N", never "should have stopped".
 
-import type {AgentSummary} from "./types";
+import type {
+  AgentSummary,
+  SurvivalDecomposition,
+  SurvivalFlags,
+  SurvivalInputTurn,
+  SurvivalSummary,
+  SurvivalTurn,
+  TurnProgress,
+} from "./types";
 
-// --- The decay ledger ---
+// --- Decomposing what a round spent ---
 
-/** The three terms a run's decay account splits into, and the two depths that judge it.
- *
- * Reported as terms, never as the headroom alone. Headroom is a function of the batch depth achieved, so
- * a bare figure invites being read as a property of the run; the three terms name three different causes,
- * and which one moved is the whole question. */
-export type DecayLedger = {
-  /** `p` - decay units charged beyond one per turn: what the run's errors cost it. */
-  errorDebt: number;
-  /** `b` - applied moves per turn: how deep the run's batches actually ran. */
-  batchDepth: number;
-  /** `A - moves` - units the maze's size leaves over the moves that were spent. Negative on a branching
-   * maze, where a dead end costs two moves per cell. */
-  routeSlack: number;
-  /** `moves - turns` - what batching earned back: every move past the first in a turn is a cell entered
-   * for no extra charge. */
-  batchCredit: number;
-  /** `A - moves/b - p`, which at the depth achieved is the three terms above summed. */
-  headroom: number;
-  /** `b_min` - the batch depth the run would have needed to cover the maze on the budget its errors
-   * left it. Under 1 means it could have crawled; over 1 means it had to batch or lose. */
-  neededDepth: number;
-};
-
-/** decayLedger splits what a round spent into the three terms that caused it.
+/** decomposeSurvival splits whether a round could survive its mistakes into the terms that decide it.
  *
  * `cells` is the maze's cell count, which is also the round's opening budget; `decayCharged` is what the
  * round was charged over its turns; `played` is every turn taken and every move that landed. Both are the
@@ -49,10 +34,10 @@ export type DecayLedger = {
  * spends from it.
  *
  * Null rather than zeros wherever the account cannot be drawn: a round with no turns, no moves or no
- * charge has no ledger, and a zero would read as a measurement. Null too where the charge is below one
+ * charge has nothing to decompose, and a zero would read as a measurement. Null too where the charge is below one
  * per turn, which is a log disagreeing with itself rather than a run that found a discount -
  * roundTotalsCheck is where that is reported. */
-export function decayLedger({
+export function decomposeSurvival({
   cells,
   decayCharged,
   played,
@@ -60,7 +45,7 @@ export function decayLedger({
   cells: number;
   decayCharged: number | null;
   played: AgentSummary["played"];
-}): DecayLedger | null {
+}): SurvivalDecomposition | null {
   if (played === null || decayCharged === null || played.turnsTaken === 0 || played.movesApplied === 0) {
     return null;
   }
@@ -107,17 +92,6 @@ export const NEW_CELLS_PER_TURN_CAP = 4;
  * anything proves, and a run beating it would be a record rather than an error. Same measurement date. */
 export const FASTEST_SUSTAINED_PACE = 1.52;
 
-/** What one turn's position says about whether the destination is still reachable.
- *
- * `lost` is the only one of these that is a verdict. The other three are paces: they say a run is behind
- * where it would need to be, which is a warning about a run that may still recover. */
-export type SurvivalFlags = {
-  lost: boolean;
-  behindObservedPace: boolean;
-  beyondDecayLeft: boolean;
-  beyondOwnPace: boolean;
-};
-
 /** survivalFlags reads one turn's position against the budget it has left.
  *
  * `unvisitedRoute` is the route cells the round has still not entered; `decayLeft` is the units it has
@@ -160,70 +134,6 @@ export function survivalFlags({
 
 // --- The run, turn by turn ---
 
-/** What one turn did with the ground it stood on.
- *
- * The three no-progress classes are the reason this exists. Tapoo charges one unit for a turn that
- * entered no new cell, whichever kind it was, so the budget cannot tell them apart - and one of them is
- * what the prompt asks for at a confirmed dead end while another is a rubric violation. A rate that pools
- * them reports a violation where there was compliance: one real run's 301 no-progress turns are 294
- * oscillations and 7 retreats, and another's 59 are retreats and nothing else - it lost doing exactly
- * what it was told to do.
- *
- * `unclassified` is a no-progress turn whose cells the log never graded. Named rather than folded into
- * either side: a grade this module inferred would be a grade nothing could check. */
-export type TurnProgress = "advanced" | "still" | "retreat" | "oscillation" | "unclassified";
-
-/** One turn of a round's run, with where it stood and what that meant. */
-export type SurvivalTurn = SurvivalFlags & {
-  turn: number;
-  /** Route cells nobody had entered once this turn ended - the monotone quantity. */
-  unvisitedRoute: number;
-  decayLeft: number | null;
-  /** Route moves from the cell this turn left the round standing on to the destination - the same figure
-   * `MazeRoutes.distanceFromDestination` holds for that cell, read from where the round now stands.
-   *
-   * Diagnostic only: a retreat cuts it for one decay unit, so a rule built on it switches off again and it
-   * is never a verdict. */
-  distanceToDestination: number | null;
-  progress: TurnProgress;
-  /** The maze refused a move this turn could otherwise have made. */
-  wallContact: boolean;
-};
-
-/** A round's whole run, and the first turn each finding held from. */
-export type SurvivalOutlook = {
-  routeCells: number;
-  visitedRouteCells: number;
-  series: SurvivalTurn[];
-  /** The first turn from which the destination was already out of reach, or null for a run that always
-   * had a way to finish. Monotone, so "from" is exact rather than "at some point". */
-  lostFrom: number | null;
-  /** Turns whose budget the log actually reported.
-   *
-   * Zero means every finding below it is false for want of a reading, not true: `lostFrom` is null there
-   * because nothing could be tested, and a reader told "within reach throughout" on that basis would be
-   * given a reassurance drawn from no evidence. survivalVerdict refuses it. */
-  budgetTurns: number;
-  behindObservedPaceFrom: number | null;
-  beyondDecayLeftFrom: number | null;
-  beyondOwnPaceFrom: number | null;
-  retreats: number;
-  oscillations: number;
-  unclassified: number;
-  wallContacts: number;
-};
-
-/** A turn as this module reads one: what it entered, what it was charged, and what it stood on after. */
-export type SurvivalInputTurn = {
-  turn: number;
-  /** The cells the turn walked, opening with the cell it started on - TurnSummary.cells. */
-  cells: readonly string[];
-  /** Moves that landed, and the moves the maze could read. Their difference is a refused move. */
-  applied: number | null;
-  applicable: number;
-  decayRemaining: number | null;
-};
-
 /** survivalSeries walks a round's turns in order and reports where each left it.
  *
  * `route` is the ordered cells from the round's start to the destination, `distanceFromDestination` every
@@ -252,7 +162,7 @@ export function survivalSeries({
   distanceFromDestination: ReadonlyMap<string, number>;
   statusesAt: (turn: number) => ReadonlyMap<string, string> | undefined;
   batchDepth: number | null;
-}): SurvivalOutlook | null {
+}): SurvivalSummary | null {
   if (!route || route.length === 0) {
     return null;
   }

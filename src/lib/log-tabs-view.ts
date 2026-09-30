@@ -2,8 +2,8 @@
 //
 // Built imperatively because it owns a DOM node, its own state and repaints in place - the parts of
 // the workspace that need a document. Everything it decides is delegated to the pure reducers in
-// log-tabs-state.ts, which also declares the two contracts these components are handed: LogTabActions
-// and WorkspaceSync.
+// log-tabs-state.ts, and the two contracts these components are handed - LogTabActions and WorkspaceSync -
+// are stated in types.ts with the tab state they act on.
 
 import {
   addLogTab,
@@ -20,8 +20,7 @@ import {
   reportPayloadFromPath,
   shareLinkFor,
 } from "./share-link"
-import type { LogTabActions, WorkspaceSync } from "./log-tabs-state"
-import type { LogTab, LogTabsInput, LogTabsState } from "./types"
+import type { LogTab, LogTabActions, LogTabsInput, LogTabsState, WorkspaceSync } from "./types"
 
 // The tab state reaches the rest of the app through here, and through nowhere else - the lint rule in
 // eslint.config.mjs says so. A reducer is only ever right beside the view that repaints from what it

@@ -6,7 +6,9 @@
 // one failure path ended up with no link to name.
 
 import {parseTapooLogText} from "./log-contract";
-import type {DecodedPayload, LogWarning, PayloadResult, TapooLog, UrlResult, ValidationCheck} from "./types";
+import type {
+  AppLocation, DecodedPayload, LoadedLog, PayloadResult, UrlResult,
+} from "./types";
 import {asTrimmedText} from "./utils";
 
 // --- Online JSON URLs ---
@@ -129,13 +131,6 @@ export function fetchFailureMessage(error: unknown): string {
   return `Could not load the log: ${message}. It may have been deleted, or may no longer be public.`;
 }
 
-/** What loadTapooLogFromUrl returns. Stated exactly rather than as an intersection: a success always
- * carries the parsed log and the URL it came from, while a failure carries the URL only when there was
- * one to report - a URL that never validated has none. */
-export type LoadedLog =
-  | {ok: true; source: TapooLog; warnings: LogWarning[]; checks: ValidationCheck[]; url: string}
-  | {ok: false; error: string; url?: string};
-
 /** Validates a URL, downloads it, and parses it: the whole path from what a reader typed to a report.
  *
  * `fetchText` is injectable so the suites can exercise every branch without a network. Returns
@@ -177,9 +172,6 @@ const REPORT_ROUTE_PATTERN = new RegExp(`/${REPORT_ROUTE}/([A-Za-z0-9_-]+)/?$`);
 // after the marker is captured, damaged or not, so a mangled token still reaches decodeReportPayload
 // and is reported as a damaged link rather than silently ignored.
 const REPORT_PAYLOAD_FRAGMENT_PATTERN = new RegExp(`^#?${REPORT_ROUTE}=(.+)$`);
-
-/** Only the parts of Location this module reads, so a test can pass a plain object. */
-export type AppLocation = {origin: string; pathname: string};
 
 const currentLocation = (): AppLocation | undefined => globalThis.location;
 

@@ -4,7 +4,7 @@ import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.jso
 import {turnReports} from "./log-contract"
 import {routeFrom} from "./maze"
 
-import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, survivalLedgerFor, survivalOutlookFor, survivalVerdict} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, survivalDecompositionFor, survivalSummaryFor, survivalVerdict} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -344,11 +344,11 @@ describe("mazeLevelRows", () => {
   // throughout" off that is the same measured-looking zero as a success path of "0 of 70".
   it("says nothing about reach where no turn reported a budget", () => {
     const model = must(mazeReplayModel(level()), "a model")
-    const outlook = must(survivalOutlookFor(model), "an outlook")
+    const survival = must(survivalSummaryFor(model), "a survival summary")
 
-    expect(outlook.budgetTurns).toBe(0)
-    expect(outlook.lostFrom).toBeNull()
-    expect(survivalVerdict(outlook)).toBeNull()
+    expect(survival.budgetTurns).toBe(0)
+    expect(survival.lostFrom).toBeNull()
+    expect(survivalVerdict(survival)).toBeNull()
     expect(value(mazeSurvivalRows(model), "Point of no return")).toBe("not recorded")
     // And no "none" for the paces either: each compares a distance against the units left.
     expect(value(mazeSurvivalRows(model), "Pace warnings")).toBe("not recorded")
@@ -557,7 +557,7 @@ describe("agentsFromRound", () => {
       "a model",
     )
 
-    expect(must(survivalOutlookFor(won), "an outlook").routeCells).toBe(70)
+    expect(must(survivalSummaryFor(won), "a survival summary").routeCells).toBe(70)
     expect(value(mazeSurvivalRows(won), "Route coverage")).toBe("70 of 70 route cells (100%)")
     // The round that was cut off had entered under a quarter of it.
     expect(value(mazeSurvivalRows(stopped), "Route coverage")).toBe("16 of 70 route cells (23%)")
@@ -566,7 +566,7 @@ describe("agentsFromRound", () => {
   it("measures no coverage where the round stated no destination", () => {
     const model = must(mazeReplayModel({...level(), destinationCell: null}), "a model")
 
-    expect(survivalOutlookFor(model)).toBeNull()
+    expect(survivalSummaryFor(model)).toBeNull()
     expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("not recorded")
   })
 
@@ -576,20 +576,20 @@ describe("agentsFromRound", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
     const model = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
 
-    expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, routeSlack: 1, batchCredit: 2, headroom: 3})
+    expect(survivalDecompositionFor(model)).toMatchObject({errorDebt: 0, routeSlack: 1, batchCredit: 2, headroom: 3})
     // It needed less than a move a turn and managed slightly more.
-    expect(survivalLedgerFor(model)!.neededDepth).toBeCloseTo(69 / 70, 12)
-    expect(survivalLedgerFor(model)!.batchDepth).toBeCloseTo(69 / 67, 12)
+    expect(survivalDecompositionFor(model)!.neededDepth).toBeCloseTo(69 / 70, 12)
+    expect(survivalDecompositionFor(model)!.batchDepth).toBeCloseTo(69 / 67, 12)
   })
 
   // A run that finished is never flagged, and a run that was cut off short of the target is not thereby
   // a run that could not finish: the warnings fire, the verdict does not.
   it("flags nothing on the won round, and warns without a verdict on the stopped one", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
-    const won = must(survivalOutlookFor(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round"))), "an outlook")
+    const won = must(survivalSummaryFor(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round"))), "a survival summary")
     const stopped = must(
-      survivalOutlookFor(mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))),
-      "an outlook",
+      survivalSummaryFor(mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))),
+      "a survival summary",
     )
 
     expect(won).toMatchObject({lostFrom: null, behindObservedPaceFrom: null, beyondDecayLeftFrom: null, visitedRouteCells: 70})
@@ -637,10 +637,10 @@ describe("agentsFromRound", () => {
       ]})), "a model")
 
       expect(model.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
-      const outlook = must(survivalOutlookFor(model), "the round's outlook")
-      expect(outlook.series.map((one) => one.turn)).toEqual([0, 1])
+      const survival = must(survivalSummaryFor(model), "the round's survival")
+      expect(survival.series.map((one) => one.turn)).toEqual([0, 1])
       // Three cells between them, all on the route, and neither seat counted twice.
-      expect(outlook.visitedRouteCells).toBe(3)
+      expect(survival.visitedRouteCells).toBe(3)
       expect(roundPlayed(model)).toEqual({turnsTaken: 2, movesApplied: 2, movesUnreported: 0})
     })
 
@@ -653,15 +653,15 @@ describe("agentsFromRound", () => {
         turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 3}),
       ]})), "a model")
 
-      const outlook = must(survivalOutlookFor(model), "the round's outlook")
-      expect(outlook.budgetTurns).toBe(2)
-      expect(outlook.series.map((one) => one.decayLeft)).toEqual([4, 3])
+      const survival = must(survivalSummaryFor(model), "the round's survival")
+      expect(survival.budgetTurns).toBe(2)
+      expect(survival.series.map((one) => one.decayLeft)).toEqual([4, 3])
       // Both seats' charges against the one budget: two turns, one unit each, so nothing paid for errors.
-      expect(survivalLedgerFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
+      expect(survivalDecompositionFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
       // And the rule runs on the pooled series: 15 route cells still to enter with 3 units left is past
       // four a unit, so the round was already beyond finishing by the turn the second seat played.
-      expect(outlook.lostFrom).toBe(1)
-      expect(survivalVerdict(outlook)?.lost).toBe(true)
+      expect(survival.lostFrom).toBe(1)
+      expect(survivalVerdict(survival)?.lost).toBe(true)
       expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("3 of 18 route cells (17%)")
     })
 
@@ -674,7 +674,7 @@ describe("agentsFromRound", () => {
         turnOf({turn: 1, before: "1,0", moves: ["MoveDown", "MoveUp"] as Move[], submittedCount: 2, applied: 1, cells: ["1,0", "2,0"]}),
       ]})), "a model")
 
-      expect(must(survivalOutlookFor(model), "an outlook").series.map((one) => one.wallContact)).toEqual([false, true])
+      expect(must(survivalSummaryFor(model), "a survival summary").series.map((one) => one.wallContact)).toEqual([false, true])
     })
   })
 

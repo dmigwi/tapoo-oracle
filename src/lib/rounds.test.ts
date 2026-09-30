@@ -649,7 +649,7 @@ describe("agentsFromRound", () => {
     ({seatId: null, model: null, echoedModel: null, api: null, endpoint: null, reasoning: null,
       echoBackReasoning: null, requestIntervalSeconds: null, ...over})
 
-  // What a seat played, over every turn it played - the survival ledger's population, which is not the
+  // What a seat played, over every turn it played - the survival decomposition's population, which is not the
   // speed decomposition's. A turn that settled no applied count is still a turn the seat was charged for,
   // so it counts as one, contributes no moves, and says so rather than disappearing into the total.
   it("counts a turn whose applied count nothing settled, and says the total is a floor", () => {

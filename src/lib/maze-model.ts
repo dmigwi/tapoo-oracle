@@ -8,10 +8,12 @@
 // Pure and document-free, which is why it is tested in node while the view beside it needs jsdom.
 
 import { mazeFromEncoded, routeFrom } from "./maze"
-import { decayLedger, survivalSeries } from "./survival"
+import { decomposeSurvival, survivalSeries } from "./survival"
 import { clamp, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, SummaryRow, TurnSummary, VisitStatus } from "./types"
-import type { DecayLedger, SurvivalOutlook } from "./survival"
+import type {
+  AgentSummary, CellKey, SurvivalDecomposition, DecayTally, Frame, PlayedRound, ReplayModel, SummaryRow, SurvivalSummary,
+  TurnSummary, VisitStatus,
+} from "./types"
 
 // --- Entry point: what maze-view calls ---
 
@@ -55,7 +57,7 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
   };
 }
 
-/** survivalOutlookFor reads the round against its route: the route itself, what of it the round entered,
+/** survivalSummaryFor reads the round against its route: the route itself, what of it the round entered,
  * what budget was left, and the first turn from which the destination was already out of reach.
  *
  * It walks the route here rather than leaving that to a caller, because every answer it gives is measured
@@ -68,14 +70,15 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
  * Split per seat, the same maze would answer one question several times and no answer would be about the
  * maze.
  *
- * Null where there is no route to measure against, or where the round played no turn. */
-export function survivalOutlookFor(model: ReplayModel | null | undefined): SurvivalOutlook | null {
+ * Null where there is no route to measure against. A round that played no turn is not null: it covered
+ * none of the route, which is a measurement. */
+export function survivalSummaryFor(model: ReplayModel | null | undefined): SurvivalSummary | null {
   if (!model?.routes) return null
 
   const route = routeFrom(model.routes, model.startCell)
   if (!route) return null
 
-  const ledger = survivalLedgerFor(model)
+  const decomposed = survivalDecompositionFor(model)
   return survivalSeries({
     turns: model.turns.map((turn) => ({
       turn: turn.turn,
@@ -89,18 +92,18 @@ export function survivalOutlookFor(model: ReplayModel | null | undefined): Survi
     route,
     distanceFromDestination: model.routes.distanceFromDestination,
     statusesAt: (turn) => model.visitStatusAfterTurn.get(turn),
-    batchDepth: ledger?.batchDepth ?? null,
+    batchDepth: decomposed?.batchDepth ?? null,
   })
 }
 
-/** survivalLedgerFor splits what the round spent into the terms that caused it, or null where the round
- * did not measure enough of it. The maze's cell count is the round's opening budget.
+/** survivalDecompositionFor splits whether the round could survive its mistakes into the terms that decide
+ * it, or null where the round did not measure enough of them. The maze's cell count is the round's opening budget.
  *
- * The seats' charges and counts added together, for the same reason the outlook pools their turns: the
+ * The seats' charges and counts added together, for the same reason the summary pools their turns: the
  * budget is one pool for the round, so a seat that spends half of it leaves the other half for the rest of
  * the table. Charges add the way agentsFromRound gathers them - the seats that stated one, and null where
  * none did. */
-export function survivalLedgerFor(model: ReplayModel | null | undefined): DecayLedger | null {
+export function survivalDecompositionFor(model: ReplayModel | null | undefined): SurvivalDecomposition | null {
   if (!model?.stats) return null
 
   let decayCharged: number | null = null
@@ -108,7 +111,7 @@ export function survivalLedgerFor(model: ReplayModel | null | undefined): DecayL
     if (agent.decayCharged !== null) decayCharged = (decayCharged ?? 0) + agent.decayCharged
   }
 
-  return decayLedger({cells: model.stats.cells, decayCharged, played: roundPlayed(model)})
+  return decomposeSurvival({cells: model.stats.cells, decayCharged, played: roundPlayed(model)})
 }
 
 /** roundPlayed adds up what every seat played, or null where no seat played a turn.
@@ -255,15 +258,6 @@ export function mazeFrameAt(levelModel: ReplayModel, turnIndex: number): Frame {
  * cap, or a failed request. */
 export const MOST_DECAY = 3;
 
-/** How a round's turns divide across the three charges, plus the turns no reading covered. */
-export type DecayTally = {
-  /** One entry per charge the round actually incurred, ascending. A charge that never happened is
-   * absent rather than zero: naming a penalty nobody paid describes the rules, not the run. */
-  counts: Array<{charge: number; count: number}>;
-  /** Turns whose charge no reading settled. Not zero-cost turns - unmeasured ones. */
-  unreported: number;
-};
-
 /** decayTally counts turns by what they were charged.
  *
  * Takes the turns rather than the level, because the two callers mean different sets of them: the Turns
@@ -291,7 +285,7 @@ export function decayTally(turns: readonly TurnSummary[]): DecayTally {
   };
 }
 
-// term writes a ledger figure with the sign it carries, because a ledger's terms are credits and debts and
+// term writes one of the terms with the sign it carries, because these are credits and debts and
 // "1 slack" reads as a quantity where "+1 slack" reads as the direction it pushed.
 function term(value: number): string {
   return value > 0 ? `+${formatCount(value)}` : formatCount(value);
@@ -302,9 +296,9 @@ function term(value: number): string {
 // Not the decomposition's `b`, though it measures the same thing: that one divides the turns that settled
 // both an applied count and a charge, and this one every turn played. Two denominators under one letter
 // would read as one figure printed twice, so this one carries its counts instead.
-function batchDepthOf(ledger: DecayLedger, played: AgentSummary["played"]): string {
+function batchDepthOf(decomposed: SurvivalDecomposition, played: AgentSummary["played"]): string {
   const depth = (value: number): string => value.toFixed(4);
-  const margin = ledger.batchDepth - ledger.neededDepth;
+  const margin = decomposed.batchDepth - decomposed.neededDepth;
   const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
 
   // A turn whose applied count nothing settled still counts as a turn and contributes no moves, so where
@@ -319,7 +313,7 @@ function batchDepthOf(ledger: DecayLedger, played: AgentSummary["played"]): stri
       : ` (${formatCount(played.movesApplied)} moves${unreported > 0 ? ` over ${formatCount(played.turnsTaken - unreported)} of ` : " / "}` +
         `${formatCount(played.turnsTaken)} turns${unreported > 0 ? `, ${formatCount(unreported)} never reported` : ""})`;
 
-  return `${floor}${depth(ledger.batchDepth)}${counts} \u00b7 needed ${depth(ledger.neededDepth)} (${standing})`;
+  return `${floor}${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})`;
 }
 
 /** survivalVerdict states the one thing the decay budget settles: whether the destination was still inside
@@ -329,16 +323,16 @@ function batchDepthOf(ledger: DecayLedger, played: AgentSummary["played"]): stri
  * be out of reach of, and silence is the honest answer rather than "within reach". Never a pace warning:
  * those are a different claim in a different vocabulary, and each of them describes a run that can still
  * recover. This one cannot switch off once it holds. */
-export function survivalVerdict(outlook: SurvivalOutlook | null): {text: string; lost: boolean} | null {
+export function survivalVerdict(survival: SurvivalSummary | null): {text: string; lost: boolean} | null {
   // Nothing at all where no turn reported a budget. The rule cannot hold without one, so `lostFrom` is null
   // there for want of a reading rather than because the destination stayed in reach - and "within reach
   // throughout" off the back of that is the same measured-looking zero as a success path of "0 of 70".
-  if (!outlook || outlook.budgetTurns === 0) return null;
+  if (!survival || survival.budgetTurns === 0) return null;
 
-  return outlook.lostFrom === null
+  return survival.lostFrom === null
     ? {text: "Within reach throughout: the destination stayed inside what the decay could reach.", lost: false}
     : {
-        text: `Could not finish from turn ${formatCount(outlook.lostFrom)}: more route cells left than the decay could reach.`,
+        text: `Could not finish from turn ${formatCount(survival.lostFrom)}: more route cells left than the decay could reach.`,
         lost: true,
       };
 }
@@ -379,14 +373,14 @@ export function finalScore(levelModel: ReplayModel | null | undefined): number |
 export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
-  const ledger = survivalLedgerFor(levelModel);
-  const outlook = survivalOutlookFor(levelModel);
+  const decomposed = survivalDecompositionFor(levelModel);
+  const survival = survivalSummaryFor(levelModel);
 
   return [
     // First, because it is what every row under it is evidence for: a round can be lost long before it stops,
     // and this says from which turn the stopping was already settled. A reader's figure after the fact - it
     // needs the decoded maze - so it never claims the round knew.
-    {field: "Point of no return", value: survivalVerdict(outlook)?.text ?? "not recorded"},
+    {field: "Point of no return", value: survivalVerdict(survival)?.text ?? "not recorded"},
     // How much of the route the round actually covered, against the route's own length.
     //
     // Not cells entered over the maze's area, which is the figure this replaces: that one is bounded by
@@ -396,9 +390,9 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     {
       field: "Route coverage",
       value: (() => {
-        if (!outlook) return "not recorded"
+        if (!survival) return "not recorded"
 
-        const {visitedRouteCells: covered, routeCells: length} = outlook
+        const {visitedRouteCells: covered, routeCells: length} = survival
         return `${formatCount(covered)} of ${formatCount(length)} route cells (${Math.round((covered / length) * 100)}%)`
       })(),
     },
@@ -408,22 +402,22 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     // Headroom is the three added up, not a fourth measurement: it is what the round had left over after the
     // route it walked and the mistakes it paid for, and a reader can check it against the terms beside it.
     {
-      field: "Decay ledger",
+      field: "Decay decomposed",
       value: (() => {
-        if (!ledger) return "not recorded"
+        if (!decomposed) return "not recorded"
 
         return (
-          `${term(ledger.routeSlack)} slack \u00b7 ${term(ledger.batchCredit)} batched \u00b7 ` +
-          `${term(ledger.errorDebt)} error debt = ${term(ledger.headroom)} headroom`
+          `${term(decomposed.routeSlack)} slack \u00b7 ${term(decomposed.batchCredit)} batched \u00b7 ` +
+          `${term(decomposed.errorDebt)} error debt = ${term(decomposed.headroom)} headroom`
         )
       })(),
     },
     {
       field: "Batch depth",
       value: (() => {
-        if (!ledger) return "not recorded"
+        if (!decomposed) return "not recorded"
 
-        return batchDepthOf(ledger, roundPlayed(levelModel))
+        return batchDepthOf(decomposed, roundPlayed(levelModel))
       })(),
     },
     // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both cost
@@ -436,13 +430,13 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     {
       field: "No-progress turns",
       value: (() => {
-        if (!outlook) return "not recorded"
+        if (!survival) return "not recorded"
 
         return [
-          `${formatCount(outlook.retreats)} retreating`,
-          `${formatCount(outlook.oscillations)} oscillating`,
-          outlook.unclassified > 0 ? `${formatCount(outlook.unclassified)} ungraded` : "",
-          outlook.wallContacts > 0 ? `${formatCount(outlook.wallContacts)} refused a move` : "",
+          `${formatCount(survival.retreats)} retreating`,
+          `${formatCount(survival.oscillations)} oscillating`,
+          survival.unclassified > 0 ? `${formatCount(survival.unclassified)} ungraded` : "",
+          survival.wallContacts > 0 ? `${formatCount(survival.wallContacts)} refused a move` : "",
         ]
           .filter((part) => part !== "")
           .join(" \u00b7 ")
@@ -455,18 +449,18 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
       value: (() => {
         // "none" is a finding, and it needs a budget to have been read: every pace compares a distance
         // against the units left, so with nothing to compare them to the answer is that nothing was read.
-        if (!outlook || outlook.budgetTurns === 0) return "not recorded"
+        if (!survival || survival.budgetTurns === 0) return "not recorded"
 
         const warnings = [
-          outlook.beyondDecayLeftFrom === null
+          survival.beyondDecayLeftFrom === null
             ? ""
-            : `the destination was further than the budget from turn ${formatCount(outlook.beyondDecayLeftFrom)}`,
-          outlook.beyondOwnPaceFrom === null
+            : `the destination was further than the budget from turn ${formatCount(survival.beyondDecayLeftFrom)}`,
+          survival.beyondOwnPaceFrom === null
             ? ""
-            : `further than its own batching could reach from turn ${formatCount(outlook.beyondOwnPaceFrom)}`,
-          outlook.behindObservedPaceFrom === null
+            : `further than its own batching could reach from turn ${formatCount(survival.beyondOwnPaceFrom)}`,
+          survival.behindObservedPaceFrom === null
             ? ""
-            : `new ground needed faster than any run has sustained, from turn ${formatCount(outlook.behindObservedPaceFrom)}`,
+            : `new ground needed faster than any run has sustained, from turn ${formatCount(survival.behindObservedPaceFrom)}`,
         ].filter((one) => one !== "")
 
         return warnings.length === 0 ? "none" : warnings.join(" \u00b7 ")
