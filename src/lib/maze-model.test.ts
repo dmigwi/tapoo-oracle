@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
+import {routeFrom} from "./maze"
 
-import {decayTally, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeStructureRows} from "./maze-model"
+import {decayTally, finalScore, mazeFrameAt, mazeReplayModel, mazeLevelRows, mazeSurvivalRows, roundPlayed, survivalDecompositionFor, survivalSummaryFor, survivalVerdict} from "./maze-model"
 import {decomposeTraversalSpeed} from "./geometry"
 import {agentsFromRound} from "./rounds"
 import {roundReportFor} from "./rubric-report"
@@ -23,8 +24,8 @@ type RoundOverrides = {encodedMaze?: EncodedMaze | null; turns?: TurnSummary[]; 
   visitStatusAfterTurn?: VisitStatusByTurn; historyWindowRadius?: number | null}
 
 const DEFAULT_TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
   {
     turn: 2,
     seatId: null,
@@ -33,7 +34,7 @@ const DEFAULT_TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   },
 ]
 
@@ -74,7 +75,7 @@ const level = ({encodedMaze = REAL_MAZE, turns, outcome, visitStatusAfterTurn,
 const charged = (charges: Array<number | null>): TurnSummary[] =>
   charges.map((decayCharged, turn) => ({
     turn, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged, decayRemaining: null, score: null,
   }))
 
 const modelFor = (overrides: RoundOverrides = {}) =>
@@ -141,8 +142,8 @@ describe("mazeFrameAt", () => {
   it("keeps two seats apart when neither states a player", () => {
     const nameless = modelFor({
       turns: [
-        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
-        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+        { turn: 0, seatId: 1, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+        { turn: 1, seatId: 2, playerName: null, before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
       ],
       outcome: null,
     })
@@ -157,8 +158,8 @@ describe("mazeFrameAt", () => {
   it("tracks each seat separately", () => {
     const shared = modelFor({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
       ],
     })
 
@@ -250,25 +251,6 @@ describe("visit statuses across a scrub", () => {
   })
 })
 
-describe("mazeStructureRows", () => {
-  it("describes the static maze topology", () => {
-    const rows = mazeStructureRows(modelFor())
-
-    expect(value(rows, "Maze size")).toBe("4 x 6 (24 cells)")
-    expect(value(rows, "Edges")).toBe("23")
-    expect(value(rows, "Dead ends")).toBe("6")
-    expect(value(rows, "Corridors")).toBe("14")
-    expect(value(rows, "3-exit junctions (deg3)")).toBe("4")
-    expect(value(rows, "4-exit junctions (deg4)")).toBe("0")
-    expect(value(rows, "Acyclic graph proof")).toBe("Edges = Maze_size - 1 = 23")
-    expect(value(rows, "Handshaking lemma proof")).toBe("Dead ends = deg3 + 2·deg4 + 2 = 6")
-  })
-
-  it("is empty when there is no maze to describe", () => {
-    expect(mazeStructureRows(modelFor({ encodedMaze: null }))).toEqual([])
-  })
-})
-
 describe("mazeLevelRows", () => {
   it("describes the round-level facts that belong to the level as a whole", () => {
     const rows = mazeLevelRows(modelFor())
@@ -281,6 +263,122 @@ describe("mazeLevelRows", () => {
     // Agent-specific rows belong to the per-seat cards, not to this table.
     expect(value(rows, "Traversal speed")).toBeUndefined()
     expect(value(rows, "Progress Credited to Katara")).toBeUndefined()
+  })
+
+  it("describes the static maze topology in the same list", () => {
+    const rows = mazeLevelRows(modelFor())
+
+    expect(value(rows, "Maze size")).toBe("4 x 6 (24 cells)")
+    expect(value(rows, "Edges")).toBe("23")
+    expect(value(rows, "Dead ends")).toBe("6")
+    expect(value(rows, "Corridors")).toBe("14")
+    expect(value(rows, "3-exit junctions (deg3)")).toBe("4")
+    expect(value(rows, "4-exit junctions (deg4)")).toBe("0")
+    expect(value(rows, "Acyclic graph proof")).toBe("Edges = Maze_size - 1 = 23")
+    expect(value(rows, "Handshaking lemma proof")).toBe("Dead ends = deg3 + 2·deg4 + 2 = 6")
+  })
+
+  // The order the rows read in, which is the point of merging the two lists: what the round did, then the
+  // ground it did it on, then the proofs that the ground was a valid maze. A success path is a fraction of
+  // the cell count directly above it, and neither figure has to be carried across a gap to check it.
+  it("lists what the round did, then the maze, then the proofs", () => {
+    expect(mazeLevelRows(modelFor()).map((row) => row.field)).toEqual([
+      "Outcome",
+      "Turns",
+      "Success path",
+      "History window",
+      "Maze size",
+      "Dead ends",
+      "Edges",
+      "Corridors",
+      "3-exit junctions (deg3)",
+      "4-exit junctions (deg4)",
+      "Acyclic graph proof",
+      "Handshaking lemma proof",
+    ])
+  })
+
+  // The outcome with the score the round ended on. The word alone says whether it finished and nothing
+  // about how it went - two unfinished rounds, one stopped at 6,700 and one at 0, read identically.
+  it("states the score the round ended on beside how it ended", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const won = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
+
+    // The entry that closed the round states 300, where the last turn's own reading still said 400: the
+    // closing figure is the settled one, so it wins over the running total that preceded it.
+    expect(value(mazeLevelRows(won), "Outcome")).toBe("won (final scores: 300)")
+    expect(finalScore(won)).toBe(300)
+  })
+
+  // An unfinished round has no closing entry, so the last turn that reported a score is the only score
+  // there is. Later turns that reported nothing cannot lower it and do not stand in for it.
+  it("falls back to the last turn that reported a score where the round never closed", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const stopped = must(
+      mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round")),
+      "a model",
+    )
+
+    expect(value(mazeLevelRows(stopped), "Outcome")).toBe("unfinished (final scores: 3,700)")
+  })
+
+  // Zero is a score a round can genuinely end on - both rounds that ended at a standstill in the captures
+  // recorded exactly that - so it is printed rather than read as an absence.
+  it("prints a final score of zero rather than treating it as none", () => {
+    const model = must(mazeReplayModel({...level(), outcome: {outcome: "lost", score: "0"}}), "a model")
+
+    expect(value(mazeLevelRows(model), "Outcome")).toBe("lost (final scores: 0)")
+  })
+
+  // And nothing in parentheses where no reading states a score at all: the v2.4.8 shape has rounds that
+  // state none anywhere, and an invented 0 there would be a measurement nothing took.
+  it("says only how the round ended where nothing stated a score", () => {
+    const model = must(mazeReplayModel(level()), "a model")
+
+    expect(finalScore(model)).toBeNull()
+    expect(value(mazeLevelRows(model), "Outcome")).toBe("won")
+  })
+
+  // A reassurance is a finding, and it needs evidence. Where no turn reported a budget there is nothing to
+  // test the rule against, so `lostFrom` is null for want of a reading - and printing "within reach
+  // throughout" off that is the same measured-looking zero as a success path of "0 of 70".
+  it("says nothing about reach where no turn reported a budget", () => {
+    const model = must(mazeReplayModel(level()), "a model")
+    const survival = must(survivalSummaryFor(model), "a survival summary")
+
+    expect(survival.budgetTurns).toBe(0)
+    expect(survival.lostFrom).toBeNull()
+    expect(survivalVerdict(survival)).toBeNull()
+    expect(value(mazeSurvivalRows(model), "Point of no return")).toBe("not recorded")
+    // And no "none" for the paces either: each compares a distance against the units left.
+    expect(value(mazeSurvivalRows(model), "Pace warnings")).toBe("not recorded")
+  })
+
+  // A round that walked none of a route it had covered none of it, which is a measurement. "not recorded"
+  // belongs to the round whose route was never computed, and the two must not read alike.
+  it("counts no coverage rather than none recorded where a round took no turn", () => {
+    const model = must(mazeReplayModel({...level(), turns: []}), "a model")
+
+    expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("0 of 18 route cells (0%)")
+  })
+
+  // A turn whose applied count nothing settled contributes a turn and no moves, so the depth is a floor.
+  // The row has to say which of the two it is printing.
+  it("marks the batch depth as a floor where a turn never reported its moves", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: 1, applied: index === 1 ? null : turn.applied}))
+    const model = must(mazeReplayModel({...base, turns, agents: agentsFromRound(new Map(), turns, null)}), "a model")
+
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("at least")
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("1 never reported")
+  })
+
+  // A route that was never computed is not a route of no length. The row read "0 of 24 (0%)" for a round
+  // that stated no destination - a measured-looking zero, from a null the formatter turned into one.
+  it("says nothing about a route where the round stated no destination", () => {
+    const rows = mazeLevelRows(must(mazeReplayModel({...level(), destinationCell: null}), "a model"))
+
+    expect(value(rows, "Success path")).toBe("not recorded")
   })
 
   // What the agent could see of its own history bounds what any verdict about its choices can fairly
@@ -401,6 +499,185 @@ describe("agentsFromRound", () => {
     expect(azula.cellsEntered).toBe(19)
   })
 
+  // What a finished run spent, over every turn it played, including the batch that finished it.
+  //
+  // The capture's won round reports its turns one at a time and then stops: a turn's outcome reaches the
+  // log through the next turn's tool calls, and the turn that wins has no next turn. Its three-move
+  // winning batch is recovered by replaying the submitted moves against the finishing cell, and without
+  // that the run is short by exactly the batch that made it a win.
+  //
+  // 69 rather than the 66 the outcome readings add up to, because one of them is stale: the reading
+  // covering turn 47 states no applied move and no charge, while the decay budget it reports falls from
+  // 23 to 22 and the player's cell moves from 6,6 to 6,7. The move happened; the record of it did not
+  // arrive. The parser reads that turn from its own prediction instead, which is what the trusted-record
+  // gate in buildPlayedRound is for.
+  it("counts every turn it played, and the winning batch the log never reports", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const round = must(firstRound(sliced).playedRound, "the fixture's first round")
+    const kora = must(round.agents[0], "the round's only seat")
+
+    expect(round.outcome?.turnCount).toBe(67)
+    expect(must(round.turns.at(-1), "the winning turn").applied).toBe(3)
+    expect(kora.played).toEqual({turnsTaken: 67, movesApplied: 69, movesUnreported: 0})
+    // Nothing went unreported, so the figure is a total rather than a floor.
+    expect(kora.played?.movesUnreported).toBe(0)
+  })
+
+  // The budget the round actually spent, turn by turn, as the log itself reports it.
+  //
+  // Read rather than derived: the maze holds 70 cells and the first reading says 70 units, so subtracting
+  // charges would look equivalent - until a charge goes missing, which is exactly what happens on turn 47.
+  // That reading states a charge of 0 while the budget it reports falls from 23 to 22, so a derived series
+  // would run one unit high from there to the end of the round.
+  it("carries the decay budget each turn reported", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const round = must(firstRound(sliced).playedRound, "the fixture's first round")
+    const remaining = (turn: number) =>
+      must(round.turns.find((one) => one.turn === turn), `turn ${turn}`).decayRemaining
+
+    expect(remaining(0)).toBe(69)
+    expect(remaining(46)).toBe(23)
+    expect(remaining(47)).toBe(22)
+    expect(remaining(65)).toBe(4)
+    // And null on the turn that won: a turn's budget is reported by the turn after it, and the turn that
+    // wins has none. Carrying the last figure forward would state a budget nothing measured.
+    expect(remaining(66)).toBeNull()
+  })
+
+  // The route the round was measured against, and how much of it the round covered.
+  //
+  // The capture's maze is one long corridor - its route runs through all 70 cells - so the coverage
+  // figure and a cells-over-area figure agree here. They part on a branching maze, which is why the row
+  // counts route cells: an area figure is bounded by how many dead ends a maze happens to have.
+  it("measures coverage against the route rather than the maze's area", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const won = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
+    const stopped = must(
+      mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round")),
+      "a model",
+    )
+
+    expect(must(survivalSummaryFor(won), "a survival summary").routeCells).toBe(70)
+    expect(value(mazeSurvivalRows(won), "Route coverage")).toBe("70 of 70 route cells (100%)")
+    // The round that was cut off had entered under a quarter of it.
+    expect(value(mazeSurvivalRows(stopped), "Route coverage")).toBe("16 of 70 route cells (23%)")
+  })
+
+  it("measures no coverage where the round stated no destination", () => {
+    const model = must(mazeReplayModel({...level(), destinationCell: null}), "a model")
+
+    expect(survivalSummaryFor(model)).toBeNull()
+    expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("not recorded")
+  })
+
+  // What the won round spent, in the unit it was scored in: every turn cost one unit, so it paid nothing
+  // for errors, and the two moves it earned by batching are what carried it past the maze's own size.
+  it("splits the won round's spending into the terms that caused it", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const model = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
+
+    expect(survivalDecompositionFor(model)).toMatchObject({errorDebt: 0, routeSlack: 1, batchCredit: 2, headroom: 3})
+    // It needed less than a move a turn and managed slightly more.
+    expect(survivalDecompositionFor(model)!.neededDepth).toBeCloseTo(69 / 70, 12)
+    expect(survivalDecompositionFor(model)!.batchDepth).toBeCloseTo(69 / 67, 12)
+  })
+
+  // A run that finished is never flagged, and a run that was cut off short of the target is not thereby
+  // a run that could not finish: the warnings fire, the verdict does not.
+  it("flags nothing on the won round, and warns without a verdict on the stopped one", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const won = must(survivalSummaryFor(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round"))), "a survival summary")
+    const stopped = must(
+      survivalSummaryFor(mazeReplayModel(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))),
+      "a survival summary",
+    )
+
+    expect(won).toMatchObject({lostFrom: null, behindObservedPaceFrom: null, beyondDecayLeftFrom: null, visitedRouteCells: 70})
+    // It had budget left when the provider failed, so nothing says it could not have finished.
+    expect(stopped.lostFrom).toBeNull()
+    expect(stopped.beyondDecayLeftFrom).toBe(1)
+    // And the two turns the maze refused a move on, which no status label reports as such.
+    expect(stopped.wallContacts).toBe(2)
+  })
+
+  // Three readings the capture cannot separate, because its route runs through every cell of a corridor
+  // maze and one seat played the whole of it. These use the 6x4 maze, whose route is 18 of its 24 cells.
+  describe("on a maze whose route is not the whole of it", () => {
+    const turnOf = (over: Partial<TurnSummary> & {turn: number}): TurnSummary => ({
+      seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1,
+      applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1,
+      decayRemaining: null, score: null, ...over,
+    })
+
+    // Coverage counts the cells of the route, not the cells walked: a round that wandered off it covers
+    // less of the route than it entered cells.
+    it("counts only the cells of the route, not every cell walked", () => {
+      const built = must(mazeReplayModel(level()), "a model")
+      const route = must(routeFrom(must(built.routes, "routes"), built.startCell), "a route")
+      const offRoute = must(
+        [...Array(24).keys()].map((index) => `${Math.floor(index / 6)},${index % 6}`).find((cell) => !route.includes(cell)),
+        "a cell off the route",
+      )
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, cells: [route[0]!, route[1]!]}),
+        turnOf({turn: 1, cells: [route[1]!, offRoute]}),
+      ]})), "a model")
+
+      // Three cells walked, two of them on the route.
+      expect(value(mazeSurvivalRows(model), "Route coverage")).toBe(`2 of ${route.length} route cells (11%)`)
+    })
+
+    // Two seats, one maze. The ground is the round's - a route cell one seat enters is entered for the
+    // round, and the second seat continues the walk rather than starting one of its own - so coverage and
+    // the no-progress split read every turn, whoever played it.
+    it("reads every seat's turns as one walk over the maze", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"]}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"]}),
+      ]})), "a model")
+
+      expect(model.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
+      const survival = must(survivalSummaryFor(model), "the round's survival")
+      expect(survival.series.map((one) => one.turn)).toEqual([0, 1])
+      // Three cells between them, all on the route, and neither seat counted twice.
+      expect(survival.visitedRouteCells).toBe(3)
+      expect(roundPlayed(model)).toEqual({turnsTaken: 2, movesApplied: 2, movesUnreported: 0})
+    })
+
+    // The budget with them. It is one pool for the round, capped at the maze's cell count, that every
+    // active agent spends from - no agent in a multi-agent round holds an allowance of its own - so the
+    // charges add and the units left are the round's however many seats drew on them.
+    it("reads one budget for the round, whichever seat drew on it", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"], decayRemaining: 4}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayRemaining: 3}),
+      ]})), "a model")
+
+      const survival = must(survivalSummaryFor(model), "the round's survival")
+      expect(survival.budgetTurns).toBe(2)
+      expect(survival.series.map((one) => one.decayLeft)).toEqual([4, 3])
+      // Both seats' charges against the one budget: two turns, one unit each, so nothing paid for errors.
+      expect(survivalDecompositionFor(model)).toMatchObject({errorDebt: 0, batchCredit: 0})
+      // And the rule runs on the pooled series: 15 route cells still to enter with 3 units left is past
+      // four a unit, so the round was already beyond finishing by the turn the second seat played.
+      expect(survival.lostFrom).toBe(1)
+      expect(survivalVerdict(survival)?.lost).toBe(true)
+      expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("3 of 18 route cells (17%)")
+    })
+
+    // A wall is a move the maze refused. A command it could not read is the model spelling a move wrong,
+    // which the rubric reports against the prediction - and a turn that applied everything readable hit
+    // no wall, however many unreadable commands trailed it.
+    it("does not read an unreadable command as a wall", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, moves: ["MoveDown"] as Move[], submittedCount: 3, applied: 1}),
+        turnOf({turn: 1, before: "1,0", moves: ["MoveDown", "MoveUp"] as Move[], submittedCount: 2, applied: 1, cells: ["1,0", "2,0"]}),
+      ]})), "a model")
+
+      expect(must(survivalSummaryFor(model), "a survival summary").series.map((one) => one.wallContact)).toEqual([false, true])
+    })
+  })
+
   // The identity, per seat, on the one round where every count is the real parser's: a speed is
   // uniqueCells/decayCharged, and that is the product of the three factors the card prints. Asserted
   // against Tapoo's own stated speed rather than against our ratio, so a parser that miscounted applied
@@ -425,8 +702,8 @@ describe("agentsFromRound", () => {
     const there = ["1,0", "2,0"] as CellKey[]
     const back = ["2,0", "1,0"] as CellKey[]
     const turns: TurnSummary[] = [
-      {...must(DEFAULT_TURNS[0], "a turn"), turn: 0, before: "1,0", applied: 1, cells: there, decayCharged: 1},
-      {...must(DEFAULT_TURNS[0], "a turn"), turn: 1, before: "2,0", applied: 1, cells: back, decayCharged: 1},
+      {...must(DEFAULT_TURNS[0], "a turn"), turn: 0, before: "1,0", applied: 1, cells: there, decayCharged: 1, decayRemaining: null},
+      {...must(DEFAULT_TURNS[0], "a turn"), turn: 1, before: "2,0", applied: 1, cells: back, decayCharged: 1, decayRemaining: null},
     ]
     const seat = must(agentsFromRound(new Map(), turns, null)[0], "the round's only seat")
 
@@ -445,7 +722,7 @@ describe("agentsFromRound", () => {
   it("counts a cell again where one turn re-enters it", () => {
     const oscillating: TurnSummary[] = [{
       ...must(DEFAULT_TURNS[0], "a turn"), applied: 3,
-      cells: ["0,0", "1,0", "0,0", "1,0"] as CellKey[], decayCharged: 1,
+      cells: ["0,0", "1,0", "0,0", "1,0"] as CellKey[], decayCharged: 1, decayRemaining: null,
     }]
     const seat = must(agentsFromRound(new Map(), oscillating, null)[0], "the round's only seat")
 
@@ -456,7 +733,7 @@ describe("agentsFromRound", () => {
   // A seat that took its turn and moved nowhere counts no entry, which is a measurement rather than an
   // absence: "not recorded" is for a seat with no turns at all.
   it("counts no entry for a turn that moved nowhere", () => {
-    const stayed: TurnSummary[] = [{...must(DEFAULT_TURNS[0], "a turn"), applied: 0, cells: ["0,0"], decayCharged: 3}]
+    const stayed: TurnSummary[] = [{...must(DEFAULT_TURNS[0], "a turn"), applied: 0, cells: ["0,0"], decayCharged: 3, decayRemaining: null}]
     const seat = must(agentsFromRound(new Map(), stayed, null)[0], "the round's only seat")
 
     expect(seat.cellsEntered).toBe(0)
@@ -475,7 +752,7 @@ describe("agentsFromRound", () => {
       turn: index, seatId: null, playerName: "Kora", before: `${index},0`,
       moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
       cells: [`${index},0`, `${index + 1},0`] as CellKey[], rejectedMove: null,
-      traversalSpeed: 1, decayCharged: index === 47 ? null : 1,
+      traversalSpeed: 1, decayCharged: index === 47 ? null : 1, decayRemaining: null, score: null,
     }))
     const kora = must(agentsFromRound(new Map(), turns, null)[0], "the round's only seat")
     const factors = must(decomposeTraversalSpeed(kora), "the seat's factors")
@@ -507,8 +784,8 @@ describe("agentsFromRound", () => {
   it("accumulates per-turn decay per agent", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1 },
-        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null , score: null},
       ],
     })
 
@@ -518,8 +795,8 @@ describe("agentsFromRound", () => {
   it("tracks each agent's speed, decay, and cells separately in a multi-agent level", () => {
     const seats = seatsOf({
       turns: [
-        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1 },
-        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2 },
+        { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 1, decayRemaining: null , score: null},
+        { turn: 1, seatId: null, playerName: "Bumi", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: 2, decayRemaining: null , score: null},
       ],
       outcome: {
         outcome: "won",
@@ -543,7 +820,7 @@ describe("agentsFromRound", () => {
 
   it("names no seat for a round whose turns name no player", () => {
     const anonymous = [
-      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+      { turn: 0, seatId: null, playerName: null, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
     ]
 
     expect(seatsOf({turns: anonymous})).toEqual([])

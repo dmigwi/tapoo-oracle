@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, successPathLength} from "./maze"
-import {expectErr, expectOk} from "./test-support";
+import {cellFromGridPoint, decodeEncodedMaze, mazeFromEncoded, routeFrom, routeToDestination} from "./maze"
+import {expectErr, expectOk, must} from "./test-support";
 
 // The exact maze block from a real Tapoo export (v2.5.1, 6x4). Using the shipped bytes rather than a
 // hand-built grid is the point: a fabricated fixture would prove the decoder self-consistent while
@@ -95,30 +95,6 @@ describe("mazeFromEncoded", () => {
   })
 })
 
-describe("successPathLength", () => {
-  const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
-
-  it("is zero between a cell and itself", () => {
-    expect(successPathLength(maze, START, START)).toBe(0)
-  })
-
-  it("is null for a cell outside the maze", () => {
-    expect(successPathLength(maze, START, "99,99")).toBeNull()
-  })
-
-  // The two units, pinned against each other. successPathLength counts moves - a cell to itself is
-  // zero of them - while the stat the report displays counts the cells those moves pass through, which
-  // is one more. The report prints it beside the maze's cell count, so a move count there understates
-  // both the figure and its coverage percentage by exactly one cell.
-  it("is one move fewer than the cells the stat counts", () => {
-    const {stats} = expectOk(mazeFromEncoded(REAL_MAZE, {startCell: START, destinationCell: DESTINATION}))
-    const moves = successPathLength(maze, START, DESTINATION)
-
-    expect(moves).not.toBeNull()
-    expect(stats.successPathCells).toBe((moves as number) + 1)
-  })
-})
-
 describe("cellFromGridPoint", () => {
   it.each([
     [{ x: 1, y: 1 }, "0,0"],
@@ -131,5 +107,80 @@ describe("cellFromGridPoint", () => {
   it("returns null for a point that is not one", () => {
     expect(cellFromGridPoint(undefined)).toBeNull()
     expect(cellFromGridPoint({x: "left", y: 1} as unknown as {x: number; y: number})).toBeNull()
+  })
+})
+
+// One walk from the destination answers for every cell, which is what a per-turn distance needs: the
+// seat stands somewhere new each turn, and a report asks how far that is from the target on all of them.
+describe("routeToDestination", () => {
+  const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
+
+  it("measures the destination as zero moves from itself", () => {
+    const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
+
+    expect(routes.distanceFromDestination.get(DESTINATION)).toBe(0)
+    // And it is the one cell with nowhere further to step.
+    expect(routes.nextNeighbour.has(DESTINATION)).toBe(false)
+  })
+
+  // Every cell, not the reachable few: the maze is a spanning tree, so a cell missing from this would be
+  // a cell the structure cannot reach, which mazeFromEncoded already refuses to decode.
+  it("answers for every cell of the maze", () => {
+    const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
+
+    expect(routes.distanceFromDestination.size).toBe(maze.exits.size)
+  })
+
+  // The distance is the route's, not the grid's. "0,3" sits two columns from the destination on the same
+  // row - a Manhattan estimate says 2 - and the maze's only way there is 10 moves, back out through the
+  // corridor it shares with the start. That gap is why the distance is walked rather than estimated.
+  it("measures along the maze rather than across the grid", () => {
+    const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
+
+    expect(routes.distanceFromDestination.get("0,3")).toBe(10)
+    expect(routes.distanceFromDestination.get(START)).toBe(17)
+  })
+
+  it("has no routes where the round stated no destination", () => {
+    expect(routeToDestination(maze, null)).toBeNull()
+    expect(routeToDestination(maze, "99,99")).toBeNull()
+  })
+
+  // The same walk both ways: the stat the report prints is this distance in cells rather than moves, so
+  // one of them being wrong is the two disagreeing.
+  it("agrees with the length the stats report", () => {
+    const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
+    const {stats} = expectOk(mazeFromEncoded(REAL_MAZE, {startCell: START, destinationCell: DESTINATION}))
+
+    expect(stats.successPathCells).toBe(must(routes.distanceFromDestination.get(START), "the start's distance") + 1)
+  })
+})
+
+// The cells themselves, not just how many: coverage asks which cells are on the route, and the verdict
+// asks how many of them are still unvisited.
+describe("routeFrom", () => {
+  const {maze} = expectOk(mazeFromEncoded(REAL_MAZE))
+  const routes = must(routeToDestination(maze, DESTINATION), "routes to the destination")
+
+  it("walks the route from a cell to the destination, both included", () => {
+    const route = must(routeFrom(routes, START), "a route from the start")
+
+    expect(route.at(0)).toBe(START)
+    expect(route.at(-1)).toBe(DESTINATION)
+    // 17 moves pass through 18 cells.
+    expect(route).toHaveLength(18)
+    // Every step is a move the maze allows, and every cell is one nearer than the last.
+    for (const [index, cell] of route.entries()) {
+      expect(routes.distanceFromDestination.get(cell)).toBe(route.length - 1 - index)
+    }
+  })
+
+  it("is the destination alone from the destination", () => {
+    expect(routeFrom(routes, DESTINATION)).toEqual([DESTINATION])
+  })
+
+  it("is null for a cell the routes do not reach", () => {
+    expect(routeFrom(routes, "99,99")).toBeNull()
+    expect(routeFrom(routes, null)).toBeNull()
   })
 })

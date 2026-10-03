@@ -1854,11 +1854,24 @@ td {
   color: var(--oracle-muted);
 }
 
+/* The summary stacks: the tables in a grid, then the seats under them at the full width. A stack rather
+   than one grid holding both, because a grid item spanning every column keeps every column alive - and with
+   the seats' panel inside it, auto-fit could not collapse the tracks it had no panels for. The tables sat at
+   269 pixels in a 1,440-pixel summary, the filled tracks beside empty ones, and no window was ever wide
+   enough to widen them. */
 .maze-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+}
+
+/* As many columns as fit at a legible width, and no more: auto-fit collapses the rest so the panels that
+   exist share the whole width rather than lining up beside empty tracks. */
+.maze-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
   gap: 1.5rem;
-  margin-top: 1.25rem;
   align-items: start;
 }
 
@@ -1873,17 +1886,13 @@ td {
 
 /* A grid item defaults to min-width: auto, which is its content's min-content width - so a panel holding
    anything that refuses to shrink widens its column instead, and the grid widens the page. The metrics table
-   carries a 38rem floor for exactly that reason, and without this the floor reached all the way out here:
+   carries a 34rem floor for exactly that reason, and without this the floor reached all the way out here:
    the whole summary grew wide rather than the table scrolling inside its own scroller.
    
-   On every panel, not just the one holding the cards: any panel is free to hold a wide table later, and the
+   On every panel, not just the one holding the seat cards: any panel is free to hold a wide table later, and the
    answer is always the same - the panel takes the width it is given and whatever is inside it scrolls. */
 .maze-summary-panel {
   min-width: 0;
-}
-
-.maze-summary-panel--full {
-  grid-column: 1 / -1;
 }
 
 .maze-summary-table {
@@ -1945,8 +1954,8 @@ td {
 
    Two rules that only work together: overflow-x does nothing to a table at width: 100%, which by definition
    has no overflow, and it is the min-width that creates it. The same pairing the wide summary tables use.
-   34rem is the four columns at a legible size, the decomposition being the wide one; above that width the
-   table is still width: 100% and nothing moves. */
+   34rem is the four columns at a legible size, the speed decomposition being the wide one; above that
+   width the table is still width: 100% and nothing moves. */
 .maze-agent-scroll {
   overflow-x: auto;
 }
@@ -1966,13 +1975,34 @@ td {
   white-space: nowrap;
 }
 
-/* The factor key under the per-seat cards. Its own rules rather than .maze-legend's: that class lays out
-   the swatch strips beside the scrubber, as a wrapping row indented by half a thumb to line up with them,
-   and this is a stack of sentences under a card.
+/* The verdict in the level table: the one value there that is a result rather than a measurement. Sage
+   where the destination stayed in reach and rose where it did not - the two colours this page already uses
+   for a result that held and one that did not.
+
+   Not mono, and free to wrap: it is a sentence, where the cells around it are figures. */
+.maze-summary-verdict {
+  font-family: var(--oracle-body);
+}
+
+.maze-summary-verdict.is-clear {
+  color: var(--oracle-sage);
+}
+
+.maze-summary-verdict.is-lost {
+  color: var(--oracle-rose);
+}
+
+/* The two keys: the factor key under the per-seat cards, and the survival key under the survival table.
+   One rule for both, because they are the same thing twice - a stack of sentences under the thing whose
+   symbols they gloss.
+
+   Their own rules rather than .maze-legend's: that class lays out the swatch strips beside the scrubber, as
+   a wrapping row indented by half a thumb to line up with them, and neither of these is that.
 
    One line per symbol, and no flex: the item is a symbol followed by prose, so its parts should sit inline
    and the prose should wrap the way prose does. Nothing here scrolls. */
-.maze-agent-key {
+.maze-agent-key,
+.maze-summary-key {
   margin: 0.5rem 0 0;
   padding: 0;
   list-style: none;

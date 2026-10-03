@@ -7,9 +7,13 @@
 //
 // Pure and document-free, which is why it is tested in node while the view beside it needs jsdom.
 
-import { mazeFromEncoded } from "./maze"
+import { mazeFromEncoded, routeFrom } from "./maze"
+import { decomposeSurvival, survivalSeries } from "./survival"
 import { clamp, formatCount } from "./utils"
-import type { AgentSummary, CellKey, Frame, PlayedRound, ReplayModel, SummaryRow, TurnSummary, VisitStatus } from "./types"
+import type {
+  AgentSummary, CellKey, SurvivalDecomposition, DecayTally, Frame, PlayedRound, ReplayModel, SummaryRow, SurvivalSummary,
+  TurnSummary, VisitStatus,
+} from "./types"
 
 // --- Entry point: what maze-view calls ---
 
@@ -40,6 +44,7 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
     maze: built.ok ? built.maze : null,
     error: built.ok ? null : built.error,
     stats: built.ok ? built.stats : null,
+    routes: built.ok ? built.routes : null,
     startCell: round.startCell,
     destinationCell: destination,
     endCell: round.endCell,
@@ -50,6 +55,82 @@ export function mazeReplayModel(round: PlayedRound | null | undefined): ReplayMo
     outcome: round.outcome,
     agents: round.agents
   };
+}
+
+/** survivalSummaryFor reads the round against its route: the route itself, what of it the round entered,
+ * what budget was left, and the first turn from which the destination was already out of reach.
+ *
+ * It walks the route here rather than leaving that to a caller, because every answer it gives is measured
+ * against the route and a second reading of it could only disagree with this one. The walk is a lookup into
+ * the breadth-first pass mazeFromEncoded already made, so nothing searches the maze twice.
+ *
+ * Per round, not per seat, because every term in it belongs to the maze. The decay budget is the round's -
+ * one pool, capped at the maze's cell count, that every active agent spends from - and a route cell a seat
+ * enters is entered for the round, so the next seat inherits the ground rather than starting again on it.
+ * Split per seat, the same maze would answer one question several times and no answer would be about the
+ * maze.
+ *
+ * Null where there is no route to measure against. A round that played no turn is not null: it covered
+ * none of the route, which is a measurement. */
+export function survivalSummaryFor(model: ReplayModel | null | undefined): SurvivalSummary | null {
+  if (!model?.routes) return null
+
+  const route = routeFrom(model.routes, model.startCell)
+  if (!route) return null
+
+  const decomposed = survivalDecompositionFor(model)
+  return survivalSeries({
+    turns: model.turns.map((turn) => ({
+      turn: turn.turn,
+      cells: turn.cells,
+      applied: turn.applied,
+      // What the maze could read of what the turn asked for. TurnSummary.moves is already narrowed to
+      // that prefix, so the difference from `applied` is the wall and nothing else.
+      applicable: turn.moves.length,
+      decayRemaining: turn.decayRemaining,
+    })),
+    route,
+    distanceFromDestination: model.routes.distanceFromDestination,
+    statusesAt: (turn) => model.visitStatusAfterTurn.get(turn),
+    batchDepth: decomposed?.batchDepth ?? null,
+  })
+}
+
+/** survivalDecompositionFor splits whether the round could survive its mistakes into the terms that decide
+ * it, or null where the round did not measure enough of them. The maze's cell count is the round's opening budget.
+ *
+ * The seats' charges and counts added together, for the same reason the summary pools their turns: the
+ * budget is one pool for the round, so a seat that spends half of it leaves the other half for the rest of
+ * the table. Charges add the way agentsFromRound gathers them - the seats that stated one, and null where
+ * none did. */
+export function survivalDecompositionFor(model: ReplayModel | null | undefined): SurvivalDecomposition | null {
+  if (!model?.stats) return null
+
+  let decayCharged: number | null = null
+  for (const agent of model.agents) {
+    if (agent.decayCharged !== null) decayCharged = (decayCharged ?? 0) + agent.decayCharged
+  }
+
+  return decomposeSurvival({cells: model.stats.cells, decayCharged, played: roundPlayed(model)})
+}
+
+/** roundPlayed adds up what every seat played, or null where no seat played a turn.
+ *
+ * Added rather than taken from the turn list, so the one accumulation agentsFromRound already vetted is the
+ * only one: the winning turn's moves reach a seat's count through an inference the raw turns do not carry. */
+export function roundPlayed(model: ReplayModel | null | undefined): AgentSummary["played"] {
+  let total: AgentSummary["played"] = null
+  for (const agent of model?.agents ?? []) {
+    if (!agent.played) continue
+    const sum: NonNullable<AgentSummary["played"]> = total ?? {turnsTaken: 0, movesApplied: 0, movesUnreported: 0}
+    total = {
+      turnsTaken: sum.turnsTaken + agent.played.turnsTaken,
+      movesApplied: sum.movesApplied + agent.played.movesApplied,
+      movesUnreported: sum.movesUnreported + agent.played.movesUnreported,
+    }
+  }
+
+  return total
 }
 
 /** agentIndexOf resolves a turn to the seat that played it, as an index into `agents`, or -1 for a turn
@@ -177,15 +258,6 @@ export function mazeFrameAt(levelModel: ReplayModel, turnIndex: number): Frame {
  * cap, or a failed request. */
 export const MOST_DECAY = 3;
 
-/** How a round's turns divide across the three charges, plus the turns no reading covered. */
-export type DecayTally = {
-  /** One entry per charge the round actually incurred, ascending. A charge that never happened is
-   * absent rather than zero: naming a penalty nobody paid describes the rules, not the run. */
-  counts: Array<{charge: number; count: number}>;
-  /** Turns whose charge no reading settled. Not zero-cost turns - unmeasured ones. */
-  unreported: number;
-};
-
 /** decayTally counts turns by what they were charged.
  *
  * Takes the turns rather than the level, because the two callers mean different sets of them: the Turns
@@ -213,34 +285,203 @@ export function decayTally(turns: readonly TurnSummary[]): DecayTally {
   };
 }
 
-/** mazeStructureRows describes the static shape of the maze — its topology and the two structural
- * proofs that confirm it is a valid perfect maze. These facts do not change as the round is played. */
-export function mazeStructureRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
+// term writes one of the terms with the sign it carries, because these are credits and debts and
+// "1 slack" reads as a quantity where "+1 slack" reads as the direction it pushed.
+function term(value: number): string {
+  return value > 0 ? `+${formatCount(value)}` : formatCount(value);
+}
+
+// batchDepthOf writes the depth the round reached beside the depth the route still demanded of it.
+//
+// Not the decomposition's `b`, though it measures the same thing: that one divides the turns that settled
+// both an applied count and a charge, and this one every turn played. Two denominators under one letter
+// would read as one figure printed twice, so this one carries its counts instead.
+function batchDepthOf(decomposed: SurvivalDecomposition, played: AgentSummary["played"]): string {
+  const depth = (value: number): string => value.toFixed(4);
+  const margin = decomposed.batchDepth - decomposed.neededDepth;
+  const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
+
+  // A turn whose applied count nothing settled still counts as a turn and contributes no moves, so where
+  // there are any, the moves are a floor and the depth with them. Said rather than left for the reader to
+  // work out: the row is a ratio, and a ratio quietly missing part of its numerator is the one shape of
+  // wrong figure that looks exactly like a right one.
+  const unreported = played?.movesUnreported ?? 0;
+  const floor = unreported > 0 ? "at least " : "";
+  const counts =
+    played === null
+      ? ""
+      : ` (${formatCount(played.movesApplied)} moves${unreported > 0 ? ` over ${formatCount(played.turnsTaken - unreported)} of ` : " / "}` +
+        `${formatCount(played.turnsTaken)} turns${unreported > 0 ? `, ${formatCount(unreported)} never reported` : ""})`;
+
+  return `${floor}${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})`;
+}
+
+/** survivalVerdict states the one thing the decay budget settles: whether the destination was still inside
+ * what the budget could reach.
+ *
+ * Two answers and no more, and nothing at all where the round stated no destination - there is no route to
+ * be out of reach of, and silence is the honest answer rather than "within reach". Never a pace warning:
+ * those are a different claim in a different vocabulary, and each of them describes a run that can still
+ * recover. This one cannot switch off once it holds. */
+export function survivalVerdict(survival: SurvivalSummary | null): {text: string; lost: boolean} | null {
+  // Nothing at all where no turn reported a budget. The rule cannot hold without one, so `lostFrom` is null
+  // there for want of a reading rather than because the destination stayed in reach - and "within reach
+  // throughout" off the back of that is the same measured-looking zero as a success path of "0 of 70".
+  if (!survival || survival.budgetTurns === 0) return null;
+
+  return survival.lostFrom === null
+    ? {text: "Within reach throughout: the destination stayed inside what the decay could reach.", lost: false}
+    : {
+        text: `Could not finish from turn ${formatCount(survival.lostFrom)}: more route cells left than the decay could reach.`,
+        lost: true,
+      };
+}
+
+/** finalScore reads the score the round ended on, or null where nothing stated one.
+ *
+ * The entry that closed the round states it, and an unfinished round has no such entry - so the fallback is
+ * the last turn that reported a score, which is Tapoo's own figure "after that outcome" for the last turn
+ * anything was reported for. Later turns that reported nothing cannot lower it and do not stand in for it.
+ *
+ * Null rather than 0 where no reading states one, because 0 is a score a round can genuinely end on: it is
+ * what the two rounds that ended at a standstill in the captures both recorded. */
+export function finalScore(levelModel: ReplayModel | null | undefined): number | null {
+  if (!levelModel) return null
+
+  const stated = levelModel.outcome?.score
+  if (typeof stated === "number" && Number.isFinite(stated)) return stated
+  if (typeof stated === "string" && stated.trim() !== "" && Number.isFinite(Number(stated))) return Number(stated)
+
+  for (let index = levelModel.turns.length - 1; index >= 0; index--) {
+    const score = levelModel.turns[index]?.score
+    if (typeof score === "number") return score
+  }
+
+  return null
+}
+
+/** mazeSurvivalRows reads the round against the maze's own budget: what it spent, what that left it, and
+ * whether the destination was still inside what remained.
+ *
+ * Its own table rather than columns on a seat's card, because every term in it belongs to the maze. A round
+ * opens with one decay unit per cell and spends at least one a turn, so one budget is drawn down by whoever
+ * moves and one route is covered by whoever walks it. Split per seat, the same maze would answer one
+ * question several times over and no answer would be about the maze.
+ *
+ * Every row reads "not recorded" rather than a zero where the round did not measure it: a log that stated no
+ * destination has no route to fall short of, and a measured-looking 0 is the one answer that would be wrong. */
+export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
-  const stats = levelModel.stats;
+  const decomposed = survivalDecompositionFor(levelModel);
+  const survival = survivalSummaryFor(levelModel);
 
   return [
-    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
-    {field: "Dead ends", value: formatCount(stats.deadEnds)},
-    {field: "Edges", value: formatCount(stats.edges)},
-    {field: "Corridors", value: formatCount(stats.corridors)},
-    {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
-    {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
-    {field: "Acyclic graph proof", value: `Edges = Maze_size - 1 = ${formatCount(stats.cells - 1)}`},
-    {field: "Handshaking lemma proof", value: `Dead ends = deg3 + 2·deg4 + 2 = ${formatCount(stats.deg3 + 2 * stats.deg4 + 2)}`},
+    // First, because it is what every row under it is evidence for: a round can be lost long before it stops,
+    // and this says from which turn the stopping was already settled. A reader's figure after the fact - it
+    // needs the decoded maze - so it never claims the round knew.
+    {field: "Point of no return", value: survivalVerdict(survival)?.text ?? "not recorded"},
+    // How much of the route the round actually covered, against the route's own length.
+    //
+    // Not cells entered over the maze's area, which is the figure this replaces: that one is bounded by
+    // how many dead ends a maze happens to have rather than by how close the round came to finishing, and
+    // on a branching maze the two disagree sharply - one real round reads 0.79 of the area and 0.99 of
+    // the route. They agree only on a corridor maze, where every cell is on the route anyway.
+    {
+      field: "Route coverage",
+      value: (() => {
+        if (!survival) return "not recorded"
+
+        const {visitedRouteCells: covered, routeCells: length} = survival
+        return `${formatCount(covered)} of ${formatCount(length)} route cells (${Math.round((covered / length) * 100)}%)`
+      })(),
+    },
+    // What the round spent, in the one unit that measures a maze: a round opens with a decay unit per cell
+    // and spends at least one a turn, so slack, batching and error debt are the whole of what it cost.
+    //
+    // Headroom is the three added up, not a fourth measurement: it is what the round had left over after the
+    // route it walked and the mistakes it paid for, and a reader can check it against the terms beside it.
+    {
+      field: "Decay decomposed",
+      value: (() => {
+        if (!decomposed) return "not recorded"
+
+        return (
+          `${term(decomposed.routeSlack)} slack \u00b7 ${term(decomposed.batchCredit)} batched \u00b7 ` +
+          `${term(decomposed.errorDebt)} error debt = ${term(decomposed.headroom)} headroom`
+        )
+      })(),
+    },
+    {
+      field: "Batch depth",
+      value: (() => {
+        if (!decomposed) return "not recorded"
+
+        return batchDepthOf(decomposed, roundPlayed(levelModel))
+      })(),
+    },
+    // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both cost
+    // one unit, so the budget cannot tell them apart - and one is what the prompt asks for at a confirmed
+    // dead end while the other is a rubric violation.
+    //
+    // Turns rather than moves, because turns are what these count: a turn that applied four moves and
+    // entered no new cell is one of them, not four. The charge falls on the turn, so the unit the row is
+    // counted in has to be the unit it was paid in.
+    {
+      field: "No-progress turns",
+      value: (() => {
+        if (!survival) return "not recorded"
+
+        return [
+          `${formatCount(survival.retreats)} retreating`,
+          `${formatCount(survival.oscillations)} oscillating`,
+          survival.unclassified > 0 ? `${formatCount(survival.unclassified)} ungraded` : "",
+          survival.wallContacts > 0 ? `${formatCount(survival.wallContacts)} refused a move` : "",
+        ]
+          .filter((part) => part !== "")
+          .join(" \u00b7 ")
+      })(),
+    },
+    // The paces, worded so none of them can be read as the verdict: each says the round was behind where it
+    // would have to be, which is a thing a round can still recover from.
+    {
+      field: "Pace warnings",
+      value: (() => {
+        // "none" is a finding, and it needs a budget to have been read: every pace compares a distance
+        // against the units left, so with nothing to compare them to the answer is that nothing was read.
+        if (!survival || survival.budgetTurns === 0) return "not recorded"
+
+        const warnings = [
+          survival.beyondDecayLeftFrom === null
+            ? ""
+            : `the destination was further than the budget from turn ${formatCount(survival.beyondDecayLeftFrom)}`,
+          survival.beyondOwnPaceFrom === null
+            ? ""
+            : `further than its own batching could reach from turn ${formatCount(survival.beyondOwnPaceFrom)}`,
+          survival.behindObservedPaceFrom === null
+            ? ""
+            : `new ground needed faster than any run has sustained, from turn ${formatCount(survival.behindObservedPaceFrom)}`,
+        ].filter((one) => one !== "")
+
+        return warnings.length === 0 ? "none" : warnings.join(" \u00b7 ")
+      })(),
+    },
   ];
 }
 
-/** mazeLevelRows describes the round-level facts that belong to the level as a whole rather than to
- * any one agent: how it ended, how many turns it ran and what each was charged, the length of the
- * success route, and how far the agent could see its own history. */
+/** mazeLevelRows describes the level as a whole rather than any one agent: how the round ended and what it
+ * cost, then the maze it was played on and the two proofs that it was a valid perfect maze.
+ *
+ * One list rather than a structure half and a round half, because the reader's order is neither: the
+ * outcome is what a report is opened for, the success path is only meaningful beside the maze size it is a
+ * fraction of, and the proofs are the last thing anyone reads. Split across two functions, the rows could
+ * only be ordered within their half, and the two facts that belong side by side sat in different tables. */
 export function mazeLevelRows(levelModel: ReplayModel | null | undefined): SummaryRow[] {
   if (!levelModel?.stats) return [];
 
   const stats = levelModel.stats;
   const outcome = levelModel.outcome ?? {};
-  const pathCoverage = Math.round((stats.successPathCells! / stats.cells) * 100);
+  const routeLength = stats.successPathCells;
 
   // The turn count on its own says how many attempts there were and nothing about what they cost. The
   // breakdown says both, and it is the same partition the strip under the scrubber draws - so a reader
@@ -255,13 +496,33 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
   if (tally.unreported > 0) parts.push(`${formatCount(tally.unreported)} unreported`);
 
   return [
-    {field: "Outcome", value: outcome.outcome ?? "unfinished"},
+    // The outcome with the score it ended on, which is the figure the game itself reports a round by. On
+    // its own the word says whether the round finished and nothing about how it went: two unfinished
+    // rounds, one stopped at 6,700 and one at 0, read identically without it.
+    //
+    // "final scores", plural, is Tapoo's own label for it and stays plural whatever the round holds.
+    {
+      field: "Outcome",
+      value: (() => {
+        const outcomeName = outcome.outcome ?? "unfinished"
+        const score = finalScore(levelModel)
+        return score === null ? outcomeName : `${outcomeName} (final scores: ${formatCount(score)})`
+      })(),
+    },
     {
       field: "Turns",
       value:
         parts.length > 1 ? `${formatCount(levelModel.turns.length)} (${parts.join(" + ")})` : formatCount(levelModel.turns.length),
     },
-    {field: "Success path", value: `${formatCount(stats.successPathCells!)} of ${formatCount(stats.cells)} (${pathCoverage}%)`},
+    // Null, not zero, where the round stated no destination: the route was never computed, and "0 of 70
+    // (0%)" reads as a measured route of no length.
+    {
+      field: "Success path",
+      value:
+        routeLength === null
+          ? "not recorded"
+          : `${formatCount(routeLength)} of ${formatCount(stats.cells)} (${Math.round((routeLength / stats.cells) * 100)}%)`,
+    },
     // How much of its own history the agent could see, which bounds what any verdict about its choices
     // can fairly claim: a move that looks careless at radius 2 may have been the best available to
     // something that could not see the cell it had already exhausted.
@@ -272,5 +533,16 @@ export function mazeLevelRows(levelModel: ReplayModel | null | undefined): Summa
           ? "not recorded"
           : `${formatCount(levelModel.historyWindowRadius)} cells (Manhattan radius)`,
     },
+    // The maze itself, under the round that was played on it. It does not change as the round runs, which is
+    // why it sits below the rows that do - and directly under the success path, which is a fraction of the
+    // cell count on the first line of it.
+    {field: "Maze size", value: `${stats.rows} x ${stats.cols} (${formatCount(stats.cells)} cells)`},
+    {field: "Dead ends", value: formatCount(stats.deadEnds)},
+    {field: "Edges", value: formatCount(stats.edges)},
+    {field: "Corridors", value: formatCount(stats.corridors)},
+    {field: "3-exit junctions (deg3)", value: formatCount(stats.deg3)},
+    {field: "4-exit junctions (deg4)", value: formatCount(stats.deg4)},
+    {field: "Acyclic graph proof", value: `Edges = Maze_size - 1 = ${formatCount(stats.cells - 1)}`},
+    {field: "Handshaking lemma proof", value: `Dead ends = deg3 + 2·deg4 + 2 = ${formatCount(stats.deg3 + 2 * stats.deg4 + 2)}`},
   ];
 }

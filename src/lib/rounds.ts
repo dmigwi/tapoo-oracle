@@ -23,6 +23,7 @@ import type {
   EncodedMaze,
   GameIdentity,
   PlayedRound,
+  RoundGroup,
   LogEntry,
   Move,
   Outcome,
@@ -163,13 +164,6 @@ function reportedMoves(record: Replay | null): {moves: Move[]; count: number} | 
   return {moves, count: record.lastSubmittedMoves.length}
 }
 
-/** One played round's entries, with the identity the log stamped on them. */
-export type RoundGroup = {
-  /** Which round these entries belong to. */
-  identity: GameIdentity;
-  entries: LogEntry[];
-};
-
 /** roundLabel names a round the way a reader would say it out loud. The key is an address, not a label -
  * "2/1" beside a filename reads as a fraction or a date before it reads as a round. */
 export function roundLabel({game, level}: GameIdentity): string {
@@ -306,6 +300,7 @@ export function agentsFromRound(
       decayCharged: null,
       traversalSpeed: null,
       cellsEntered: null,
+      played: null,
       settled: null,
     }
     seats.push(seat)
@@ -397,6 +392,16 @@ export function agentsFromRound(
     }
 
     if (turn.decayCharged !== null) seat.decayCharged = (seat.decayCharged ?? 0) + turn.decayCharged
+
+    // Every turn the seat played and every move that landed on one, whatever else the turn reported. A
+    // turn whose applied count was never settled is counted as a turn and as no moves, and says so in
+    // movesUnreported - the alternative is a total that silently omits it.
+    const played = seat.played ?? {turnsTaken: 0, movesApplied: 0, movesUnreported: 0}
+    seat.played = {
+      turnsTaken: played.turnsTaken + 1,
+      movesApplied: played.movesApplied + (turn.applied ?? 0),
+      movesUnreported: played.movesUnreported + (turn.applied === null ? 1 : 0),
+    }
 
     // The decomposition's counts, over the turns that settled both halves of what they need: an applied
     // move count and a charge. A turn missing either is left out of all three rather than out of one -
@@ -494,7 +499,9 @@ export function agentsFromRound(
     const roundTurns = outcome?.turnCount
     const uniqueCells = outcome?.playerUniqueCellsVisited
     const decayCharged = outcome?.decayUnitsCharged
-    const movesApplied = ownedTurns.reduce((total, turn) => total + (turn.applied ?? 0), 0)
+    // The seat's own total, accumulated above rather than summed again here: two sums over the same turns
+    // can only ever differ by drifting, and the one the card prints would be the one nothing checked.
+    const movesApplied = finisher.played?.movesApplied ?? 0
     if (
       typeof roundTurns === "number" &&
       Number.isInteger(roundTurns) &&
@@ -534,6 +541,17 @@ export function agentsFromRound(
   return seats.sort((first, second) =>
     first.seatId !== null && second.seatId !== null ? first.seatId - second.seatId : 0,
   )
+}
+
+// scoreFrom reads a stated score, which Tapoo writes as a number in a turn's outcome and as a numeric
+// string in some round-end entries. Null for anything else: a score that cannot be read is not a score of
+// zero, and "0" is a real score a round can end on.
+function scoreFrom(value: number | string | null | undefined): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null
+  if (typeof value !== "string" || value.trim() === "") return null
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 /** buildPlayedRound derives what the replay draws for one round: its maze, the path walked through it,
@@ -621,6 +639,13 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       applied,
       cells,
       decayCharged: trusted && typeof record.chargedMovesCount === "number" ? record.chargedMovesCount : null,
+      // Ungated, where the charge beside it is not. What a record says about moves can belong to another
+      // attempt at the turn, which is what `trusted` guards against - but the budget it reports is the
+      // budget after the turn it is filed under, and the store files it by the turn it covers. The
+      // capture's turn 47 is the case that separates them: its record names no moves and no charge, and
+      // still reports the one unit that left the budget.
+      decayRemaining: typeof record?.decayUnitsRemaining === "number" ? record.decayUnitsRemaining : null,
+      score: scoreFrom(record?.score),
       // The move that was refused, when one was: the first move past those that landed. This is the
       // wall the agent walked into, and it is the single most useful thing to draw on the grid.
       rejectedMove: typeof applied === "number" && applied < prediction.moves.length
@@ -659,6 +684,8 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: typeof replay.chargedMovesCount === "number" ? replay.chargedMovesCount : null,
+      decayRemaining: typeof replay.decayUnitsRemaining === "number" ? replay.decayUnitsRemaining : null,
+      score: scoreFrom(replay.score),
     })
     predicted.add(turn)
   }
@@ -680,6 +707,10 @@ export function buildPlayedRound(entries: LogEntry[], context: Context): PlayedR
       cells: [],
       rejectedMove: null,
       decayCharged: null,
+      decayRemaining: null,
+      // Nothing reported this turn at all - the request failed before Tapoo answered it - so there is no
+      // score to carry either.
+      score: null,
     })
   }
   turns.sort((left, right) => left.turn - right.turn)
