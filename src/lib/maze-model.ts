@@ -96,7 +96,9 @@ export function survivalSummaryFor(model: ReplayModel | null | undefined): Survi
     // The round's own ceiling on discovery, not a constant: a turn can only enter ground the agent can
     // see, so the history window radius is the most new cells one turn could have entered. A round that
     // ran at radius 2 is held to 2, and one that stated none falls back to the measured 4.
-    newCellsPerTurnCap: model.historyWindowRadius,
+    // A radius of zero would say no turn could discover anything, which would call every round lost on its
+    // first turn. Read as no window stated rather than as a window of none.
+    newCellsPerTurnCap: (model.historyWindowRadius ?? 0) > 0 ? model.historyWindowRadius : null,
   })
 }
 
@@ -354,18 +356,26 @@ function term(value: number): string {
 
 // batchDepthOf writes the depth the round reached beside the depth the route still demanded of it.
 //
-// Not the decomposition's `b`, though it measures the same thing: that one divides the turns that settled
-// both an applied count and a charge, and this one every turn played. Two denominators under one letter
-// would read as one figure printed twice, so this one carries its counts instead.
-function batchDepthOf(decomposed: SurvivalDecomposition, settled: AgentSummary["settled"]): string {
+// The decomposition's `b`, which is the card's `b`: one metric, measured once, over the turns that settled
+// both an applied count and a charge. The counts travel with it because that population can be shorter
+// than the round - a round that stopped never reports its last turn - and a ratio standing for part of a
+// round should say which part.
+function batchDepthOf(
+  decomposed: SurvivalDecomposition,
+  settled: AgentSummary["settled"],
+  played: AgentSummary["played"],
+): string {
   const depth = (value: number): string => value.toFixed(4);
   const margin = decomposed.batchDepth - decomposed.neededDepth;
   const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
-  // The counts the depth divides, which are the round's whole turn count: decomposeSurvival refuses a
-  // round whose settled turns do not cover it, so a depth that prints at all speaks for all of them.
+  // The counts the depth divides. Where the round played turns the depth does not cover - the trailing
+  // ones a stopped round never reported - the row says so: survivalDecompositionFor allows that gap, so a
+  // reader has to be told the ratio speaks for 378 turns of 379 rather than left to assume it covers all.
   const counts = settled === null ? "" : ` (${formatCount(settled.movesApplied)} moves / ${formatCount(settled.turnsTaken)} turns)`;
+  const short = settled === null || played === null ? 0 : played.turnsTaken - settled.turnsTaken;
+  const over = short > 0 && played !== null ? ` \u00b7 the round played ${formatCount(played.turnsTaken)}` : "";
 
-  return `${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})`;
+  return `${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})${over}`;
 }
 
 /** survivalVerdict states the one thing the decay budget settles: whether the destination was still inside
@@ -469,7 +479,7 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
       value: (() => {
         if (!decomposed) return "not recorded"
 
-        return batchDepthOf(decomposed, roundSettled(levelModel))
+        return batchDepthOf(decomposed, roundSettled(levelModel), roundPlayed(levelModel))
       })(),
     },
     // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both cost

@@ -389,6 +389,29 @@ describe("mazeLevelRows", () => {
     expect(value(mazeSurvivalRows(model), "Survival terms")).toBe("not recorded")
   })
 
+  // A round whose depth covers fewer turns than it played says so: the trailing gap is allowed, so the
+  // reader is told the ratio speaks for part of the round rather than left to assume it covers all.
+  it("says how many turns the round played where the depth covers fewer", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: index === base.turns.length - 1 ? null : 1}))
+    const model = must(mazeReplayModel({...base, turns, agents: agentsFromRound(new Map(), turns, null)}), "a model")
+
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("(2 moves / 2 turns)")
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("the round played 3")
+  })
+
+  // And a stated window of zero is read as no window at all. Taken at face value it would say no turn
+  // could discover anything, which calls every round lost on its first turn.
+  it("does not let a window of zero decide the verdict", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayRemaining: index === 0 ? 6 : 5}))
+    const zero = must(mazeReplayModel({...base, turns, historyWindowRadius: 0}), "a model")
+    const none = must(mazeReplayModel({...base, turns, historyWindowRadius: null}), "a model")
+
+    expect(must(survivalSummaryFor(zero), "a survival summary").lostFrom)
+      .toBe(must(survivalSummaryFor(none), "a survival summary").lostFrom)
+  })
+
   // But not where the gap is the tail of a round that stopped. A round has no successor to report its
   // final turns, so those go unsettled by construction - and a run that oscillated its way to a certain
   // loss and stopped is the case the account exists for, not one to decline.

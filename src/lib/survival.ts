@@ -148,9 +148,11 @@ export const FASTEST_SUSTAINED_PACE = 1.524;
  * left to spend; `distanceToDestination` is how far along the route it stands; `batchDepth` is the depth it
  * has been averaging.
  *
- * The verdict is `U > 4u`, and it is monotone by construction: `U` falls by at most four per turn - see
- * NEW_CELLS_PER_TURN_CAP - while `u` falls by at least one, so `U/4 - u` never decreases and a run that
- * is lost stays lost.
+ * The verdict is `U > cu`, where `c` is the round's ceiling on discovery - its history window radius, or
+ * NEW_CELLS_PER_TURN_CAP where it stated none. It is monotone by construction: `U` falls by at most `c`
+ * per turn while `u` falls by at least one, so `U/c - u` never decreases and a run that is lost stays
+ * lost. The ceiling is fixed for a round, which is what the argument needs - a cap that moved mid-round
+ * could switch the verdict off again.
  *
  * Distance is deliberately kept out of it. A retreat out of a dead end cuts the distance by several cells
  * for one unit, so a distance rule switches off again and a report built on it flaps: on one real run it

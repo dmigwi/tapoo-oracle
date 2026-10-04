@@ -1132,7 +1132,7 @@ const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
   ["survival terms", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
   ["error debt", "units charged beyond one per turn: what a round's mistakes cost it"],
   ["batched", "moves earned past one a turn: cells entered for no extra charge"],
-  ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],
+  ["batch depth", "moves per turn, over the turns that reported both halves - beside the depth the route still needed"],
   // The one pair a reader can collide with elsewhere on this page: the grid's legend grades a *cell* by its
   // visits against its exits, and "oscillating" there is a cell entered again past exhaustion. These two
   // grade a *turn* by the cells it entered, so a turn into those exhausted cells is the retreat. Said here,
