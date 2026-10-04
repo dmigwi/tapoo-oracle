@@ -618,13 +618,15 @@ export type AgentSummary = {
   cellsEntered: number | null;
   /** What this seat did over every turn it played. Null for a seat with no turns of its own.
    *
-   * A second population beside `settled` below, and deliberately so. `settled` covers the turns that
-   * stated both an applied count and a charge, because the speed's three factors have to divide one
-   * population or a share comes out above 1. The survival decomposition asks a different question - what the
-   * run spent, against what the maze costs - and there `turnsTaken` must be every turn the seat was
-   * charged for, not the turns that happened to report cleanly. It adds these across the seats
-   * into one account for the maze: the budget is the maze's, and every seat at the table draws on the one
-   * of it.
+   * A second population beside `settled` below. `settled` covers the turns that stated both an applied
+   * count and a charge, and it is the one every metric divides: the speed's three factors have to share a
+   * population or a factor comes out above 1, and the survival decomposition takes its depth from that
+   * decomposition rather than dividing again - so a card and a table can never name two batch depths for
+   * one seat.
+   *
+   * This one covers every turn the seat played, which is what the report needs to say how much of a round
+   * a figure measured over `settled` actually speaks for: one real round settles a single turn of
+   * sixty-three.
    *
    * `movesApplied` includes the winning turn, whose outcome the log never reports: a turn's outcome
    * reaches the log through the next turn's tool calls, and a turn that wins has no next turn.
@@ -878,7 +880,13 @@ export type DecayTally = {
  *
  * Three terms and two depths, in decay units: what the route left it, what batching earned it back, what
  * its errors cost, and the depth it reached against the depth the route still demanded. Headroom is the
- * three added up - what remained after the ground it walked and the mistakes it paid for.
+ * three added up - what remained after the ground it walked and the mistakes it paid for - so the survival
+ * condition is `routeSlack + batchCredit >= errorDebt`.
+ *
+ * `batchDepth` against `neededDepth` is the claim the rest of it supports: the depth the round reached
+ * against the depth it had to reach to survive what its route cost and its errors spent. A `neededDepth`
+ * below 1 says batching was never required - the round was affordable at one applied move a turn, and
+ * whatever it batched past that was surplus.
  *
  * Reported as terms, never as the headroom alone. Headroom is a function of the batch depth achieved, so a
  * bare figure invites being read as a property of the run; the terms name different causes, and which one

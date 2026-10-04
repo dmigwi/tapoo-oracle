@@ -1015,7 +1015,7 @@ describe("the survival table", () => {
   }
 
   it("prints the decomposed as three terms and the headroom they sum to", () => {
-    expect(rowsOf(wonRound())["Decay decomposed"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt = +3 headroom")
+    expect(rowsOf(wonRound())["Survival terms"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt = +3 headroom")
   })
 
   // The depth beside the counts it is a ratio of, and beside the depth the route still demanded - the
@@ -1033,7 +1033,7 @@ describe("the survival table", () => {
     expect(queryAll(node, ".maze-agent-table th").map((one) => one.textContent))
       .toEqual(["All cells", "Decay charged", "Decomposed Traversal speed", "Speed class"])
     expect(Object.keys(rowsOf(node)))
-      .toEqual(["Point of no return", "Route coverage", "Decay decomposed", "Batch depth", "No-progress turns", "Pace warnings"])
+      .toEqual(["Point of no return", "Route coverage", "Survival terms", "Batch depth", "No-progress turns", "Pace warnings"])
   })
 
   it("says a run that finished was within reach throughout", () => {
@@ -1053,7 +1053,7 @@ describe("the survival table", () => {
 
     expect(rowsOf(node)["Pace warnings"]).toBe(
       "the destination was further than the budget from turn 1 \u00b7 " +
-      "further than its own batching could reach from turn 0",
+      "further than its own batching could reach from turn 1",
     )
     // The verdict beside them says the opposite, and says it in its own words.
     expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)
@@ -1090,7 +1090,10 @@ describe("the survival table", () => {
     const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
 
     expect(queryAll(key, ".maze-agent-symbol").map((one) => one.textContent))
-      .toEqual(["decay decomposed", "error debt", "batched", "batch depth", "retreating", "oscillating", "could not finish"])
+      .toEqual([
+        "survival terms", "error debt", "batched", "batch depth", "retreating", "oscillating", "could not finish",
+        "sustained pace",
+      ])
   })
 
   // "oscillating" names a turn here and a cell in the legend beside the grid, and the two are not the same

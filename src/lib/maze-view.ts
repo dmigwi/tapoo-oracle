@@ -1129,7 +1129,7 @@ const FACTOR_KEY: ReadonlyArray<readonly [string, string]> = [
 // The key to the survival table. Its rows say what a round spent; these say in what - and the identity on
 // the first line is what makes the three terms beside it worth adding up.
 const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
-  ["decay decomposed", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
+  ["survival terms", "slack + batched - error debt = the headroom left, in decay units. A round opens with one per cell"],
   ["error debt", "units charged beyond one per turn: what a round's mistakes cost it"],
   ["batched", "moves earned past one a turn: cells entered for no extra charge"],
   ["batch depth", "moves per turn, over every turn played - beside the depth the route still needed"],
@@ -1139,7 +1139,8 @@ const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
   // beside the row that prints them, rather than left for a reader to reconcile from two legends.
   ["retreating", "turns that entered no new cell, back over ground already exhausted - what the prompt asks for at a confirmed dead end"],
   ["oscillating", "turns that entered no new cell, among cells that still had an exit to spend. Not the grid legend's cell status of the same name"],
-  ["could not finish", "route cells left over four per decay unit, the most any turn has ever entered"],
+  ["could not finish", "route cells left over the round's history window per decay unit - the most one turn could enter"],
+  ["sustained pace", "1.524 a decay unit: the fastest any sampled run has held (glm-5.3 at level 54). A record, not a law - a faster run raises it"],
 ];
 
 // keyList writes a list of symbols and what they mean, one line each: the symbol mono and spaced off its

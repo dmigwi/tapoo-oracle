@@ -11,8 +11,9 @@ import type {SurvivalInputTurn} from "./types"
 import {must} from "./test-support"
 
 // The capture's won round, which is the one set of figures every part of this is pinned against: a
-// 70-cell maze, 67 turns, 67 units charged, 69 moves landed.
-const CAPTURE = {cells: 70, decayCharged: 67, played: {turnsTaken: 67, movesApplied: 69, movesUnreported: 0}}
+// 70-cell maze, 67 turns, 67 units charged, 69 moves landed. `settled` is the speed decomposition's
+// population, so the depth below is the one the seat's card prints.
+const CAPTURE = {cells: 70, decayCharged: 67, settled: {uniqueCells: 69, movesApplied: 69, turnsTaken: 67}}
 
 describe("decomposeSurvival", () => {
   it("splits the capture's round into the terms that caused it", () => {
@@ -33,9 +34,9 @@ describe("decomposeSurvival", () => {
   // figures can satisfy an accidental arrangement of the same numbers.
   it.each([
     ["the capture", CAPTURE],
-    ["a run that paid for errors", {cells: 600, decayCharged: 492, played: {turnsTaken: 483, movesApplied: 602, movesUnreported: 0}}],
-    ["a run that never batched", {cells: 24, decayCharged: 20, played: {turnsTaken: 18, movesApplied: 18, movesUnreported: 0}}],
-    ["a run on a branching maze, where slack goes negative", {cells: 70, decayCharged: 70, played: {turnsTaken: 41, movesApplied: 96, movesUnreported: 0}}],
+    ["a run that paid for errors", {cells: 600, decayCharged: 492, settled: {uniqueCells: 474, movesApplied: 602, turnsTaken: 483}}],
+    ["a run that never batched", {cells: 24, decayCharged: 20, settled: {uniqueCells: 18, movesApplied: 18, turnsTaken: 18}}],
+    ["a run on a branching maze, where slack goes negative", {cells: 70, decayCharged: 70, settled: {uniqueCells: 40, movesApplied: 96, turnsTaken: 41}}],
   ])("reconciles the terms with the headroom for %s", (_what, counts) => {
     const decomposed = decomposeSurvival(counts)
 
@@ -43,12 +44,12 @@ describe("decomposeSurvival", () => {
     const {routeSlack, batchCredit, errorDebt, headroom, batchDepth} = decomposed!
     expect(routeSlack + batchCredit - errorDebt).toBe(headroom)
     // And the formula the terms stand in for: A - moves/b - p, at the depth the run achieved.
-    expect(counts.cells - counts.played.movesApplied / batchDepth - errorDebt).toBeCloseTo(headroom, 9)
+    expect(counts.cells - counts.settled.movesApplied / batchDepth - errorDebt).toBeCloseTo(headroom, 9)
   })
 
   // What the needed depth is for: the run's own b against the b the maze still demanded.
   it("states the depth the maze demanded beside the depth the run reached", () => {
-    const short = decomposeSurvival({cells: 600, decayCharged: 624, played: {turnsTaken: 470, movesApplied: 620, movesUnreported: 0}})
+    const short = decomposeSurvival({cells: 600, decayCharged: 624, settled: {uniqueCells: 500, movesApplied: 620, turnsTaken: 470}})
 
     expect(short?.errorDebt).toBe(154)
     // 620 moves over the 446 units its errors left it - a depth well past what it managed.
@@ -59,9 +60,9 @@ describe("decomposeSurvival", () => {
   // Null, not a record of zeros: a seat with nothing measured has no account, and a zeroed decomposition reads
   // as a run that spent nothing.
   it.each([
-    ["no turns at all", {cells: 70, decayCharged: 3, played: null}],
-    ["no turn that moved", {cells: 70, decayCharged: 3, played: {turnsTaken: 3, movesApplied: 0, movesUnreported: 3}}],
-    ["no charge reported", {cells: 70, decayCharged: null, played: {turnsTaken: 3, movesApplied: 3, movesUnreported: 0}}],
+    ["no turn that settled", {cells: 70, decayCharged: 3, settled: null}],
+    ["no turn that moved", {cells: 70, decayCharged: 3, settled: {uniqueCells: 0, movesApplied: 0, turnsTaken: 3}}],
+    ["no charge reported", {cells: 70, decayCharged: null, settled: {uniqueCells: 3, movesApplied: 3, turnsTaken: 3}}],
   ])("draws no decomposed where the round did not say: %s", (_what, counts) => {
     expect(decomposeSurvival(counts)).toBeNull()
   })
@@ -70,19 +71,33 @@ describe("decomposeSurvival", () => {
   // negative debt would print as a credit the run never earned. roundTotalsCheck is where that is
   // reported; here it is simply not an account.
   it("draws no decomposed where the charge is below one per turn", () => {
-    expect(decomposeSurvival({cells: 70, decayCharged: 2, played: {turnsTaken: 3, movesApplied: 3, movesUnreported: 0}})).toBeNull()
+    expect(decomposeSurvival({cells: 70, decayCharged: 2, settled: {uniqueCells: 3, movesApplied: 3, turnsTaken: 3}})).toBeNull()
   })
 
   // And none where the errors already cost more than the maze holds: there is no depth that covers a
   // budget of nothing, and the division would answer with a sign rather than a depth.
   it("draws no decomposed where the debt exceeds the maze", () => {
-    expect(decomposeSurvival({cells: 24, decayCharged: 60, played: {turnsTaken: 30, movesApplied: 30, movesUnreported: 0}})).toBeNull()
+    expect(decomposeSurvival({cells: 24, decayCharged: 60, settled: {uniqueCells: 24, movesApplied: 30, turnsTaken: 30}})).toBeNull()
   })
 })
 
 describe("survivalFlags", () => {
-  const flagsFor = (unvisitedRoute: number, decayLeft: number | null, over: {distanceToDestination?: number | null; batchDepth?: number | null} = {}) =>
-    survivalFlags({unvisitedRoute, decayLeft, distanceToDestination: null, batchDepth: null, ...over})
+  const flagsFor = (
+    unvisitedRoute: number,
+    decayLeft: number | null,
+    over: {distanceToDestination?: number | null; batchDepth?: number | null; newCellsPerTurnCap?: number | null} = {},
+  ) => survivalFlags({unvisitedRoute, decayLeft, distanceToDestination: null, batchDepth: null, ...over})
+
+  // The ceiling is the round's, not a constant: a turn can only enter ground the agent can see, so a round
+  // that ran with a history window of 2 could never have entered 4 new cells in a turn - and holding it to
+  // 4 would call a lost round reachable. The same figures answer differently under the two caps.
+  it("measures against the round's own window rather than a fixed four", () => {
+    expect(flagsFor(16, 5, {newCellsPerTurnCap: 4}).lost).toBe(false)
+    expect(flagsFor(16, 5, {newCellsPerTurnCap: 2}).lost).toBe(true)
+    // And a round that stated no window falls back to the measured cap rather than refusing to answer.
+    expect(flagsFor(16, 5, {newCellsPerTurnCap: null}).lost).toBe(false)
+    expect(flagsFor(41, 10, {newCellsPerTurnCap: null}).lost).toBe(true)
+  })
 
   // The boundary is where the rule is: at exactly four cells per unit the run can still finish, and one
   // cell more is what it cannot.
@@ -91,9 +106,13 @@ describe("survivalFlags", () => {
     expect(flagsFor(NEW_CELLS_PER_TURN_CAP * 10 + 1, 10).lost).toBe(true)
   })
 
+  // Bracketed either side of the threshold rather than at a literal, because the constant is a record
+  // meant to be raised: the boundary has to hold wherever it is put, including at a value with digits
+  // past the first two.
   it("warns one cell past the fastest pace observed, and not at it", () => {
-    expect(flagsFor(Math.floor(FASTEST_SUSTAINED_PACE * 10), 10).behindObservedPace).toBe(false)
-    expect(flagsFor(Math.ceil(FASTEST_SUSTAINED_PACE * 10) + 1, 10).behindObservedPace).toBe(true)
+    const justUnder = Math.floor(FASTEST_SUSTAINED_PACE * 10)
+    expect(flagsFor(justUnder, 10).behindObservedPace).toBe(false)
+    expect(flagsFor(justUnder + 1, 10).behindObservedPace).toBe(true)
   })
 
   // The distinction the whole rule rests on. A retreat leaves the seat further from the target for one

@@ -339,6 +339,20 @@ describe("mazeLevelRows", () => {
     expect(value(mazeLevelRows(model), "Outcome")).toBe("won")
   })
 
+  // The verdict's ceiling is the round's own history window: a turn can only enter ground the agent can
+  // see, so a round that ran at radius 2 could never discover four cells in a turn. The same round, the
+  // same budget, read under each window - and only the narrower one puts the destination out of reach.
+  it("holds a round to the discovery its own window allowed", () => {
+    const turns = level().turns.map((turn, index) => ({...turn, decayRemaining: index === 0 ? 5 : 4}))
+    const wide = must(mazeReplayModel({...level({historyWindowRadius: 4}), turns}), "a model")
+    const narrow = must(mazeReplayModel({...level({historyWindowRadius: 2}), turns}), "a model")
+
+    // 16 route cells still to enter against 4 units: within four a unit, past two a unit.
+    expect(must(survivalSummaryFor(wide), "a survival summary").lostFrom).toBeNull()
+    expect(must(survivalSummaryFor(narrow), "a survival summary").lostFrom).toBe(0)
+    expect(value(mazeSurvivalRows(narrow), "Point of no return")).toMatch(/^Could not finish from turn 0:/)
+  })
+
   // A reassurance is a finding, and it needs evidence. Where no turn reported a budget there is nothing to
   // test the rule against, so `lostFrom` is null for want of a reading - and printing "within reach
   // throughout" off that is the same measured-looking zero as a success path of "0 of 70".
@@ -362,15 +376,37 @@ describe("mazeLevelRows", () => {
     expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("0 of 18 route cells (0%)")
   })
 
-  // A turn whose applied count nothing settled contributes a turn and no moves, so the depth is a floor.
-  // The row has to say which of the two it is printing.
-  it("marks the batch depth as a floor where a turn never reported its moves", () => {
+  // Refused where the round's readings have holes in the middle: the terms would be counted over a
+  // fraction of the round and labelled as the whole. One v2.4.8 round settles a single turn of sixty-three
+  // and read that way shows +68 headroom on a loss.
+  it("says nothing where the readings have holes in the middle", () => {
     const base = level()
-    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: 1, applied: index === 1 ? null : turn.applied}))
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: index === 1 ? null : 1}))
     const model = must(mazeReplayModel({...base, turns, agents: agentsFromRound(new Map(), turns, null)}), "a model")
 
-    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("at least")
-    expect(value(mazeSurvivalRows(model), "Batch depth")).toContain("1 never reported")
+    expect(survivalDecompositionFor(model)).toBeNull()
+    expect(value(mazeSurvivalRows(model), "Batch depth")).toBe("not recorded")
+    expect(value(mazeSurvivalRows(model), "Survival terms")).toBe("not recorded")
+  })
+
+  // But not where the gap is the tail of a round that stopped. A round has no successor to report its
+  // final turns, so those go unsettled by construction - and a run that oscillated its way to a certain
+  // loss and stopped is the case the account exists for, not one to decline.
+  it("still accounts for a round whose last turn never reported", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayCharged: index === base.turns.length - 1 ? null : 1}))
+    const model = must(mazeReplayModel({...base, turns, agents: agentsFromRound(new Map(), turns, null)}), "a model")
+
+    expect(survivalDecompositionFor(model)).not.toBeNull()
+    expect(value(mazeSurvivalRows(model), "Batch depth")).not.toBe("not recorded")
+  })
+
+  // And the figures where every turn did settle, which is what the refusal above protects.
+  it("states the depth where the settled turns cover the round", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const won = must(mazeReplayModel(must(firstRound(sliced).playedRound, "the won round")), "a model")
+
+    expect(value(mazeSurvivalRows(won), "Batch depth")).toBe("1.0299 (69 moves / 67 turns) \u00b7 needed 0.9857 (surplus 0.0441)")
   })
 
   // A route that was never computed is not a route of no length. The row read "0 of 24 (0%)" for a round

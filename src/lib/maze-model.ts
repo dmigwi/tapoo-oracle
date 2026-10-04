@@ -93,6 +93,10 @@ export function survivalSummaryFor(model: ReplayModel | null | undefined): Survi
     distanceFromDestination: model.routes.distanceFromDestination,
     statusesAt: (turn) => model.visitStatusAfterTurn.get(turn),
     batchDepth: decomposed?.batchDepth ?? null,
+    // The round's own ceiling on discovery, not a constant: a turn can only enter ground the agent can
+    // see, so the history window radius is the most new cells one turn could have entered. A round that
+    // ran at radius 2 is held to 2, and one that stated none falls back to the measured 4.
+    newCellsPerTurnCap: model.historyWindowRadius,
   })
 }
 
@@ -111,7 +115,64 @@ export function survivalDecompositionFor(model: ReplayModel | null | undefined):
     if (agent.decayCharged !== null) decayCharged = (decayCharged ?? 0) + agent.decayCharged
   }
 
-  return decomposeSurvival({cells: model.stats.cells, decayCharged, played: roundPlayed(model)})
+  // Refused where the round's readings have holes in the middle. Every term is counted over the turns that
+  // settled both an applied count and a charge, so a round whose charges mostly went unreported would have
+  // its slack, its credit and its headroom stated for a fraction of itself and labelled as the whole: one
+  // v2.4.8 round settles a single turn of sixty-three, and read that way shows a comfortable +68 headroom
+  // on a round that lost.
+  //
+  // Trailing gaps are not holes. A round that stopped has no successor to report its final turns, so the
+  // last one or two go unsettled by construction - every unfinished capture is short by exactly that - and
+  // refusing those would throw away the readings the account exists for, a run oscillating its way to a
+  // certain loss being the clearest case it has to answer.
+  if (!settlesWithoutHoles(model)) return null
+
+  return decomposeSurvival({cells: model.stats.cells, decayCharged, settled: roundSettled(model)})
+}
+
+/** settlesWithoutHoles reports whether the population the terms are counted over speaks for the round.
+ *
+ * Two ways it does. Where it covers every turn the round played, there is nothing left out to ask about -
+ * which is the case for a round that finished, since agentsFromRound replaces the accumulated figures with
+ * the outcome's authoritative totals, holes in the per-turn charges and all. The capture's won round has
+ * one such hole at turn 47 and still accounts for all 67 turns.
+ *
+ * Where it is short, the turns left out have to be the last of them. A round that stopped has no successor
+ * to report its final turns, so those go unsettled by construction - every unfinished capture is short by
+ * exactly one or two - and that is the case the account exists for: a run can oscillate its way to a
+ * certain loss and stop before the loss is recorded. Gaps anywhere else are a log that reported too little
+ * to speak for the round, one v2.4.8 round settling a single turn of sixty-three. */
+function settlesWithoutHoles(model: ReplayModel): boolean {
+  const settled = roundSettled(model)
+  const played = roundPlayed(model)
+  if (settled === null || played === null) return true
+  if (settled.turnsTaken >= played.turnsTaken) return true
+
+  const short = played.turnsTaken - settled.turnsTaken
+  const tail = model.turns.slice(model.turns.length - short)
+  return tail.length === short && tail.every((turn) => turn.applied === null || turn.decayCharged === null)
+}
+
+/** roundSettled adds up the speed decomposition's population across the seats, or null where no seat has
+ * one.
+ *
+ * The same turns the card's `b` is measured over - those that stated both an applied count and a charge -
+ * so the depth the survival table judges is the depth the card prints, for the round rather than a seat.
+ * Added, which is the weighted average of the seats' depths: a seat that played twice as many turns moves
+ * the round's depth twice as far, as it should. */
+export function roundSettled(model: ReplayModel | null | undefined): AgentSummary["settled"] {
+  let total: AgentSummary["settled"] = null
+  for (const agent of model?.agents ?? []) {
+    if (!agent.settled) continue
+    const sum: NonNullable<AgentSummary["settled"]> = total ?? {uniqueCells: 0, movesApplied: 0, turnsTaken: 0}
+    total = {
+      uniqueCells: sum.uniqueCells + agent.settled.uniqueCells,
+      movesApplied: sum.movesApplied + agent.settled.movesApplied,
+      turnsTaken: sum.turnsTaken + agent.settled.turnsTaken,
+    }
+  }
+
+  return total
 }
 
 /** roundPlayed adds up what every seat played, or null where no seat played a turn.
@@ -296,24 +357,15 @@ function term(value: number): string {
 // Not the decomposition's `b`, though it measures the same thing: that one divides the turns that settled
 // both an applied count and a charge, and this one every turn played. Two denominators under one letter
 // would read as one figure printed twice, so this one carries its counts instead.
-function batchDepthOf(decomposed: SurvivalDecomposition, played: AgentSummary["played"]): string {
+function batchDepthOf(decomposed: SurvivalDecomposition, settled: AgentSummary["settled"]): string {
   const depth = (value: number): string => value.toFixed(4);
   const margin = decomposed.batchDepth - decomposed.neededDepth;
   const standing = margin >= 0 ? `surplus ${depth(margin)}` : `short by ${depth(-margin)}`;
+  // The counts the depth divides, which are the round's whole turn count: decomposeSurvival refuses a
+  // round whose settled turns do not cover it, so a depth that prints at all speaks for all of them.
+  const counts = settled === null ? "" : ` (${formatCount(settled.movesApplied)} moves / ${formatCount(settled.turnsTaken)} turns)`;
 
-  // A turn whose applied count nothing settled still counts as a turn and contributes no moves, so where
-  // there are any, the moves are a floor and the depth with them. Said rather than left for the reader to
-  // work out: the row is a ratio, and a ratio quietly missing part of its numerator is the one shape of
-  // wrong figure that looks exactly like a right one.
-  const unreported = played?.movesUnreported ?? 0;
-  const floor = unreported > 0 ? "at least " : "";
-  const counts =
-    played === null
-      ? ""
-      : ` (${formatCount(played.movesApplied)} moves${unreported > 0 ? ` over ${formatCount(played.turnsTaken - unreported)} of ` : " / "}` +
-        `${formatCount(played.turnsTaken)} turns${unreported > 0 ? `, ${formatCount(unreported)} never reported` : ""})`;
-
-  return `${floor}${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})`;
+  return `${depth(decomposed.batchDepth)}${counts} \u00b7 needed ${depth(decomposed.neededDepth)} (${standing})`;
 }
 
 /** survivalVerdict states the one thing the decay budget settles: whether the destination was still inside
@@ -402,7 +454,7 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
     // Headroom is the three added up, not a fourth measurement: it is what the round had left over after the
     // route it walked and the mistakes it paid for, and a reader can check it against the terms beside it.
     {
-      field: "Decay decomposed",
+      field: "Survival terms",
       value: (() => {
         if (!decomposed) return "not recorded"
 
@@ -417,7 +469,7 @@ export function mazeSurvivalRows(levelModel: ReplayModel | null | undefined): Su
       value: (() => {
         if (!decomposed) return "not recorded"
 
-        return batchDepthOf(decomposed, roundPlayed(levelModel))
+        return batchDepthOf(decomposed, roundSettled(levelModel))
       })(),
     },
     // The turns that entered no new cell, split by what the log graded the cells they re-entered. Both cost
