@@ -1051,9 +1051,12 @@ describe("the survival table", () => {
     const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
     const node = build(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))
 
+    // All three paces, each in its own words: this round covered 16 of 70 route cells on 33 units, so the
+    // ground it still needed was indeed past anything a round has sustained.
     expect(rowsOf(node)["Pace warnings"]).toBe(
       "the destination was further than the budget from turn 1 \u00b7 " +
-      "further than its own batching could reach from turn 1",
+      "further than its own batching could reach from turn 1 \u00b7 " +
+      "new ground needed faster than any run has sustained, from turn 5",
     )
     // The verdict beside them says the opposite, and says it in its own words.
     expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)

@@ -139,7 +139,7 @@ export function survivalDecompositionFor(model: ReplayModel | null | undefined):
  * the outcome's authoritative totals, holes in the per-turn charges and all. The capture's won round has
  * one such hole at turn 47 and still accounts for all 67 turns.
  *
- * Where it is short, the turns left out have to be the last of them. A round that stopped has no successor
+ * Where it is short, the turns a seat left out have to be the last it played. A round that stopped has no successor
  * to report its final turns, so those go unsettled by construction - every unfinished capture is short by
  * exactly one or two - and that is the case the account exists for: a run can oscillate its way to a
  * certain loss and stop before the loss is recorded. Gaps anywhere else are a log that reported too little
@@ -150,9 +150,27 @@ function settlesWithoutHoles(model: ReplayModel): boolean {
   if (settled === null || played === null) return true
   if (settled.turnsTaken >= played.turnsTaken) return true
 
-  const short = played.turnsTaken - settled.turnsTaken
-  const tail = model.turns.slice(model.turns.length - short)
-  return tail.length === short && tail.every((turn) => turn.applied === null || turn.decayCharged === null)
+  // Per seat, not across the round. Two seats take turns, so one seat's unreported last turn sits in the
+  // middle of the round's turn list while being the end of its own - and a round-wide check would read a
+  // structural gap as a hole and refuse a round it should report.
+  const bySeat = new Map<number, TurnSummary[]>()
+  for (const turn of model.turns) {
+    const seat = agentIndexOf(model.agents, turn)
+    const played = bySeat.get(seat) ?? []
+    played.push(turn)
+    bySeat.set(seat, played)
+  }
+
+  const unsettled = (turn: TurnSummary): boolean => turn.applied === null || turn.decayCharged === null
+  for (const turns of bySeat.values()) {
+    const first = turns.findIndex(unsettled)
+    if (first === -1) continue
+    // From the first unsettled turn on, every one of that seat's turns has to be unsettled too: a gap it
+    // played past is a hole, where a gap it ended on is the round stopping.
+    if (!turns.slice(first).every(unsettled)) return false
+  }
+
+  return true
 }
 
 /** roundSettled adds up the speed decomposition's population across the seats, or null where no seat has

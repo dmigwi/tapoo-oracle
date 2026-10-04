@@ -1140,7 +1140,7 @@ const SURVIVAL_KEY: ReadonlyArray<readonly [string, string]> = [
   ["retreating", "turns that entered no new cell, back over ground already exhausted - what the prompt asks for at a confirmed dead end"],
   ["oscillating", "turns that entered no new cell, among cells that still had an exit to spend. Not the grid legend's cell status of the same name"],
   ["could not finish", "route cells left over the round's history window per decay unit - the most one turn could enter"],
-  ["sustained pace", "1.524 a decay unit: the fastest any sampled run has held (glm-5.3 at level 54). A record, not a law - a faster run raises it"],
+  ["sustained pace", "1.0588 new route cells a decay unit: the fastest any sampled round has held (gemma4 at level 1, 18 cells for 17 units). A record, not a law - a faster round raises it"],
 ];
 
 // keyList writes a list of symbols and what they mean, one line each: the symbol mono and spaced off its

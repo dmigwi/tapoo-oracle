@@ -117,30 +117,36 @@ export function decomposeSurvival({
  * revisable the day a run shows five. */
 export const NEW_CELLS_PER_TURN_CAP = 4;
 
-/** The fastest pace any sampled run has sustained, as a record to be beaten rather than a law.
+/** The fastest pace any sampled round has sustained: 1.0588 new route cells for every decay unit charged.
  *
- * Derived from one run: glm-5.3 at level 54, which held a batch depth of 1.524 moves a turn against the
- * 1.126 the route demanded of it - a margin of +0.398, the widest in the sample. gemma4 on the same maze
- * held 1.205 against 0.985. Carried at full precision rather than rounded: the threshold is that run's
- * figure, and trimming it would put the bar somewhere no run actually reached.
+ * Route cells covered over units charged, across a whole round - not moves per turn, which is a different
+ * quantity and ranks the same rounds almost in reverse:
  *
- * A warning threshold and never a verdict: a run beating it is a new record, not an error, and the number
- * is meant to be raised when one does. To re-derive it, take the highest sustained batch depth in the
- * sampled logs and put it here in full.
+ *     log          maze   model       b (moves/turn)   pace (cells/unit)
+ *     v2.5.1  600 cells   deepseek            3.4656              0.1671   fastest batcher, least ground
+ *     v2.5.1  600 cells   kimi-k3             2.2226              0.7094
+ *     v2.5.1  600 cells   glm-5.3             1.7227              0.8354   best of the 600-cell mazes
+ *     v2.5.1  600 cells   glm-5.1             1.4884              0.6592
+ *     v2.5.1  600 cells   gemma4              1.2484              0.7439
+ *     v2.6.2   70 cells   apertus             1.1220              0.2571   the one round that was lost
+ *     v2.6.1   70 cells   gemma4              1.0299              1.0448
+ *     v2.5.1   24 cells   gemma4              1.0625              1.0588   the record: 18 cells, 17 units
  *
- * Two things about it that a future updater should weigh before moving it:
+ * The flag reads `U > pace * u` with cells on the left, so the right-hand side has to be cells per unit.
+ * An earlier figure here was glm-5.3's batch depth of 1.524 - a bar in the wrong currency, half again too
+ * generous, which is why it stayed quiet on rounds that were visibly behind.
  *
- *   1.524 rests on an estimated move count. The framework's own figures estimate moves as `P + 2X` - each
- *   explored off-path cell entered and left once - which gives glm-5.3 544 moves and gemma4 582. A run
- *   that oscillates walks more than the estimate, so the estimate runs low. This replay measures them
- *   instead, at 615 and 603, which puts that run's achieved depth at 1.7227 rather than 1.524. The
- *   framework says the replay's figure is the one to use; this threshold has not been re-derived from it.
+ * 18 / 17 is 1.058823..., written to the four decimals the report prints and rounded down so the bar never
+ * sits above what was measured. It comes from a 24-cell maze whose route is 18 of its 24 cells, where
+ * almost every unit buys route progress; restricting the record to the 600-cell mazes would set it at
+ * 0.8354 and fire the warning far more often.
  *
- *   The quantity it is compared against is new *route cells* per decay unit, not moves per turn, and no
- *   sampled run has sustained above 1.0588 of those - 0.8354 on the 600-cell mazes. A threshold taken
- *   from batch depth is therefore looser than the ground it judges, which makes the warning quiet rather
- *   than wrong. */
-export const FASTEST_SUSTAINED_PACE = 1.524;
+ * A warning threshold and never a verdict: a round beating it is a new record, not an error, and the
+ * number is meant to be raised when one does. To re-derive it, divide each round's covered route cells by
+ * the units it was charged and take the largest. A round that stopped early has covered less of its route
+ * than it would have, so its rate understates it and cannot lower the record - though it may still beat
+ * it. */
+export const FASTEST_SUSTAINED_PACE = 1.0588;
 
 /** survivalFlags reads one turn's position against the budget it has left.
  *

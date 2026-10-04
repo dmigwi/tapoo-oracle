@@ -724,6 +724,34 @@ describe("agentsFromRound", () => {
       expect(value(mazeSurvivalRows(model), "Route coverage")).toBe("3 of 18 route cells (17%)")
     })
 
+    // Two seats take turns, so one seat's unreported last turn sits in the middle of the round's turn
+    // list while being the end of its own: here Katara's turn 2 is the last she played, and Bumi played
+    // on after it. Per seat that is the round stopping for her and the account still reports; measured
+    // across the round, the gap is not at the tail and a round that should answer would be refused.
+    it("reads a seat's unreported last turn as the round stopping, not as a hole", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"]}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"]}),
+        turnOf({turn: 2, playerName: "Katara", before: "2,0", cells: ["2,0", "2,1"], decayCharged: null}),
+        turnOf({turn: 3, playerName: "Bumi", before: "2,1", cells: ["2,1", "1,1"]}),
+      ]})), "a model")
+
+      expect(model.agents.map((agent) => agent.name)).toEqual(["Katara", "Bumi"])
+      expect(survivalDecompositionFor(model)).not.toBeNull()
+    })
+
+    // But a seat that played past its own gap is a hole, however the round interleaved it.
+    it("refuses a round where a seat played on past an unreported turn", () => {
+      const model = must(mazeReplayModel(level({turns: [
+        turnOf({turn: 0, playerName: "Katara", cells: ["0,0", "1,0"]}),
+        turnOf({turn: 1, playerName: "Bumi", before: "1,0", cells: ["1,0", "2,0"], decayCharged: null}),
+        turnOf({turn: 2, playerName: "Katara", before: "2,0", cells: ["2,0", "2,1"]}),
+        turnOf({turn: 3, playerName: "Bumi", before: "2,1", cells: ["2,1", "1,1"]}),
+      ]})), "a model")
+
+      expect(survivalDecompositionFor(model)).toBeNull()
+    })
+
     // A wall is a move the maze refused. A command it could not read is the model spelling a move wrong,
     // which the rubric reports against the prediction - and a turn that applied everything readable hit
     // no wall, however many unreadable commands trailed it.
