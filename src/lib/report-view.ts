@@ -22,14 +22,16 @@ import {
   rubricQuestionRows,
   warningHeadline,
 } from "./report-adapters";
-import type { AgentRow } from "./report-adapters";
 import { CHANGED_JOIN } from "./report-adapters";
 import { createInitialLogTabs } from "./log-tabs-view";
 import { roundReportFor } from "./rubric-report";
 import { gameIdentityKey, roundLabel } from "./rounds";
 import { enableRowSelection, prepareRubricTable } from "./rubric-table";
 import { relativeAge } from "./utils";
-import type { SlicedLogResult, GroupKind, RegionView, Report, LogTab, LogTabsState, GameIdentity, ReportUi, RoundReport, RoundSlice, TapooLog, ValidationCheck } from "./types";
+import type {
+  AgentRow, GameIdentity, GroupKind, LogTab, LogTabsState, RegionView, Report, ReportRegions, ReportUi, RoundReport,
+  RoundSlice, SlicedLogResult, TapooLog, ValidationCheck,
+} from "./types";
 
 
 // --- Entry points: what index.md calls ---
@@ -41,15 +43,6 @@ import type { SlicedLogResult, GroupKind, RegionView, Report, LogTab, LogTabsSta
 
 export { createLogTabsInput } from "./log-tabs-view";
 
-
-/** The five regions the page interpolates, one per `${...}` placeholder in the markdown. */
-export type ReportRegions = {
-  emptyState: RegionView;
-  notices: RegionView;
-  methodology: RegionView;
-  profile: RegionView;
-  detail: RegionView;
-};
 
 /** renderReportSections is one call per render, returning the regions the page interpolates. Returning an object rather
  * than a single fragment keeps the markdown's ${...} placeholders where they are, so the page's

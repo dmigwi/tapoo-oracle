@@ -69,7 +69,7 @@ describe("roundTotalsCheck", () => {
   const turn = (n: number, cells: CellKey[], applied: number, decay: number | null): TurnSummary => ({
     turn: n, seatId: null, playerName: "Kora", before: cells[0] ?? null, moves: ["MoveDown"] as Move[],
     submittedCount: 1, applied, cells, rejectedMove: null, traversalSpeed: null,
-    decayCharged: decay,
+    decayCharged: decay, decayRemaining: null, score: null,
   })
   const walked = [turn(0, ["0,0", "1,0"], 1, 1), turn(1, ["1,0", "2,0"], 1, 1)]
   const totals = (over: Partial<Outcome> = {}): Outcome => ({
@@ -89,7 +89,7 @@ describe("roundTotalsCheck", () => {
   // The ordinary gap, and not a fault: Tapoo reports a turn's charge on the turn after it, so a round's
   // last charge is usually unreported and the stated figure is the completer one.
   it("passes where the round states more than its turns had yet reported", () => {
-    const unreported = [walked[0]!, {...walked[1]!, decayCharged: null}]
+    const unreported = [walked[0]!, {...walked[1]!, decayCharged: null, decayRemaining: null}]
 
     expect(roundTotalsCheck(unreported, totals({decayUnitsCharged: 3}))).toMatchObject({
       outcome: "passed",
@@ -169,7 +169,7 @@ describe("roundTotalsCheck", () => {
 describe("seatRosterCheck", () => {
   const played = (turn: number, seatId: number | null, playerName: string | null) => ({
     turn, seatId, playerName, before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1,
-    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null,
+    cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   })
 
   it("passes a round where each seat kept one player", () => {
@@ -216,7 +216,7 @@ describe("agentSettingsCheck", () => {
   const agent = (over: Partial<AgentSummary> = {}): AgentSummary => ({
     name: "Katara", seatId: null, models: ["gemma4"], apis: ["ollama"], endpoints: [], 
     reasoningEfforts: ["max"], echoBackReasoning: [], requestIntervalSeconds: [],
-    cellsEntered: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
+    cellsEntered: null, played: null, uniqueCells: null, decayCharged: null, traversalSpeed: null, settled: null, ...over,
   })
 
   it("passes a round whose seats each held one setup throughout", () => {

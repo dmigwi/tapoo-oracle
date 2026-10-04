@@ -4,7 +4,10 @@
 // outright, which is why the adapters are pure and testable without a DOM.
 
 import { agentSeatLabel } from "./rounds"
-import type { AgentSummary, LogWarning, GroupKind, GroupResult, Report, SummaryRow, TapooLog, ValidationCheck } from "./types"
+import type {
+  AgentRow, AgentRunning, AgentSummary, DiagnosticRow, GroupKind, GroupResult, LogWarning, ProfileCard, Report,
+  SummaryRow, TapooLog, ValidationCheck,
+} from "./types"
 import { capitalize, formatCount } from "./utils"
 
 /** warningHeadline is the sentence a reader sees in bold above the caveats, or null when there are none.
@@ -43,13 +46,6 @@ export function warningHeadline(warnings: LogWarning[]): string | null {
  *
  * Returned as pairs rather than as a formatted string: how they are joined is the view's business, and
  * the test can then assert on the groups themselves rather than on punctuation. */
-/** One capability group named on a card: its rubric id and the name a reader reads. */
-export type ProfileCardGroup = {id: string; label: string};
-
-/** One profile card: its heading, the `met/total` it scored, the groups it met, and the tone the view
- * paints it in. */
-export type ProfileCard = {label: string; value: string; groups: ProfileCardGroup[]; tone: string};
-
 export function profileCards(report: Report): ProfileCard[] {
   const card = (label: string, groups: GroupResult[], tone: string) => {
     const met = groups.filter((group) => group.met);
@@ -133,10 +129,6 @@ export function rubricQuestionRows(groups: GroupResult[]): Array<Record<string, 
  *   problem. Each of these has a rubric question behind it.
  *
  *   Times disabled - the round stopped. It bounds what every figure beside it covers. */
-/** One diagnostics line: what went wrong, how often, and the rubric question that scores it - null
- * when nothing does. */
-export type DiagnosticRow = {signal: string; count: number; scoredBy: string | null};
-
 export function diagnosticRows(report: Report): DiagnosticRow[] {
   // scoredBy is the rubric question this signal answers, or null when nothing scores it. A nullable id
   // rather than a display string: "no" and "V2.Q2" sat in one field, so the only way to tell a code
@@ -244,28 +236,6 @@ export function withoutCredentials(endpoint: string): string {
   }
 }
 
-/** The values one seat was running, each already rendered for reading - names capitalized, lists
- * joined, credentials stripped - and each "" where the round stated none.
- *
- * Kept unjoined beside the sentence built from them because these four are the whole of what a reader
- * comparing two seats compares, and a view that can weight them differently should not have to take the
- * sentence apart again to find them. */
-export type AgentRunning = {
-  models: string[];
-  /** The API families the request was made in - "Ollama", "OpenAI" - which is a wire protocol and not the
-   * company that served the model. Hugging Face has no API of its own and answers on OpenAI's, so a seat
-   * running there reports "OpenAI" here and names Hugging Face only in its endpoint. Printing this as
-   * the provider read as a claim about who ran the model, which this field does not make. */
-  api: string[];
-  endpoint: string[];
-  effort: string[];
-  /** Whether the harness echoed the model's reasoning back to it, and how long it waited between
-   * requests. Both are stated from v2.6.1 and empty before it, so a row on an older log simply does not
-   * mention them - which is the honest rendering of a setting the log never named. */
-  echo: string[];
-  interval: string[];
-};
-
 /** CHANGED_JOIN separates the values of a setting a seat did not hold still.
  *
  * An arrow rather than a comma, and in first-seen order, which is the order the turns ran in: a comma
@@ -273,13 +243,6 @@ export type AgentRunning = {
  * that a seat which changed setup mid-round is the finding agentSettingsCheck reports, so the cell has
  * to look different from a clean one before it is read rather than after. */
 export const CHANGED_JOIN = " \u2192 ";
-
-/** One seat's row: the sentence to read, and the values it was built from. */
-export type AgentRow = {
-  field: string;
-  value: string;
-  running: AgentRunning;
-};
 
 /** How an API family's own name is written, for the few this analyzer has seen.
  *

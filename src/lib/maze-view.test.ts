@@ -4,11 +4,13 @@
 
 import { describe, expect, it } from "vitest"
 
+import fixtureData from "./_snapshot_/tapoo-v2.6.1-agent-api-logs-1789240357.json" with {type: "json"}
 import {turnReports} from "./log-contract"
 import {createMazeReplay} from "./maze-view"
+import {roundReportFor} from "./rubric-report"
 import {agentsFromRound} from "./rounds"
 import type {CellKey, EncodedMaze, Move, Outcome, PlayedRound, TurnSummary, VisitStatus} from "./types"
-import {at, must, query, queryAll} from "./test-support";
+import {at, expectOk, firstRound, must, query, queryAll, sliceLogText} from "./test-support";
 
 const REAL_MAZE = {
   index_chars: ["|", "---", "-", "   ", " ", "\n"],
@@ -21,8 +23,8 @@ const REAL_MAZE = {
 type RoundOverrides = {encodedMaze?: EncodedMaze | null; game?: number; lvl?: number}
 
 const TURNS: TurnSummary[] = [
-  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
-  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null },
+  { turn: 0, seatId: null, playerName: "Katara", before: "0,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["0,0", "1,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
+  { turn: 1, seatId: null, playerName: "Katara", before: "1,0", moves: ["MoveDown"] as Move[], submittedCount: 1, applied: 1, cells: ["1,0", "2,0"], rejectedMove: null, traversalSpeed: null, decayCharged: null, decayRemaining: null , score: null},
   {
     turn: 2,
     seatId: null,
@@ -31,7 +33,7 @@ const TURNS: TurnSummary[] = [
     moves: ["MoveRight", "MoveUp"] as Move[], submittedCount: 2,
     applied: 1,
     cells: ["2,0", "2,1"],
-    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null,
+    rejectedMove: "MoveUp", traversalSpeed: null, decayCharged: null, decayRemaining: null, score: null,
   },
 ]
 
@@ -873,7 +875,7 @@ describe("the per-seat metrics card", () => {
   // three moves to enter one new cell, which is what retracing looks like.
   it("approximates where the printed factors are rounded", () => {
     const base = level()
-    const turns = [{...must(base.turns[0], "the fixture's first turn"), applied: 3, decayCharged: 1}]
+    const turns = [{...must(base.turns[0], "the fixture's first turn"), applied: 3, decayCharged: 1, decayRemaining: null}]
     const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
 
     expect(card["Decomposed Traversal speed"]).toBe("1.0000x \u2248 (y0.3333 * b3.0000 * a1.0000)")
@@ -885,7 +887,7 @@ describe("the per-seat metrics card", () => {
     const base = chargedRound()
     // One cell per applied move and one charge per turn, so the product is 1.0000x - the figure the
     // fixture's outcome states.
-    const turns = base.turns.map((turn) => ({...turn, decayCharged: 1}))
+    const turns = base.turns.map((turn) => ({...turn, decayCharged: 1, decayRemaining: null}))
     const card = metrics(build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)}))
 
     expect(card["Decomposed Traversal speed"]).toBe("1.0000x = (y1.0000 * b1.0000 * a1.0000)")
@@ -983,5 +985,132 @@ describe("the per-seat metrics card", () => {
 
     expect(card["Decomposed Traversal speed"]).toBe("not recorded")
     expect(card["Speed class"]).toBe("not recorded")
+  })
+})
+
+// What a run spent and whether it could still have finished, as a reader meets them: four cells beside
+// the speed decomposition and one sentence under the card.
+describe("the survival table", () => {
+  // The panel by its heading, not by its position: the summary grows panels, and a test that counted them
+  // would pass for the wrong one.
+  const panelOf = (node: ParentNode): HTMLElement => {
+    const panel = queryAll<HTMLElement>(node, ".maze-summary-panel")
+      .find((one) => query<HTMLElement>(one, ".maze-summary-heading").textContent === "Survival")
+    return must(panel, "the Survival panel")
+  }
+  const rowsOf = (node: ParentNode): Record<string, string> => {
+    const rows = queryAll<HTMLElement>(panelOf(node), ".maze-summary-table tbody tr")
+    return Object.fromEntries(rows.map((row) => [
+      query<HTMLElement>(row, "th, td").textContent ?? "",
+      queryAll<HTMLElement>(row, "td").at(-1)?.textContent ?? "",
+    ]))
+  }
+  const verdictOf = (node: ParentNode) => query<HTMLElement>(node, ".maze-summary-verdict")
+
+  // The capture's won round: every turn cost one unit, so it paid nothing for errors, and the two moves
+  // it earned by batching are what carried it past the maze's own size.
+  const wonRound = () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    return build(must(firstRound(sliced).playedRound, "the won round"))
+  }
+
+  it("prints the decomposed as three terms and the headroom they sum to", () => {
+    expect(rowsOf(wonRound())["Survival terms"]).toBe("+1 slack \u00b7 +2 batched \u00b7 0 error debt = +3 headroom")
+  })
+
+  // The depth beside the counts it is a ratio of, and beside the depth the route still demanded - the
+  // claim the whole account is for: this run needed less than a move a turn and managed slightly more.
+  it("prints the depth reached beside the depth the route needed", () => {
+    expect(rowsOf(wonRound())["Batch depth"])
+      .toBe("1.0299 (69 moves / 67 turns) \u00b7 needed 0.9857 (surplus 0.0441)")
+  })
+
+  // Its own panel, and not a column on a seat's card: the budget is the maze's, so a reader looking for what
+  // the round cost finds it in one place however many seats played.
+  it("stands on its own rather than on a seat's card", () => {
+    const node = wonRound()
+
+    expect(queryAll(node, ".maze-agent-table th").map((one) => one.textContent))
+      .toEqual(["All cells", "Decay charged", "Decomposed Traversal speed", "Speed class"])
+    expect(Object.keys(rowsOf(node)))
+      .toEqual(["Point of no return", "Route coverage", "Survival terms", "Batch depth", "No-progress turns", "Pace warnings"])
+  })
+
+  it("says a run that finished was within reach throughout", () => {
+    const verdict = verdictOf(wonRound())
+
+    expect(verdict.textContent).toBe("Within reach throughout: the destination stayed inside what the decay could reach.")
+    expect(verdict.className).toContain("is-clear")
+    expect(verdict.className).not.toContain("is-lost")
+  })
+
+  // A warning is not a verdict, and the two keep different words. This round was cut off by a provider
+  // failure with budget still unspent: its pace warnings fire, and the verdict above them does not say it
+  // could not have finished.
+  it("warns about pace without letting the warning become the verdict", () => {
+    const sliced = expectOk(sliceLogText(JSON.stringify(fixtureData), {label: "v2.6.1 snapshot"}))
+    const node = build(must(roundReportFor(at(sliced.rounds, 1)).report.playedRound, "the stopped round"))
+
+    // All three paces, each in its own words: this round covered 16 of 70 route cells on 33 units, so the
+    // ground it still needed was indeed past anything a round has sustained.
+    expect(rowsOf(node)["Pace warnings"]).toBe(
+      "the destination was further than the budget from turn 1 \u00b7 " +
+      "further than its own batching could reach from turn 1 \u00b7 " +
+      "new ground needed faster than any run has sustained, from turn 5",
+    )
+    // The verdict beside them says the opposite, and says it in its own words.
+    expect(verdictOf(node).textContent).toMatch(/^Within reach throughout/)
+    expect(verdictOf(node).className).not.toContain("is-lost")
+    // And the two moves the maze refused, which no status label reports as such.
+    expect(rowsOf(node)["No-progress turns"]).toContain("2 refused a move")
+  })
+
+  // The verdict the rule exists for, on a round built to cross the line: one route cell left and no
+  // budget to reach it with.
+  it("names the turn a run could no longer finish from", () => {
+    const base = level()
+    const turns = base.turns.map((turn, index) => ({...turn, decayRemaining: index === 0 ? 4 : 0}))
+    const node = build({...base, turns, agents: agentsFromRound(new Map(), turns, OUTCOME)})
+
+    expect(verdictOf(node).textContent).toMatch(/^Could not finish from turn 1:/)
+    expect(verdictOf(node).className).toContain("is-lost")
+  })
+
+  // Nothing measured where the round stated no destination. There is no route to be out of reach of, and a
+  // reassurance drawn from no route would be the worst of the three things this could say.
+  it("records nothing about reach where the round stated no destination", () => {
+    const node = build({...level(), destinationCell: null})
+
+    expect(queryAll(node, ".maze-summary-verdict")).toHaveLength(0)
+    // Every row present and every one saying the same thing: the panel keeps its shape, and no cell of it
+    // reads as a measurement that was taken.
+    expect(Object.values(rowsOf(node))).toEqual(Array.from({length: 6}, () => "not recorded"))
+  })
+
+  // The key under the table, once: the rows print "error debt" and "+2 batched", and neither means anything
+  // to a reader who has not been told what a decay unit is.
+  it("glosses its own terms under the table", () => {
+    const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
+
+    expect(queryAll(key, ".maze-agent-symbol").map((one) => one.textContent))
+      .toEqual([
+        "survival terms", "error debt", "batched", "batch depth", "retreating", "oscillating", "could not finish",
+        "sustained pace",
+      ])
+  })
+
+  // "oscillating" names a turn here and a cell in the legend beside the grid, and the two are not the same
+  // claim - a turn into an exhausted cell is the retreat. The gloss has to say so, or a reader carrying the
+  // word across from one legend to the other reads a compliant retreat as a rubric violation.
+  it("keeps its two turn grades apart from the grid's cell status of the same name", () => {
+    const key = query<HTMLElement>(panelOf(wonRound()), ".maze-summary-key")
+    const glosses = Object.fromEntries(
+      queryAll<HTMLElement>(key, ".maze-agent-key-item")
+        .map((item) => [query<HTMLElement>(item, ".maze-agent-symbol").textContent ?? "", item.textContent ?? ""]),
+    )
+
+    expect(glosses["retreating"]).toContain("already exhausted")
+    expect(glosses["oscillating"]).toContain("still had an exit to spend")
+    expect(glosses["oscillating"]).toContain("Not the grid legend's cell status")
   })
 })

@@ -89,9 +89,9 @@ describe("decomposeTraversalSpeed", () => {
     const counts = [
       {settled: {uniqueCells: 17, movesApplied: 24, turnsTaken: 16}, decayCharged: 17},
       // The GLM profile: batching hard, then giving a quarter of it back to penalties.
-      {settled: {uniqueCells: 483, movesApplied: 620, turnsTaken: 470}, decayCharged: 624},
+      {settled: {uniqueCells: 483, movesApplied: 620, turnsTaken: 470}, decayCharged: 624, decayRemaining: null},
       // And a seat that barely batches and loses almost nothing.
-      {settled: {uniqueCells: 100, movesApplied: 104, turnsTaken: 103}, decayCharged: 105},
+      {settled: {uniqueCells: 100, movesApplied: 104, turnsTaken: 103}, decayCharged: 105, decayRemaining: null},
     ]
 
     for (const seatCounts of counts) {
